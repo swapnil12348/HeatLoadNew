@@ -1,0 +1,33 @@
+﻿└── public/
+│   └── vite.svg
+└── src/
+│   └── app/
+│   │   └── store.js
+│   └── assets/
+│   │   └── react.svg
+│   └── features/
+│   │   └── ahu/
+│   │   └── climate/
+│   │   │   └── climateSlice.js
+│   │   └── envelope/
+│   │   └── loads/
+│   │   └── project/
+│   │   │   └── projectSlice.js
+│   │   └── results/
+│   │   │   └── resultSelectors.js
+│   │   └── room/
+│   └── pages/
+│   │   └── AHUConfig.jsx
+│   │   └── ProjectDetails.jsx
+│   │   └── RoomConfig.jsx
+│   └── App.css
+│   └── App.jsx
+│   └── index.css
+│   └── main.jsx
+└── .gitignore
+└── eslint.config.js
+└── index.html
+└── package-lock.json
+└── package.json
+└── README.md
+└── vite.config.js
