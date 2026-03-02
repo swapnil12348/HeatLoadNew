@@ -2,39 +2,37 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 
 export default function TabNav() {
-  
-  // Updated tabs to match new App.jsx routes
   const tabs = [
-    { name: 'Project Info', path: '/project' },
-    { name: 'AHU Selection', path: '/ahu' },
-    { name: 'Climate Conditions', path: '/climate' },
-    { name: 'Room & Ventilation', path: '/room' },
-    { name: 'Envelope & Loads', path: '/envelope' }, // Combined Infiltration/Glass/Walls
-    { name: 'Results', path: '/results' },
-    { id: 'rds', label: 'RDS Summary', path: '/rds' },
+    { id: 'project', label: 'Project Details', path: '/project' },
+    { id: 'climate', label: 'Climate', path: '/climate' },
+    { id: 'ahu', label: 'AHU Config', path: '/ahu' },
+    { id: 'room', label: 'Room Geometry', path: '/room' },
+    { id: 'envelope', label: 'Envelope & Loads', path: '/envelope' },
+    { id: 'results', label: 'Results', path: '/results' },
+    { id: 'rds', label: 'RDS Summary', path: '/rds' }, // The new tab
   ];
 
   return (
-    <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+    <nav className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
       <div className="container mx-auto px-4">
-        <nav className="flex space-x-1 md:space-x-4 overflow-x-auto no-scrollbar" aria-label="Tabs">
+        <div className="flex space-x-1 overflow-x-auto no-scrollbar">
           {tabs.map((tab) => (
             <NavLink
-              key={tab.name}
+              key={tab.id} // <--- THIS FIXED THE ERROR
               to={tab.path}
               className={({ isActive }) =>
-                `whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm transition-colors duration-200 ${
+                `px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
                   isActive
-                    ? 'border-blue-600 text-blue-600' // Active Styles
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300' // Inactive Styles
+                    ? 'border-blue-600 text-blue-600 bg-blue-50/50'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
                 }`
               }
             >
-              {tab.name}
+              {tab.label}
             </NavLink>
           ))}
-        </nav>
+        </div>
       </div>
-    </div>
+    </nav>
   );
 }
