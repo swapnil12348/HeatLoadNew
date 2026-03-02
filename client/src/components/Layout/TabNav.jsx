@@ -11,6 +11,7 @@ export default function TabNav() {
     { name: 'Room & Ventilation', path: '/room' },
     { name: 'Envelope & Loads', path: '/envelope' }, // Combined Infiltration/Glass/Walls
     { name: 'Results', path: '/results' },
+    { id: 'rds', label: 'RDS Summary', path: '/rds' },
   ];
 
   return (

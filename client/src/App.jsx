@@ -9,6 +9,7 @@ import TabNav from './components/Layout/TabNav';
 import Home from './pages/Home'; // Import your new Home page
 import ProjectDetails from './pages/ProjectDetails';
 import AHUConfig from './pages/AHUConfig';
+import RDSPage from './pages/RDSPage';
 import RoomConfig from './pages/RoomConfig';
 import ClimateConfig from './pages/ClimateConfig';
 import EnvelopeConfig from './pages/EnvelopeConfig';
@@ -44,6 +45,7 @@ function App() {
           <Route path="/climate" element={<ClimateConfig />} />
           <Route path="/envelope" element={<EnvelopeConfig />} />
           <Route path="/results" element={<ResultsPage />} />
+          <Route path="/rds" element={<RDSPage />} />
         </Route>
 
         {/* 3. Catch-all: Redirect to Home */}

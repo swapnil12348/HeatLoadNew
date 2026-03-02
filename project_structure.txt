@@ -35,6 +35,7 @@
 │   │   │   └── AHUConfig.jsx
 │   │   │   └── ClimateConfig.jsx
 │   │   │   └── EnvelopeConfig.jsx
+│   │   │   └── Home.jsx
 │   │   │   └── ProjectDetails.jsx
 │   │   │   └── ResultsPage.jsx
 │   │   │   └── RoomConfig.jsx
@@ -48,6 +49,8 @@
 │   └── package-lock.json
 │   └── package.json
 │   └── README.md
+│   └── vercel.json
 │   └── vite.config.js
 └── package-lock.json
 └── package.json
+└── vercel.json
