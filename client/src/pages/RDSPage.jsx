@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { addNewRoom } from '../features/room/roomActions';
+// 1. FIX IMPORT PATH:
+import { addNewRoom } from '../features/room/roomActions'; 
 import { selectAllAHUs, addAHU } from '../features/ahu/ahuSlice';
-import { selectRdsData } from '../features/results/rdsSelector'; // <--- NEW IMPORT
+import { selectRdsData } from '../features/results/rdsSelector';
+import { selectEnvelopeByRoomId } from '../features/envelope/envelopeSlice'; 
 import RoomDetailPanel from './rds/RoomDetailPanel';
 
 // ── Summary Row Component ──────────────────────────────────────────────────
 const SummaryRow = ({ roomData, ahus, onClick }) => {
-  // roomData is now the flattened object from rdsSelector
-  // It contains both inputs (name, area) and calculations (coolingCapTR, supplyAir)
   const ahu = ahus.find(a => a.id === roomData.ahuId);
   
   return (
@@ -32,15 +32,20 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
         </span>
       </td>
       <td className="px-6 py-3 text-sm text-slate-600 font-mono">
-        {roomData.floorArea ? roomData.floorArea.toLocaleString() : '-'} <span className="text-[10px] text-slate-400">m²</span>
+        {roomData.floorArea ? roomData.floorArea.toLocaleString() : '-'} <span className="text-[10px] text-slate-400">ft²</span>
       </td>
       <td className="px-6 py-3 text-right">
-        {/* These values now come from the Calculator Selector */}
-        <div className="text-sm font-bold text-slate-700">{roomData.supplyAir ? roomData.supplyAir.toLocaleString() : '-'}</div>
+        <div className="text-sm font-bold text-slate-700">
+          {/* This uses the Calculated Supply Air */}
+          {roomData.supplyAir ? roomData.supplyAir.toLocaleString() : '0'}
+        </div>
         <div className="text-[10px] text-slate-400">CFM</div>
       </td>
       <td className="px-6 py-3 text-right">
-        <div className="text-sm font-bold text-blue-600">{roomData.coolingCapTR || '-'}</div>
+        <div className="text-sm font-bold text-blue-600">
+          {/* This uses the Calculated TR */}
+          {roomData.coolingCapTR || '0.00'}
+        </div>
         <div className="text-[10px] text-slate-400">TR</div>
       </td>
       <td className="px-6 py-3 text-right">
@@ -56,12 +61,9 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
 export default function RDSPage() {
   const dispatch = useDispatch();
   
-  // 1. Select the Calculated Data instead of raw rooms
   const rdsRows = useSelector(selectRdsData); 
   const ahus = useSelector(selectAllAHUs);
-  
-  // We still need raw envelopes for the DetailPanel editing, 
-  // but rdsRows contains the calculated summaries for the table.
+  // We need raw envelopes to pass to the Editor Panel
   const rawEnvelopes = useSelector((state) => state.envelope.byRoomId);
 
   const [selectedRoomId, setSelectedRoomId] = useState(null);
@@ -78,7 +80,7 @@ export default function RDSPage() {
   }, {});
 
   return (
-    <div className="flex h-[calc(100vh-100px)] bg-slate-50 relative overflow-hidden">
+    <div className="flex h-[calc(100vh-64px)] bg-slate-50 relative overflow-hidden">
       
       {/* Main Table Area */}
       <div className={`flex-1 flex flex-col transition-all duration-300 ${selectedRoomId ? 'mr-[600px]' : ''}`}>
@@ -90,6 +92,17 @@ export default function RDSPage() {
             <p className="text-slate-500 text-sm mt-1">{rdsRows.length} Zones configured</p>
           </div>
           <div className="flex gap-3">
+            <button 
+              onClick={() => {
+                 if(window.confirm("Reset Project to Defaults? This clears bad data.")) {
+                   localStorage.clear();
+                   window.location.reload();
+                 }
+              }} 
+              className="text-red-500 text-xs font-bold hover:underline px-3"
+            >
+              Reset
+            </button>
             <button onClick={() => dispatch(addAHU())} className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-slate-50">+ System</button>
             <button onClick={() => dispatch(addNewRoom())} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md hover:bg-blue-700 hover:shadow-lg transition-all">+ Add Room</button>
           </div>
@@ -131,7 +144,7 @@ export default function RDSPage() {
                       {groupRows.map(row => (
                         <SummaryRow 
                           key={row.id} 
-                          roomData={row} // Pass the flattened calculated data
+                          roomData={row} 
                           ahus={ahus} 
                           onClick={() => setSelectedRoomId(row.id)} 
                         />
@@ -163,10 +176,6 @@ export default function RDSPage() {
           ></div>
           
           <RoomDetailPanel 
-            // Note: RoomDetailPanel expects the raw room object for editing,
-            // but we can pass the raw object stored inside the selector result (_raw property)
-            // OR we can pass the selector result if we update RoomDetailPanel to handle it.
-            // For now, let's pass the raw room from the selector's _raw property to ensure editing works.
             room={selectedRoomData._raw.room} 
             envelope={rawEnvelopes[selectedRoomId]} 
             ahus={ahus} 

@@ -1,7 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit';
 
+
 // ── Default State Factory ────────────────────────────────────────────────────
-// Creates a fresh envelope structure for a new room
 const createRoomEnvelope = () => ({
   elements: {
     walls: [],
@@ -12,22 +12,23 @@ const createRoomEnvelope = () => ({
     floors: []
   },
   internalLoads: {
+    // Default people count 0 -> Change to 1 or 2 to see immediate numbers
     people: { count: 0, sensiblePerPerson: 245, latentPerPerson: 205 },
     lights: { wattsPerSqFt: 0, useSchedule: 100 },
     equipment: { kw: 0, sensiblePct: 100, latentPct: 0 }
   },
   infiltration: {
-    method: 'ach', // or 'cfm' or 'crack'
-    achValue: 0.5,
+    method: 'ach',
+    achValue: 0.5, // Default 0.5 ACH
     cfmValue: 0,
-    doors: [] // Array of door objects for detailed crack method
+    doors: []
   }
 });
 
 const initialState = {
   byRoomId: {
-    // Example Structure:
-    // "room_default_1": createRoomEnvelope()
+    // 🚨 FIX: Initialize the default room defined in roomSlice
+    "room_default_1": createRoomEnvelope() 
   }
 };
 
