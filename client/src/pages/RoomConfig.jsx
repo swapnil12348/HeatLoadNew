@@ -5,13 +5,13 @@ import {
   updateRoom, 
   toggleRoomAhu 
 } from '../features/room/roomSlice';
-import { selectAllAHUs } from '../features/ahu/ahuSlice'; // We need this to list AHUs
+import { selectAllAHUs } from '../features/ahu/ahuSlice'; 
 import RoomSidebar from '../components/Layout/RoomSidebar';
 
 // ── Helper Components ───────────────────────────────────────────────────────
 
-const InputGroup = ({ label, value, onChange, unit, type = "number", step = "1" }) => (
-  <div className="flex flex-col space-y-1">
+const InputGroup = ({ label, value, onChange, unit, type = "number", step = "1", className="" }) => (
+  <div className={`flex flex-col space-y-1 ${className}`}>
     <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">
       {label}
     </label>
@@ -40,7 +40,7 @@ const StatCard = ({ label, value, unit, color = "blue" }) => {
   };
 
   return (
-    <div className={`p-4 rounded-xl border ${colors[color]} flex flex-col justify-center items-center`}>
+    <div className={`p-4 rounded-xl border ${colors[color] || colors.blue} flex flex-col justify-center items-center`}>
       <span className="text-[10px] font-bold uppercase tracking-widest opacity-70 mb-1">{label}</span>
       <div className="text-2xl font-bold">
         {value} <span className="text-sm font-normal opacity-80">{unit}</span>
@@ -72,24 +72,24 @@ export default function RoomConfig() {
   };
 
   // If no room exists (edge case), render simple message
-  if (!activeRoom) return <div className="p-8">Please add a room via the Sidebar.</div>;
+  if (!activeRoom) return <div className="p-8 text-gray-400">Please add a room via the Sidebar.</div>;
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-gray-50">
+    <div className="flex flex-col md:flex-row min-h-[calc(100vh-64px)] bg-gray-50">
       
       {/* 1. Sidebar Navigation */}
       <RoomSidebar />
 
       {/* 2. Main Content */}
-      <div className="flex-1 max-w-5xl p-4 md:p-8 space-y-8 overflow-y-auto h-screen">
+      <div className="flex-1 max-w-5xl p-4 md:p-8 space-y-8 overflow-y-auto h-[calc(100vh-64px)]">
         
         {/* Header */}
         <div className="border-b border-gray-200 pb-4">
-          <h2 className="text-3xl font-bold text-gray-900">Room Geometry</h2>
-          <p className="text-gray-500 text-sm mt-1">Define dimensions and assign AHU sources for this zone.</p>
+          <h2 className="text-3xl font-bold text-gray-900">Room Geometry & Climate</h2>
+          <p className="text-gray-500 text-sm mt-1">Define dimensions, indoor climate requirements, and assign AHU sources.</p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 pb-12">
           
           {/* ── LEFT COLUMN: Inputs ── */}
           <div className="lg:col-span-2 space-y-6">
@@ -100,18 +100,45 @@ export default function RoomConfig() {
                 <span className="w-1 h-6 bg-blue-600 rounded-full"></span>
                 General Identification
               </h3>
-              <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <InputGroup 
                   label="Room Name" 
                   type="text" 
-                  value={activeRoom.name} 
+                  value={activeRoom.name || ''} 
                   onChange={(e) => handleUpdate('name', e.target.value)} 
                 />
                 <InputGroup 
                   label="Room Internal Pressure" 
-                  value={activeRoom.pressure} 
+                  value={activeRoom.pressure || ''} 
                   unit="Pa"
                   onChange={(e) => handleUpdate('pressure', e.target.value)} 
+                />
+              </div>
+            </section>
+
+            {/* ── NEW: INDOOR DESIGN CLIMATE ── */}
+            <section className="bg-amber-50 p-6 rounded-xl shadow-sm border border-amber-200">
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-xl">🌡️</span>
+                <h3 className="text-lg font-bold text-amber-900">Indoor Design Targets</h3>
+              </div>
+              <p className="text-xs text-amber-700 mb-4">
+                These values specify the desired temperature and humidity for <b>{activeRoom.name}</b>. The calculator uses these against the global Outside Climate data.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <InputGroup 
+                  label="Target Temp" 
+                  value={activeRoom.designTemp || ''} 
+                  unit="°F"
+                  className="[&>div>input]:bg-white [&>div>input]:text-amber-900 [&>div>input]:font-bold"
+                  onChange={(e) => handleUpdate('designTemp', e.target.value)} 
+                />
+                <InputGroup 
+                  label="Target RH" 
+                  value={activeRoom.designRH || ''} 
+                  unit="%"
+                  className="[&>div>input]:bg-white [&>div>input]:text-amber-900 [&>div>input]:font-bold"
+                  onChange={(e) => handleUpdate('designRH', e.target.value)} 
                 />
               </div>
             </section>
@@ -125,19 +152,19 @@ export default function RoomConfig() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <InputGroup 
                   label="Length" 
-                  value={activeRoom.length} 
+                  value={activeRoom.length || ''} 
                   unit="ft"
                   onChange={(e) => handleUpdate('length', e.target.value)} 
                 />
                 <InputGroup 
                   label="Width" 
-                  value={activeRoom.width} 
+                  value={activeRoom.width || ''} 
                   unit="ft"
                   onChange={(e) => handleUpdate('width', e.target.value)} 
                 />
                 <InputGroup 
                   label="Height" 
-                  value={activeRoom.height} 
+                  value={activeRoom.height || ''} 
                   unit="ft"
                   onChange={(e) => handleUpdate('height', e.target.value)} 
                 />
@@ -146,8 +173,8 @@ export default function RoomConfig() {
 
             {/* Calculated Stats */}
             <div className="grid grid-cols-2 gap-4">
-              <StatCard label="Floor Area" value={activeRoom.floorArea?.toLocaleString()} unit="ft²" color="blue" />
-              <StatCard label="Room Volume" value={activeRoom.volume?.toLocaleString()} unit="ft³" color="indigo" />
+              <StatCard label="Floor Area" value={activeRoom.floorArea?.toLocaleString() || 0} unit="ft²" color="blue" />
+              <StatCard label="Room Volume" value={activeRoom.volume?.toLocaleString() || 0} unit="ft³" color="indigo" />
             </div>
 
           </div>
@@ -188,7 +215,7 @@ export default function RoomConfig() {
                             {ahu.name}
                           </div>
                           <div className="text-xs text-gray-500 mt-0.5">
-                            {ahu.designScheme || "Standard Config"}
+                            {ahu.type || "Standard Config"}
                           </div>
                         </div>
                       </label>

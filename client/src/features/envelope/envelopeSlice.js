@@ -1,29 +1,33 @@
-import { createSlice, createSelector } from '@reduxjs/toolkit';
-import ASHRAE from '../../constants/ashrae';
+import { createSlice } from '@reduxjs/toolkit';
 
-// Initial Template for a new room's envelope/load data
-const createRoomData = () => ({
-  infiltration: { doors: [] },
+// ── Default State Factory ────────────────────────────────────────────────────
+// Creates a fresh envelope structure for a new room
+const createRoomEnvelope = () => ({
   elements: {
-    glass: [],
     walls: [],
-    roof: [],
-    ceiling: [],
-    floor: [],
-    partitions: []
+    roofs: [],
+    glass: [],
+    skylights: [],
+    partitions: [],
+    floors: []
   },
   internalLoads: {
     people: { count: 0, sensiblePerPerson: 245, latentPerPerson: 205 },
-    lights: { wattsPerSqFt: 0 },
-    equipment: { kw: 0 }
+    lights: { wattsPerSqFt: 0, useSchedule: 100 },
+    equipment: { kw: 0, sensiblePct: 100, latentPct: 0 }
+  },
+  infiltration: {
+    method: 'ach', // or 'cfm' or 'crack'
+    achValue: 0.5,
+    cfmValue: 0,
+    doors: [] // Array of door objects for detailed crack method
   }
 });
 
 const initialState = {
-  // Data is now keyed by roomId
-  // Example: { "room_default_1": { ...data } }
   byRoomId: {
-    "room_default_1": createRoomData()
+    // Example Structure:
+    // "room_default_1": createRoomEnvelope()
   }
 };
 
@@ -31,133 +35,95 @@ const envelopeSlice = createSlice({
   name: 'envelope',
   initialState,
   reducers: {
-    // ── Helper: Ensure room entry exists (called when active room changes or first load)
+    // 1. Initialize: Called when a Room is added in RDS or Sidebar
     initializeRoom: (state, action) => {
       const roomId = action.payload;
       if (!state.byRoomId[roomId]) {
-        state.byRoomId[roomId] = createRoomData();
+        state.byRoomId[roomId] = createRoomEnvelope();
       }
     },
 
-    // ── Infiltration Actions (Require roomId) ──
-    addDoor: (state, action) => {
-      const { roomId } = action.payload;
-      if (!state.byRoomId[roomId]) state.byRoomId[roomId] = createRoomData();
+    // 2. Add Element: Walls, Glass, etc.
+    addEnvelopeElement: (state, action) => {
+      const { roomId, category, element } = action.payload;
+      // Ensure room exists
+      if (!state.byRoomId[roomId]) state.byRoomId[roomId] = createRoomEnvelope();
       
-      state.byRoomId[roomId].infiltration.doors.push({
-        id: Date.now(),
-        thru: "Door", nos: 1, area: 20, width: 3, height: 7, infilCFM: 0, exfilCFM: 0,
+      state.byRoomId[roomId].elements[category].push({
+        ...element,
+        id: Date.now().toString() // Simple ID generation
       });
     },
-    updateDoor: (state, action) => {
-      const { roomId, id, field, value } = action.payload;
-      const door = state.byRoomId[roomId]?.infiltration.doors.find(d => d.id === id);
-      if (door) door[field] = value;
-    },
-    removeDoor: (state, action) => {
-      const { roomId, id } = action.payload;
-      const roomData = state.byRoomId[roomId];
-      if (roomData) {
-        roomData.infiltration.doors = roomData.infiltration.doors.filter(d => d.id !== id);
-      }
-    },
 
-    // ── Envelope Element Actions (Require roomId) ──
-    addElementRow: (state, action) => {
-      const { roomId, category, newItem } = action.payload;
-      if (!state.byRoomId[roomId]) state.byRoomId[roomId] = createRoomData();
-      state.byRoomId[roomId].elements[category].push(newItem);
-    },
-    updateElementRow: (state, action) => {
+    // 3. Update Element: Edit U-Value, Area, etc.
+    updateEnvelopeElement: (state, action) => {
       const { roomId, category, id, field, value } = action.payload;
-      const item = state.byRoomId[roomId]?.elements[category]?.find(i => i.id === id);
-      if (item) {
-        if (field === 'diff') item.diff = { ...item.diff, ...value };
-        else item[field] = value;
-      }
-    },
-    deleteElementRow: (state, action) => {
-      const { roomId, category, id } = action.payload;
-      if (state.byRoomId[roomId]) {
-        state.byRoomId[roomId].elements[category] = state.byRoomId[roomId].elements[category].filter(i => i.id !== id);
+      const roomEnv = state.byRoomId[roomId];
+      if (roomEnv) {
+        const item = roomEnv.elements[category].find(e => e.id === id);
+        if (item) {
+          item[field] = value;
+        }
       }
     },
 
-    // ── Internal Load Actions (Require roomId) ──
-    updateInternalLoad: (state, action) => {
-      const { roomId, type, data } = action.payload;
-      if (!state.byRoomId[roomId]) state.byRoomId[roomId] = createRoomData();
-      
-      if (state.byRoomId[roomId].internalLoads[type]) {
-        state.byRoomId[roomId].internalLoads[type] = { 
-          ...state.byRoomId[roomId].internalLoads[type], 
-          ...data 
-        };
+    // 4. Remove Element
+    removeEnvelopeElement: (state, action) => {
+      const { roomId, category, id } = action.payload;
+      const roomEnv = state.byRoomId[roomId];
+      if (roomEnv) {
+        roomEnv.elements[category] = roomEnv.elements[category].filter(e => e.id !== id);
       }
+    },
+
+    // 5. Update Internal Loads (People/Lights/Equip)
+    // Used by both Envelope Tab AND RDS Grid (Direct Editing)
+    updateInternalLoad: (state, action) => {
+      const { roomId, type, data } = action.payload; // type: 'people', 'lights', 'equipment'
+      
+      if (!state.byRoomId[roomId]) state.byRoomId[roomId] = createRoomEnvelope();
+      
+      const target = state.byRoomId[roomId].internalLoads[type];
+      // Merge updates (e.g., only update 'count' but keep 'sensiblePerPerson')
+      Object.assign(target, data);
+    },
+
+    // 6. Update Infiltration
+    updateInfiltration: (state, action) => {
+      const { roomId, field, value } = action.payload;
+      if (!state.byRoomId[roomId]) state.byRoomId[roomId] = createRoomEnvelope();
+      
+      state.byRoomId[roomId].infiltration[field] = value;
+    },
+
+    // 7. Cleanup: When a room is deleted in RoomSlice
+    removeRoomEnvelope: (state, action) => {
+      const roomId = action.payload;
+      delete state.byRoomId[roomId];
     }
   }
 });
 
-export const { 
+export const {
   initializeRoom,
-  addDoor, updateDoor, removeDoor, 
-  addElementRow, updateElementRow, deleteElementRow, 
-  updateInternalLoad 
+  addEnvelopeElement,
+  updateEnvelopeElement,
+  removeEnvelopeElement,
+  updateInternalLoad,
+  updateInfiltration,
+  removeRoomEnvelope
 } = envelopeSlice.actions;
 
-// ── Selectors (Context-Aware) ───────────────────────────────────────────────
+// ── Selectors ──────────────────────────────────────────────────────────────
 
-// Selects the envelope data ONLY for the currently Active Room
-// This keeps the UI clean (it doesn't need to know about other rooms)
-export const selectActiveRoomEnvelope = createSelector(
-  [
-    (state) => state.envelope.byRoomId,
-    (state) => state.room.activeRoomId
-  ],
-  (byRoomId, activeRoomId) => {
-    return byRoomId[activeRoomId] || createRoomData();
-  }
-);
+// Get specific envelope (used by Calculation Utilities)
+export const selectEnvelopeByRoomId = (state, roomId) => 
+  state.envelope.byRoomId[roomId] || createRoomEnvelope();
 
-// We'll need a new selector here for Results later, but for now, the UI needs this:
-export const selectActiveRoomHeatGain = createSelector(
-  [selectActiveRoomEnvelope, (state) => state.room.list.find(r => r.id === state.room.activeRoomId)],
-  (envelope, room) => {
-    const { elements, internalLoads } = envelope;
-    const floorArea = parseFloat(room?.floorArea) || 0;
-
-    let s = 0, m = 0, w = 0; // Summer, Monsoon, Winter Sensible
-    let lightsBtu = 0, equipBtu = 0, pplSens = 0, pplLat = 0;
-
-    // 1. Envelope
-    Object.keys(elements).forEach(cat => {
-      elements[cat].forEach(item => {
-        const q = (parseFloat(item.area) || 0) * (parseFloat(item.uValue) || 0);
-        s += q * (item.diff?.summer || 0);
-        m += q * (item.diff?.monsoon || 0);
-        w += q * (item.diff?.winter || 0);
-      });
-    });
-
-    // 2. Internals
-    const pplCount = parseFloat(internalLoads.people?.count) || 0;
-    pplSens = pplCount * (parseFloat(internalLoads.people?.sensiblePerPerson) || 0);
-    pplLat = pplCount * (parseFloat(internalLoads.people?.latentPerPerson) || 0);
-    
-    lightsBtu = floorArea * (parseFloat(internalLoads.lights?.wattsPerSqFt) || 0) * ASHRAE.BTU_PER_WATT;
-    equipBtu = (parseFloat(internalLoads.equipment?.kw) || 0) * ASHRAE.KW_TO_BTU;
-
-    const internalSensible = pplSens + lightsBtu + equipBtu;
-
-    return {
-      totals: { 
-        summer: Math.round(s + internalSensible), 
-        monsoon: Math.round(m + internalSensible), 
-        winter: Math.round(w + internalSensible) 
-      },
-      details: { lightsBtu, equipBtu, pplSens, pplLat }
-    };
-  }
-);
+// Get Active Room's envelope (used by Envelope Config Tab UI)
+export const selectActiveEnvelope = (state) => {
+  const activeRoomId = state.room.activeRoomId;
+  return state.envelope.byRoomId[activeRoomId] || createRoomEnvelope();
+};
 
 export default envelopeSlice.reducer;

@@ -1,179 +1,181 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { addAHU, updateAHU, deleteAHU } from '../features/ahu/ahuSlice';
+import { selectAllAHUs, addAHU, updateAHU, deleteAHU } from '../features/ahu/ahuSlice';
+import { selectRdsData } from '../features/results/rdsSelector'; // Importing the Calculator
 
-// ── Constants ───────────────────────────────────────────────────────────────
-const ISO_CLASSES = [
-  { value: "ISO 1", label: "ISO 1 (Highest Cleanliness)" },
-  { value: "ISO 2", label: "ISO 2" },
-  { value: "ISO 3", label: "ISO 3 (Class 1)" },
-  { value: "ISO 4", label: "ISO 4 (Class 10)" },
-  { value: "ISO 5", label: "ISO 5 (Class 100)" },
-  { value: "ISO 6", label: "ISO 6 (Class 1,000)" },
-  { value: "ISO 7", label: "ISO 7 (Class 10,000)" },
-  { value: "ISO 8", label: "ISO 8 (Class 100,000)" }, // Standard pharma/industrial
-  { value: "ISO 9", label: "ISO 9 (Room Air)" },
-];
-
-const DESIGN_SCHEMES = [
-  "Conventional Pharma Ducting",
-  "Once Through System",
-  "Dehumidifier Integration",
-  "Plenum / Fan Filter Unit Design"
-];
-
-const CONFIGURATIONS = [
-  "Draw-through (Fan after Coil)",
-  "Blow-through (Fan before Coil)"
-];
-
-// ── Main Component ──────────────────────────────────────────────────────────
 export default function AHUConfig() {
   const dispatch = useDispatch();
   
-  // Access Redux State: Get the list from the 'ahus' slice
-  const { list: ahus } = useSelector((state) => state.ahus);
+  // 1. Get Data
+  const ahus = useSelector(selectAllAHUs);
+  const rdsRows = useSelector(selectRdsData); // Contains calculated CFM/TR for every room
+  
+  // 2. Local UI State
+  const [selectedAhuId, setSelectedAhuId] = useState(ahus[0]?.id || null);
+  
+  // 3. Derived Data: Get the active AHU object
+  const selectedAhu = ahus.find(a => a.id === selectedAhuId);
 
-  // ── Handlers ──
-  const handleAdd = () => {
-    dispatch(addAHU());
-  };
+  // 4. Derived Data: Filter rooms assigned to this AHU
+  const assignedRooms = rdsRows.filter(row => row.ahuId === selectedAhuId);
 
-  const handleUpdate = (id, field, value) => {
-    dispatch(updateAHU({ id, field, value }));
-  };
+  // 5. Derived Data: Calculate System Totals
+  const totalCFM = assignedRooms.reduce((sum, r) => sum + (r.supplyAir || 0), 0);
+  const totalTR = assignedRooms.reduce((sum, r) => sum + (parseFloat(r.coolingCapTR) || 0), 0);
 
-  const handleDelete = (id) => {
-    if (ahus.length > 1) {
-      if(window.confirm("Are you sure you want to delete this AHU?")) {
-        dispatch(deleteAHU(id));
-      }
-    } else {
-      alert("You must have at least one AHU.");
-    }
+  // Handlers
+  const handleUpdate = (field, value) => {
+    dispatch(updateAHU({ id: selectedAhuId, field, value }));
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-4 md:p-8 pb-24">
+    <div className="flex h-[calc(100vh-64px)] bg-slate-50">
       
-      {/* Page Header */}
-      <div className="flex justify-between items-end mb-8 border-b border-gray-200 pb-4">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900">AHU Selection</h2>
-          <p className="text-gray-500 mt-2">
-            Configure Air Handling Units, Cleanroom Standards, and System Topologies.
-          </p>
+      {/* ── LEFT SIDEBAR: AHU LIST ───────────────────────────────────────── */}
+      <div className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0">
+        <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Systems</h2>
+          <button 
+            onClick={() => dispatch(addAHU())}
+            className="text-blue-600 hover:bg-blue-50 p-1 rounded transition-colors"
+          >
+            + New
+          </button>
         </div>
-        <button
-          onClick={handleAdd}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors"
-        >
-          <span>+</span> Add New AHU
-        </button>
+        
+        <div className="flex-1 overflow-y-auto">
+          {ahus.map(ahu => (
+            <button
+              key={ahu.id}
+              onClick={() => setSelectedAhuId(ahu.id)}
+              className={`w-full text-left px-5 py-4 border-l-4 transition-all group
+                ${selectedAhuId === ahu.id 
+                  ? 'bg-blue-50 border-blue-600' 
+                  : 'bg-white border-transparent hover:bg-slate-50'
+                }`}
+            >
+              <div className={`font-bold text-sm ${selectedAhuId === ahu.id ? 'text-blue-900' : 'text-slate-700'}`}>
+                {ahu.name}
+              </div>
+              <div className="text-xs text-slate-400 mt-1">{ahu.type}</div>
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* AHU List Grid */}
-      <div className="space-y-6">
-        {ahus.map((ahu, index) => (
-          <div 
-            key={ahu.id || index} 
-            className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
-          >
-            {/* AHU Card Header */}
-            <div className="bg-gray-50 px-6 py-3 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="font-bold text-gray-700 flex items-center gap-3">
-                <span className="bg-blue-100 text-blue-700 w-8 h-8 flex items-center justify-center rounded-full text-sm font-bold">
-                  {index + 1}
-                </span>
-                {ahu.roomName ? ahu.roomName : `AHU-${index + 1}`} Configuration
-              </h3>
-              
-              {ahus.length > 1 && (
-                <button 
-                  onClick={() => handleDelete(ahu.id)}
-                  className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded transition-colors"
-                >
-                  Delete
-                </button>
-              )}
+      {/* ── RIGHT PANEL: CONFIG & RESULTS ────────────────────────────────── */}
+      {selectedAhu ? (
+        <div className="flex-1 overflow-y-auto p-8">
+          
+          {/* Header & Stats */}
+          <div className="flex justify-between items-start mb-8">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">{selectedAhu.name} Configuration</h1>
+              <p className="text-slate-500 text-sm mt-1">Manage system parameters and view connected loads.</p>
             </div>
-
-            {/* Inputs Grid */}
-            <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              
-              {/* 1. Room Name Serving */}
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Serving Room / Zone</label>
-                <input
-                  type="text"
-                  value={ahu.roomName || ''}
-                  onChange={(e) => handleUpdate(ahu.id, 'roomName', e.target.value)}
-                  placeholder="e.g. Production Hall A"
-                  className="w-full border border-gray-300 rounded-md p-2.5 focus:ring-2 focus:ring-blue-500 outline-none"
-                />
+            
+            {/* Real-time System Totals */}
+            <div className="flex gap-4">
+              <div className="bg-blue-600 text-white px-5 py-3 rounded-lg shadow-md text-center">
+                <div className="text-xs font-bold opacity-80 uppercase tracking-wide">Total Airflow</div>
+                <div className="text-2xl font-bold">{totalCFM.toLocaleString()} <span className="text-sm font-normal">CFM</span></div>
               </div>
-
-              {/* 2. ISO Class Dropdown */}
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">ISO Cleanroom Class</label>
-                <div className="relative">
-                  <select
-                    value={ahu.isoClass || 'ISO 8'}
-                    onChange={(e) => handleUpdate(ahu.id, 'isoClass', e.target.value)}
-                    className="w-full bg-white border border-gray-300 rounded-md p-2.5 pr-8 focus:ring-2 focus:ring-blue-500 outline-none appearance-none"
-                  >
-                    {ISO_CLASSES.map((iso) => (
-                      <option key={iso.value} value={iso.value}>{iso.label}</option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                    <svg className="fill-current h-4 w-4" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                  </div>
-                </div>
+              <div className="bg-white border border-slate-200 text-slate-700 px-5 py-3 rounded-lg shadow-sm text-center">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Total Load</div>
+                <div className="text-2xl font-bold">{totalTR.toFixed(1)} <span className="text-sm font-normal">TR</span></div>
               </div>
-
-              {/* 3. Design Scheme */}
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">System Design Scheme</label>
-                <div className="relative">
-                  <select
-                    value={ahu.designScheme || ''}
-                    onChange={(e) => handleUpdate(ahu.id, 'designScheme', e.target.value)}
-                    className="w-full bg-white border border-gray-300 rounded-md p-2.5 pr-8 focus:ring-2 focus:ring-blue-500 outline-none appearance-none"
-                  >
-                    {DESIGN_SCHEMES.map((scheme) => (
-                      <option key={scheme} value={scheme}>{scheme}</option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                    <svg className="fill-current h-4 w-4" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* 4. Configuration */}
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Fan Configuration</label>
-                <div className="relative">
-                  <select
-                    value={ahu.configuration || ''}
-                    onChange={(e) => handleUpdate(ahu.id, 'configuration', e.target.value)}
-                    className="w-full bg-white border border-gray-300 rounded-md p-2.5 pr-8 focus:ring-2 focus:ring-blue-500 outline-none appearance-none"
-                  >
-                    {CONFIGURATIONS.map((config) => (
-                      <option key={config} value={config}>{config}</option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                    <svg className="fill-current h-4 w-4" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                  </div>
-                </div>
-              </div>
-
             </div>
           </div>
-        ))}
-      </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            {/* 1. Configuration Form */}
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                <h3 className="text-sm font-bold text-slate-800 uppercase mb-4 border-b border-slate-100 pb-2">System Specs</h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">System Name</label>
+                    <input 
+                      type="text" 
+                      value={selectedAhu.name} 
+                      onChange={(e) => handleUpdate('name', e.target.value)}
+                      className="w-full border-slate-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">System Type</label>
+                    <select 
+                      value={selectedAhu.type} 
+                      onChange={(e) => handleUpdate('type', e.target.value)}
+                      className="w-full border-slate-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    >
+                      <option value="Recirculating">Recirculating (Mixing)</option>
+                      <option value="DOAS">DOAS (100% Fresh Air)</option>
+                      <option value="FCU">Fan Coil Unit</option>
+                    </select>
+                  </div>
+
+                  <div className="pt-4">
+                     <button 
+                       onClick={() => dispatch(deleteAHU(selectedAhuId))}
+                       className="text-red-500 text-xs font-bold hover:text-red-700 hover:underline"
+                     >
+                       Delete System
+                     </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Assigned Rooms List (Read Only Summary) */}
+            <div className="lg:col-span-2">
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                  <h3 className="text-sm font-bold text-slate-700">Assigned Zones</h3>
+                  <span className="text-xs bg-white border border-slate-200 px-2 py-1 rounded text-slate-500 font-bold">
+                    {assignedRooms.length} Rooms
+                  </span>
+                </div>
+                
+                {assignedRooms.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 text-sm">
+                    No rooms assigned. Go to the <b>RDS Tab</b> to assign rooms to this system.
+                  </div>
+                ) : (
+                  <table className="w-full text-left">
+                    <thead className="bg-white border-b border-slate-100">
+                      <tr>
+                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase">Room</th>
+                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase text-right">Area (sqft)</th>
+                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase text-right">Airflow (CFM)</th>
+                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase text-right">Load (TR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50 text-sm text-slate-600">
+                      {assignedRooms.map(room => (
+                        <tr key={room.id} className="hover:bg-slate-50">
+                          <td className="px-6 py-3 font-medium text-slate-900">{room.name}</td>
+                          <td className="px-6 py-3 text-right font-mono">{room.floorArea}</td>
+                          <td className="px-6 py-3 text-right font-mono font-bold text-slate-700">{room.supplyAir}</td>
+                          <td className="px-6 py-3 text-right font-mono text-blue-600">{room.coolingCapTR}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-slate-400">
+          Select a system to configure
+        </div>
+      )}
     </div>
   );
 }

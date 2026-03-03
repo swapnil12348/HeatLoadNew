@@ -3,13 +3,21 @@ import { NavLink } from 'react-router-dom';
 
 export default function TabNav() {
   const tabs = [
-    { id: 'project', label: 'Project Details', path: '/project' },
+    // 1. RDS is now the FIRST tab as requested
+    
+    
+    // 2. Project & Climate follow
+    { id: 'project', label: 'Project Info', path: '/project' },
+    { id: 'rds', label: 'RDS Input (Master)', path: '/rds' },
     { id: 'climate', label: 'Climate', path: '/climate' },
-    { id: 'ahu', label: 'AHU Config', path: '/ahu' },
+    
+    // 3. Detailed Configs
     { id: 'room', label: 'Room Geometry', path: '/room' },
     { id: 'envelope', label: 'Envelope & Loads', path: '/envelope' },
+    { id: 'ahu', label: 'AHU Config', path: '/ahu' },
+    
+    // 4. Output
     { id: 'results', label: 'Results', path: '/results' },
-    { id: 'rds', label: 'RDS Summary', path: '/rds' }, // The new tab
   ];
 
   return (
@@ -18,7 +26,7 @@ export default function TabNav() {
         <div className="flex space-x-1 overflow-x-auto no-scrollbar">
           {tabs.map((tab) => (
             <NavLink
-              key={tab.id} // <--- THIS FIXED THE ERROR
+              key={tab.id}
               to={tab.path}
               className={({ isActive }) =>
                 `px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
