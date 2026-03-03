@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { addNewRoom } from '../features/room/room/roomActions';
+import { addNewRoom } from '../features/room/roomActions';
 import { selectAllAHUs, addAHU } from '../features/ahu/ahuSlice';
 import { selectRdsData } from '../features/results/rdsSelector'; // <--- NEW IMPORT
 import RoomDetailPanel from './rds/RoomDetailPanel';
