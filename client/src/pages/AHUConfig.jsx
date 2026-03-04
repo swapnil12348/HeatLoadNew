@@ -12,7 +12,7 @@ export default function AHUConfig() {
   
   // 2. Local UI State
 
-  
+
   const [selectedAhuId, setSelectedAhuId] = useState(ahus[0]?.id || null);
   
   // 3. Derived Data: Get the active AHU object
@@ -39,8 +39,7 @@ export default function AHUConfig() {
           <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Systems</h2>
           <button 
             onClick={() => dispatch(addAHU())}
-            className="text-blue-600 hover:bg-blue-50 p-1 rounded transition-colors"
-          >
+            className="text-blue-600 hover:bg-blue-50 p-1 rounded transition-colors">
             + New
           </button>
         </div>
