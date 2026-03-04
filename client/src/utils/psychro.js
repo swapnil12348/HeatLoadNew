@@ -1,12 +1,6 @@
 // src/utils/psychro.js
 
-export const getSatVaporPressure = (tempF) => {
-  // Antoine Equation Approximation
-  // Tc = (Tf - 32) * 5/9
-  const dbC = (tempF - 32) * 5 / 9;
-  // Es (hPa)
-  return 6.112 * Math.exp((17.67 * dbC) / (dbC + 243.5)); 
-};
+
 
 export const calculateGrains = (dbF, rh) => {
   // Safety check
@@ -33,8 +27,3 @@ export const calculateGrains = (dbF, rh) => {
   return isNaN(grains) ? 0 : grains;
 };
 
-export const calculateEnthalpy = (dbF, grains) => {
-  // Enthalpy (Btu/lb)
-  const W_lb = grains / 7000;
-  return 0.24 * dbF + W_lb * (1061 + 0.444 * dbF);
-};

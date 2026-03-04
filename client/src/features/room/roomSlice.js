@@ -77,7 +77,7 @@ const initialState = {
       ...createSeasonData('outsideAir'),
 
       // Linked AHU IDs (single-select enforced via setRoomAhu / toggleRoomAhu)
-      assignedAhuIds: ['ahu_default_1'],
+      assignedAhuIds: ['ahu1'],
     },
   ],
 };

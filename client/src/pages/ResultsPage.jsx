@@ -7,10 +7,12 @@ export default function ResultsPage() {
   // 1. Get Calculated Data
   const rdsRows = useSelector(selectRdsData);
   const ahus = useSelector(selectAllAHUs);
+  // ADD this line after the existing useSelector calls
+  const systemDesign = useSelector((state) => state.project.systemDesign);
 
   // 2. Calculate Project Totals
   const totalArea = rdsRows.reduce((sum, r) => sum + (parseFloat(r.floorArea) || 0), 0);
-  
+
   // Note: coolingCapTR comes as a string "5.23" from selector, so we parse it
   const totalTR = rdsRows.reduce((sum, r) => sum + (parseFloat(r.coolingCapTR) || 0), 0);
   const totalCFM = rdsRows.reduce((sum, r) => sum + (parseFloat(r.supplyAir) || 0), 0);
@@ -24,7 +26,7 @@ export default function ResultsPage() {
     const assignedRooms = rdsRows.filter(r => r.ahuId === ahu.id);
     const ahuTR = assignedRooms.reduce((sum, r) => sum + (parseFloat(r.coolingCapTR) || 0), 0);
     const ahuCFM = assignedRooms.reduce((sum, r) => sum + (parseFloat(r.supplyAir) || 0), 0);
-    
+
     return {
       ...ahu,
       roomCount: assignedRooms.length,
@@ -66,14 +68,14 @@ export default function ResultsPage() {
   return (
     <div className="min-h-[calc(100vh-64px)] bg-slate-50 p-8 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
-        
+
         {/* Header */}
         <div className="flex justify-between items-end border-b border-slate-200 pb-5">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">Project Dashboard</h1>
             <p className="text-slate-500 mt-1">Executive summary of HVAC calculations and system loads.</p>
           </div>
-          <button 
+          <button
             onClick={handleExport}
             className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-slate-50 flex items-center gap-2"
           >
@@ -104,7 +106,7 @@ export default function ResultsPage() {
 
         {/* System Breakdown */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
+
           {/* Left: Detailed Metrics */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -136,8 +138,8 @@ export default function ResultsPage() {
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-blue-500 rounded-full" 
+                            <div
+                              className="h-full bg-blue-500 rounded-full"
                               style={{ width: `${sys.loadPct}%` }}
                             ></div>
                           </div>
@@ -147,11 +149,11 @@ export default function ResultsPage() {
                     </tr>
                   ))}
                   {systemSummary.length === 0 && (
-                     <tr>
-                        <td colSpan="4" className="px-6 py-8 text-center text-slate-400">
-                           No systems configured.
-                        </td>
-                     </tr>
+                    <tr>
+                      <td colSpan="4" className="px-6 py-8 text-center text-slate-400">
+                        No systems configured.
+                      </td>
+                    </tr>
                   )}
                 </tbody>
               </table>
@@ -160,40 +162,52 @@ export default function ResultsPage() {
 
           {/* Right: Project Statistics */}
           <div className="space-y-6">
-             {/* General Stats */}
-             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-                <h3 className="text-sm font-bold text-slate-800 mb-4 uppercase">Design Parameters</h3>
-                <ul className="space-y-3 text-sm">
-                   <li className="flex justify-between border-b border-slate-50 pb-2">
-                      <span className="text-slate-500">Total Zones</span>
-                      <span className="font-bold text-slate-700">{rdsRows.length}</span>
-                   </li>
-                   <li className="flex justify-between border-b border-slate-50 pb-2">
-                      <span className="text-slate-500">Air Density Factor</span>
-                      <span className="font-bold text-slate-700">1.08</span>
-                   </li>
-                   <li className="flex justify-between border-b border-slate-50 pb-2">
-                      <span className="text-slate-500">Avg CFM / SqFt</span>
-                      <span className="font-bold text-slate-700">{cfmPerSqft}</span>
-                   </li>
-                </ul>
-             </div>
+            {/* General Stats */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+              <h3 className="text-sm font-bold text-slate-800 mb-4 uppercase">Design Parameters</h3>
+              <ul className="space-y-3 text-sm">
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">Total Zones</span>
+                  <span className="font-bold text-slate-700">{rdsRows.length}</span>
+                </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">Avg CFM / ft²</span>
+                  <span className="font-bold text-slate-700">{cfmPerSqft}</span>
+                </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">Safety Factor</span>
+                  <span className="font-bold text-slate-700">{systemDesign.safetyFactor}%</span>
+                </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">Bypass Factor</span>
+                  <span className="font-bold text-slate-700">{systemDesign.bypassFactor}</span>
+                </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">App. Dew Point</span>
+                  <span className="font-bold text-slate-700">{systemDesign.adp} °F</span>
+                </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">Fan Heat</span>
+                  <span className="font-bold text-slate-700">{systemDesign.fanHeat}%</span>
+                </li>
+              </ul>
+            </div>
 
-             {/* Quick Tip */}
-             <div className="bg-blue-50 rounded-xl border border-blue-100 p-6">
-                <div className="flex items-start gap-3">
-                   <div className="text-2xl">💡</div>
-                   <div>
-                      <h4 className="text-sm font-bold text-blue-900">Optimization Tip</h4>
-                      <p className="text-xs text-blue-700 mt-1 leading-relaxed">
-                         Your average check figure is <b>{sqftPerTR} ft²/TR</b>. 
-                         {sqftPerTR < 300 
-                           ? " This indicates a high cooling load. Check envelope insulation or internal equipment loads." 
-                           : " This is within a standard efficiency range for commercial spaces."}
-                      </p>
-                   </div>
+            {/* Quick Tip */}
+            <div className="bg-blue-50 rounded-xl border border-blue-100 p-6">
+              <div className="flex items-start gap-3">
+                <div className="text-2xl">💡</div>
+                <div>
+                  <h4 className="text-sm font-bold text-blue-900">Optimization Tip</h4>
+                  <p className="text-xs text-blue-700 mt-1 leading-relaxed">
+                    Your average check figure is <b>{sqftPerTR} ft²/TR</b>.
+                    {sqftPerTR < 300
+                      ? " This indicates a high cooling load. Check envelope insulation or internal equipment loads."
+                      : " This is within a standard efficiency range for commercial spaces."}
+                  </p>
                 </div>
-             </div>
+              </div>
+            </div>
 
           </div>
 

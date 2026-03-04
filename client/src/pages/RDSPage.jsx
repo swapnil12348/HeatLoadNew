@@ -4,7 +4,6 @@ import { useSelector, useDispatch } from 'react-redux';
 import { addNewRoom } from '../features/room/roomActions'; 
 import { selectAllAHUs, addAHU } from '../features/ahu/ahuSlice';
 import { selectRdsData } from '../features/results/rdsSelector';
-import { selectEnvelopeByRoomId } from '../features/envelope/envelopeSlice'; 
 import RoomDetailPanel from './rds/RoomDetailPanel';
 
 // ── Summary Row Component ──────────────────────────────────────────────────
@@ -176,7 +175,7 @@ export default function RDSPage() {
           ></div>
           
           <RoomDetailPanel 
-            room={selectedRoomData._raw.room} 
+            room={selectedRoomData} 
             envelope={rawEnvelopes[selectedRoomId]} 
             ahus={ahus} 
             onClose={() => setSelectedRoomId(null)} 

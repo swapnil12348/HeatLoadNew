@@ -1,13 +1,14 @@
 import React from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { selectActiveRoom } from '../features/room/roomSlice';
-import { 
-  selectActiveEnvelope, 
-  updateInternalLoad, 
+import {
+  selectActiveEnvelope,
+  updateInternalLoad,
   initializeRoom,
   updateInfiltration
 } from '../features/envelope/envelopeSlice';
 import RoomSidebar from '../components/Layout/RoomSidebar';
+import BuildingShell from '../features/envelope/BuildingShell';
 
 // Simple Input Helper
 const LoadInput = ({ label, value, onChange, unit }) => (
@@ -27,10 +28,11 @@ const LoadInput = ({ label, value, onChange, unit }) => (
 
 export default function EnvelopeConfig() {
   const dispatch = useDispatch();
-  
+
   // 1. Get Context
   const activeRoom = useSelector(selectActiveRoom);
   const envelope = useSelector(selectActiveEnvelope);
+  const climate = useSelector((state) => state.climate);
 
   // 2. Handlers
   const handleLoadChange = (type, field, val) => {
@@ -56,7 +58,7 @@ export default function EnvelopeConfig() {
 
   return (
     <div className="flex h-[calc(100vh-64px)] bg-gray-50">
-      
+
       {/* Sidebar Navigation */}
       <RoomSidebar />
 
@@ -64,8 +66,8 @@ export default function EnvelopeConfig() {
       <div className="flex-1 overflow-y-auto p-8">
         <header className="mb-8 border-b border-gray-200 pb-4">
           <div className="flex items-center gap-2 mb-1">
-             <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">Active Zone</span>
-             <span className="text-sm text-gray-400 font-mono">#{activeRoom.id}</span>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">Active Zone</span>
+            <span className="text-sm text-gray-400 font-mono">#{activeRoom.id}</span>
           </div>
           <h1 className="text-3xl font-bold text-gray-900">{activeRoom.name}</h1>
           <p className="text-gray-500 mt-1">Configure envelope layers and internal heat gains.</p>
@@ -77,25 +79,25 @@ export default function EnvelopeConfig() {
             <span className="w-1 h-5 bg-green-500 rounded-full"></span>
             Internal Heat Gains
           </h2>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <LoadInput 
-              label="People (Occupancy)" 
-              value={envelope.internalLoads?.people?.count || 0} 
+            <LoadInput
+              label="People (Occupancy)"
+              value={envelope.internalLoads?.people?.count || 0}
               unit="Ppl"
-              onChange={(e) => handleLoadChange('people', 'count', e.target.value)} 
+              onChange={(e) => handleLoadChange('people', 'count', e.target.value)}
             />
-            <LoadInput 
-              label="Lighting Density" 
-              value={envelope.internalLoads?.lights?.wattsPerSqFt || 0} 
+            <LoadInput
+              label="Lighting Density"
+              value={envelope.internalLoads?.lights?.wattsPerSqFt || 0}
               unit="W/ft²"
-              onChange={(e) => handleLoadChange('lights', 'wattsPerSqFt', e.target.value)} 
+              onChange={(e) => handleLoadChange('lights', 'wattsPerSqFt', e.target.value)}
             />
-            <LoadInput 
-              label="Equipment Load" 
-              value={envelope.internalLoads?.equipment?.kw || 0} 
+            <LoadInput
+              label="Equipment Load"
+              value={envelope.internalLoads?.equipment?.kw || 0}
               unit="kW"
-              onChange={(e) => handleLoadChange('equipment', 'kw', e.target.value)} 
+              onChange={(e) => handleLoadChange('equipment', 'kw', e.target.value)}
             />
           </div>
         </section>
@@ -130,9 +132,22 @@ export default function EnvelopeConfig() {
             <span className="w-1 h-5 bg-indigo-500 rounded-full"></span>
             Building Shell
           </h2>
-          
+
           <div className="bg-white rounded-xl border border-dashed border-gray-300 p-8 text-center">
-            <div className="text-4xl mb-3">🧱</div>
+            <div className="text-4xl mb-3">
+              <section>
+                <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                  <span className="w-1 h-5 bg-indigo-500 rounded-full"></span>
+                  Building Shell
+                </h2>
+                <BuildingShell
+                  roomId={activeRoom.id}
+                  elements={envelope.elements}
+                  climate={climate}
+                  tRoom={parseFloat(activeRoom.designTemp) || 72}
+                />
+              </section>
+            </div>
             <h3 className="text-sm font-bold text-gray-900">Wall & Glass Construction</h3>
             <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
               This module will allow you to define U-Values, Orientation, and Shading Coefficients for specific walls in <b>{activeRoom.name}</b>.
