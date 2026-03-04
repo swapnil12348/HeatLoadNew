@@ -523,7 +523,7 @@ export const RDS_SECTIONS = [
     title: 'Ambient Conditions',
     category: 'psychro',
     color: 'orange',
-    columns: createPsychroColumns('amb'),
+    columns: createPsychroColumns('amb', { readOnly: true, derived: true }),
   },
 
   // 22. Fresh Air Conditions (DB, WB, gr/lb, Enthalpy × 3 seasons = 12 cols)
@@ -532,7 +532,7 @@ export const RDS_SECTIONS = [
     title: 'Fresh Air Conditions',
     category: 'psychro',
     color: 'sky',
-    columns: createPsychroColumns('fa'),
+    columns: createPsychroColumns('fa', { readOnly: true, derived: true }),
   },
 
   // 23. Return Air Conditions (DB, WB, gr/lb × 3 seasons = 9 cols) ──────────
@@ -541,7 +541,7 @@ export const RDS_SECTIONS = [
     title: 'Return Air Conditions',
     category: 'psychro',
     color: 'violet',
-    columns: createReturnAirColumns('ra'),
+    columns: createReturnAirColumns('ra', { readOnly: true, derived: true }),
   },
 
   // 24. Supply Air Conditions (12 cols) ─────────────────────────────────────
@@ -550,7 +550,7 @@ export const RDS_SECTIONS = [
     title: 'Supply Air Conditions',
     category: 'psychro',
     color: 'cyan',
-    columns: createPsychroColumns('sa'),
+    columns: createPsychroColumns('sa', { readOnly: true, derived: true }),
   },
 
   // 25. Mixed Air Conditions (12 cols) ──────────────────────────────────────
@@ -559,7 +559,7 @@ export const RDS_SECTIONS = [
     title: 'Mixed Air Conditions',
     category: 'psychro',
     color: 'teal',
-    columns: createPsychroColumns('ma'),
+    columns: createPsychroColumns('ma', { readOnly: true, derived: true }),
   },
 
   // 26. Coil Leaving Air Conditions (12 cols) ───────────────────────────────
@@ -568,7 +568,7 @@ export const RDS_SECTIONS = [
     title: 'Coil Leaving Air Conditions',
     category: 'psychro',
     color: 'blue',
-    columns: createPsychroColumns('coilLeave'),
+    columns: createPsychroColumns('coilLeave', { readOnly: true, derived: true }),
   },
 ];
 

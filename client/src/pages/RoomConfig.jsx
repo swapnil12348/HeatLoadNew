@@ -129,7 +129,7 @@ export default function RoomConfig() {
                 <InputGroup 
                   label="Target Temp" 
                   value={activeRoom.designTemp || ''} 
-                  unit="°F"
+                  unit="°C"
                   className="[&>div>input]:bg-white [&>div>input]:text-amber-900 [&>div>input]:font-bold"
                   onChange={(e) => handleUpdate('designTemp', e.target.value)} 
                 />
@@ -153,19 +153,19 @@ export default function RoomConfig() {
                 <InputGroup 
                   label="Length" 
                   value={activeRoom.length || ''} 
-                  unit="ft"
+                  unit="m"
                   onChange={(e) => handleUpdate('length', e.target.value)} 
                 />
                 <InputGroup 
                   label="Width" 
                   value={activeRoom.width || ''} 
-                  unit="ft"
+                  unit="m"
                   onChange={(e) => handleUpdate('width', e.target.value)} 
                 />
                 <InputGroup 
                   label="Height" 
                   value={activeRoom.height || ''} 
-                  unit="ft"
+                  unit="m"
                   onChange={(e) => handleUpdate('height', e.target.value)} 
                 />
               </div>
@@ -173,8 +173,8 @@ export default function RoomConfig() {
 
             {/* Calculated Stats */}
             <div className="grid grid-cols-2 gap-4">
-              <StatCard label="Floor Area" value={activeRoom.floorArea?.toLocaleString() || 0} unit="ft²" color="blue" />
-              <StatCard label="Room Volume" value={activeRoom.volume?.toLocaleString() || 0} unit="ft³" color="indigo" />
+              <StatCard label="Floor Area" value={activeRoom.floorArea?.toLocaleString() || 0} unit="m²" color="blue" />
+              <StatCard label="Room Volume" value={activeRoom.volume?.toLocaleString() || 0} unit="m³" color="indigo" />
             </div>
 
           </div>

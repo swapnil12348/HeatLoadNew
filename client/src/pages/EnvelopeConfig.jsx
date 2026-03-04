@@ -143,7 +143,7 @@ export default function EnvelopeConfig() {
               <span className="text-gray-400 text-xs font-medium w-12">ACPH</span>
             </div>
             <p className="text-[10px] text-gray-400 mt-2">
-              Infiltration CFM = volume × ACH / 60 &nbsp;·&nbsp; Room volume: {activeRoom.volume} ft³
+              Infiltration CFM = vol(m³) × 35.31 × ACH / 60 &nbsp;·&nbsp; Room volume: {activeRoom.volume} m³
             </p>
           </div>
         </section>
