@@ -2,14 +2,15 @@
 import { addRoom as addRoomAction } from './roomSlice';
 import { initializeRoom } from '../envelope/envelopeSlice';
 
-// A Thunk that adds a room AND initializes its envelope
+// Thunk: Adds room AND initializes empty envelope data
 export const addNewRoom = () => (dispatch, getState) => {
+  // 1. Create the room in roomSlice
   dispatch(addRoomAction());
   
-  // Get the ID of the newly created room (it's set as active in addRoomAction)
+  // 2. Get the new ID (addRoomAction sets activeRoomId)
   const state = getState();
   const newRoomId = state.room.activeRoomId;
   
-  // Create the empty envelope entry immediately
+  // 3. Create the empty envelope in envelopeSlice
   dispatch(initializeRoom(newRoomId));
 };

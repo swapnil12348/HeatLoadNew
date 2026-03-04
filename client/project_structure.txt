@@ -26,6 +26,7 @@
 │   │   │   └── projectSlice.js
 │   │   └── results/
 │   │   │   └── rdsSelector.js
+│   │   │   └── rdsSelector.test.js
 │   │   │   └── resultsSlice.js
 │   │   └── room/
 │   │   │   └── roomActions.js
@@ -42,15 +43,19 @@
 │   │   └── Home.jsx
 │   │   └── ProjectDetails.jsx
 │   │   └── RDSPage.jsx
+│   │   └── RDSPage.test.jsx
 │   │   └── ResultsPage.jsx
 │   │   └── RoomConfig.jsx
 │   └── utils/
 │   │   └── hvacMath.js
 │   │   └── psychro.js
+│   │   └── psychro.test.js
 │   └── App.css
 │   └── App.jsx
 │   └── index.css
 │   └── main.jsx
+│   └── setupTests.js
+│   └── test-utils.jsx
 └── .gitignore
 └── eslint.config.js
 └── index.html

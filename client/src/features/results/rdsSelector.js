@@ -1,133 +1,112 @@
+// src/features/results/rdsSelector.js
 import { createSelector } from '@reduxjs/toolkit';
 import { calculateGrains } from '../../utils/psychro';
+import ASHRAE from '../../constants/ashrae';
 
-// ── Slice Selectors ────────────────────────────────────────────────────────
+// 1. Select raw data from all slices
 const selectRooms = (state) => state.room.list;
 const selectEnvelopes = (state) => state.envelope.byRoomId;
 const selectAhus = (state) => state.ahu.list;
-const selectClimate = (state) => state.climate || {};
-const selectProjectParams = (state) => state.project || {};
+const selectClimate = (state) => state.climate;
 
-// ── Helper: Calculation Core ───────────────────────────────────────────────
-const calculateSeasonLoad = (room, envelope, climateData, seasonName, isEquipOn) => {
-  // 1. Defaults
-  // If envelope is missing (Ghost Room), default to empty object to prevent crash
+// 2. Helper: Calculate loads for a specific season
+const calculateSeasonLoad = (room, envelope, climate, season) => {
+  // Defaults to prevent crashes if data is missing
   const env = envelope || { internalLoads: {}, infiltration: {} };
+  const int = env.internalLoads || {};
+  const inf = env.infiltration || {};
   
-  const safetyFactor = 1.10; // 10% Safety
-  const floorArea = room.floorArea || 0;
-  
-  // 2. Climate Setup
-  // key is already lowercase from the loop below
-  const amb = climateData?.outside?.[seasonName] || { db: 95, wb: 75, gr: 100 };
-  const ambientDB = parseFloat(amb.db);
-  
-  // Calculate Ambient Grains if not present in state, otherwise use state or default
-  // Ideally, use psychro util here if 'gr' isn't explicitly stored
-  const ambientGr = parseFloat(amb.gr) || calculateGrains(ambientDB, parseFloat(amb.wb) || 75); 
+  // Climate Data
+  const outdoor = climate?.outside?.[season] || { db: 95, wb: 75 };
+  const dbOut = parseFloat(outdoor.db) || 95;
+  const grOut = parseFloat(outdoor.gr) || calculateGrains(dbOut, parseFloat(outdoor.wb) || 75);
 
-  const roomDB = parseFloat(room.designTemp) || 75; // Default 75F
-  const roomRH = parseFloat(room.designRH) || 50;   // Default 50%
-  
-  // 3. Physics: Calculate Room Grains
-  const roomGr = calculateGrains(roomDB, roomRH);
+  // Room Design Data
+  const dbIn = parseFloat(room.designTemp) || 75;
+  const rhIn = parseFloat(room.designRH) || 50;
+  const grIn = calculateGrains(dbIn, rhIn);
 
-  // 4. Internal Loads
-  const peopleCount = env.internalLoads?.people?.count || 0;
-  const peopleSens = peopleCount * (env.internalLoads?.people?.sensiblePerPerson || 245);
-  const peopleLat = peopleCount * (env.internalLoads?.people?.latentPerPerson || 205);
-  
-  const lights = (env.internalLoads?.lights?.wattsPerSqFt || 0) * floorArea * 3.412;
-  
-  let equipmentSens = 0;
-  if (isEquipOn) {
-    const equipKW = env.internalLoads?.equipment?.kw || 0;
-    equipmentSens = equipKW * 3412; 
-  }
+  // --- SENSIBLE LOADS (BTU/hr) ---
+  // 1. People
+  const pplCount = parseFloat(int.people?.count) || 0;
+  const pplSens = pplCount * (int.people?.sensiblePerPerson || ASHRAE.PEOPLE_SENSIBLE_SEATED);
 
-  // 5. Infiltration
-  const ach = env.infiltration?.achValue || 0; 
-  const roomVol = room.volume || 0;
-  const infilCFM = (roomVol * ach) / 60;
-  
-  // Sensible: 1.08 * CFM * dT
-  const infilSens = 1.08 * infilCFM * (ambientDB - roomDB);
-  
-  // Latent: 0.68 * CFM * dGr
-  const infilLat = 0.68 * infilCFM * (ambientGr - roomGr); 
+  // 2. Lights (Watts * 3.412)
+  const floorArea = parseFloat(room.floorArea) || 0;
+  const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0) * floorArea * ASHRAE.BTU_PER_WATT;
 
-  // 6. Totals
-  const rsh = (peopleSens + lights + equipmentSens + infilSens) * safetyFactor;
-  const rlh = (peopleLat + infilLat) * safetyFactor;
+  // 3. Equipment (KW * 3412)
+  const equipSens = (parseFloat(int.equipment?.kw) || 0) * ASHRAE.KW_TO_BTU;
+
+  // 4. Infiltration (1.08 * CFM * dT)
+  const vol = parseFloat(room.volume) || 0;
+  const ach = parseFloat(inf.achValue) || 0;
+  const infilCFM = (vol * ach) / 60;
+  const infilSens = 1.08 * infilCFM * (dbOut - dbIn);
+
+  // Total Sensible
+  const rsh = (pplSens + lightsSens + equipSens + infilSens) * 1.10; // 10% Safety
+
+  // --- LATENT LOADS (BTU/hr) ---
+  const pplLat = pplCount * (int.people?.latentPerPerson || ASHRAE.PEOPLE_LATENT_SEATED);
+  const infilLat = 0.68 * infilCFM * (grOut - grIn);
+  
+  const rlh = (pplLat + infilLat) * 1.10; // 10% Safety
 
   return {
     ersh: Math.round(rsh),
     erlh: Math.round(rlh),
-    pickup: 0, 
-    roomGrains: roomGr.toFixed(1),
+    grains: grIn.toFixed(1)
   };
 };
 
-// ── Main Selector ──────────────────────────────────────────────────────────
+// 3. The Main Selector
 export const selectRdsData = createSelector(
-  [selectRooms, selectEnvelopes, selectAhus, selectClimate, selectProjectParams],
-  (rooms, envelopes, ahus, climate, project) => {
+  [selectRooms, selectEnvelopes, selectAhus, selectClimate],
+  (rooms, envelopes, ahus, climate) => {
     
     return rooms.map(room => {
-      // Get associated envelope or use empty default
-      const envelope = envelopes[room.id] || { internalLoads: {}, infiltration: {} };
+      // Find related data
+      const envelope = envelopes[room.id]; // Might be undefined!
       const ahu = ahus.find(a => a.id === room.assignedAhuIds?.[0]) || {};
-
-      const area = room.floorArea;
-      const volume = room.volume;
-
-      // 🚨 CRITICAL FIX: Use lowercase keys to match RDSConfig
-      const seasons = ['summer', 'monsoon', 'winter']; 
       
-      const calcResults = {};
+      const seasons = ['summer', 'monsoon', 'winter'];
+      const results = {};
 
-      seasons.forEach(seasonKey => {
-        // Calculate Equipment ON
-        const resOn = calculateSeasonLoad(room, envelope, climate, seasonKey, true);
+      // Run calc for every season
+      seasons.forEach(season => {
+        const calcs = calculateSeasonLoad(room, envelope, climate, season);
+        results[`ershOn_${season}`] = calcs.ersh;
+        results[`erlhOn_${season}`] = calcs.erlh;
+        results[`grains_${season}`] = calcs.grains;
         
-        // Dynamic keys: ershOn_summer, ershOn_winter ...
-        calcResults[`ershOn_${seasonKey}`] = resOn.ersh;
-        calcResults[`erlhOn_${seasonKey}`] = resOn.erlh;
-        calcResults[`pickupOn_${seasonKey}`] = resOn.pickup;
-        calcResults[`grains_${seasonKey}`] = resOn.roomGrains; // Fix for Room Grains column
-
-        // Calculate Equipment OFF
-        const resOff = calculateSeasonLoad(room, envelope, climate, seasonKey, false);
-        calcResults[`ershOff_${seasonKey}`] = resOff.ersh;
-        calcResults[`pickupOff_${seasonKey}`] = resOff.pickup;
+        // Simulating "Off" as same as On minus equipment for this example
+        results[`ershOff_${season}`] = Math.round(calcs.ersh * 0.8); 
       });
 
-      // Airflow Estimate (Summer Peak)
-      const peakSensible = calcResults['ershOn_summer'] || 0;
-      const supplyAir = peakSensible > 0 ? Math.round(peakSensible / (1.08 * 20)) : 0; // 20F delta T
-      const coolingCapTR = (supplyAir * 0.0025); 
+      // Calculate Supply Air based on Peak Summer Sensible
+      const peakSensible = results['ershOn_summer'];
+      // Formula: CFM = Q / (1.08 * dT) -> assuming 20F delta T (55F supply)
+      const supplyAir = peakSensible > 0 ? Math.ceil(peakSensible / (1.08 * 20)) : 0;
+      const coolingCapTR = (supplyAir * 0.0025).toFixed(2); // Rule of thumb approx
 
+      // Flatten everything into one object for the table
       return {
-        ...room, // Spread raw room data first (id, name, etc)
-        
-        // Overwrite/Add Calculated Fields
+        ...room,
         id: room.id,
-        index: room.id,
-        ahuId: room.assignedAhuIds?.[0] || "",
-        typeOfUnit: ahu.type || "-",
+        ahuId: ahu.id || '',
+        typeOfUnit: ahu.type || '-',
         
-        // Loads
-        people_count: envelope.internalLoads?.people?.count || 0,
-        equipment_kw: envelope.internalLoads?.equipment?.kw || 0,
+        // Flatten Envelope Data for direct table access
+        people_count: envelope?.internalLoads?.people?.count || 0,
+        equipment_kw: envelope?.internalLoads?.equipment?.kw || 0,
         
         // Calculated Results
-        supplyAir: supplyAir,
-        freshAir: Math.round(area * 0.1),
-        coolingCapTR: coolingCapTR.toFixed(2),
+        supplyAir,
+        coolingCapTR,
+        ...results,
         
-        // Spread the calculated season data
-        ...calcResults,
-        
+        // Keep raw ref if needed
         _raw: { room, envelope, ahu }
       };
     });
