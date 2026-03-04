@@ -4,10 +4,11 @@
 
 import React, { memo, useCallback } from 'react';
 import { useDispatch } from 'react-redux';
-import { updateRoom, setRoomAhu, deleteRoom } from '../../features/room/roomSlice';
+import { updateRoom, setRoomAhu } from '../../features/room/roomSlice';
 import { updateInternalLoad, initializeRoom } from '../../features/envelope/envelopeSlice';
 import { InputCell, SelectCell } from './RDSCellComponents';
 import { RDS_SECTIONS, getFieldValue, buildRoomUpdate } from './RDSConfig';
+import { deleteRoomWithCleanup } from '../../features/room/roomActions';
 
 // ── Section background palette (matches SuperTh in the header) ────────────
 const SECTION_BG = {
@@ -131,7 +132,7 @@ const RDSRow = ({ room, envelope, ahus, index }) => {
       {/* Delete action — sticky right */}
       <td className="p-0 border-b border-gray-100 bg-white sticky right-0 z-20 w-8 shadow-[-3px_0_5px_-2px_rgba(0,0,0,0.06)]">
         <button
-          onClick={() => window.confirm('Delete this room?') && dispatch(deleteRoom(room.id))}
+          onClick={() => window.confirm('Delete this room?') && dispatch(deleteRoomWithCleanup(room.id))}
           className="w-full h-full py-[7px] flex items-center justify-center text-gray-200 group-hover:text-red-300 hover:!text-red-500 transition-colors"
           title="Delete room"
         >
