@@ -20,7 +20,6 @@ const altitudeCorrectionFactor = (elevationFt) => {
   return pAlt / 29.921;
 };
 
-// Estimate RH from grains and DB — used to derive WB for psychro state points
 const rhFromGrains = (grains, dbF, elevation = 0) => {
   const grainsSat = calculateGrains(dbF, 100, elevation);
   return grainsSat > 0 ? Math.min(100, (grains / grainsSat) * 100) : 50;
@@ -32,12 +31,16 @@ const selectEnvelopes    = (state) => state.envelope.byRoomId;
 const selectAhus         = (state) => state.ahu.list;
 const selectClimate      = (state) => state.climate;
 const selectSystemDesign = (state) => state.project.systemDesign;
-const selectElevation    = (state) => state.project.ambient.elevation || 0;
+const selectElevation  = (state) => state.project.ambient.elevation  || 0;
+// BUG-07 + BUG-09 FIX: latitude and dailyRange now passed to envelope calc
+const selectLatitude   = (state) => state.project.ambient.latitude   ?? 28;
+const selectDailyRange = (state) => state.project.ambient.dailyRange ?? 0;
+
 
 // ── Per-season load calculator ────────────────────────────────────────────────
 const calculateSeasonLoad = (
   room, envelope, climate, season, systemDesign,
-  altCf, elevation, floorAreaFt2, volumeFt3
+  altCf, elevation, floorAreaFt2, volumeFt3, latitude, dailyRange
 ) => {
   const env = envelope || { internalLoads: {}, infiltration: {} };
   const int = env.internalLoads || {};
@@ -54,15 +57,17 @@ const calculateSeasonLoad = (
   const rhIn  = parseFloat(room.designRH) || 50;
   const grIn  = calculateGrains(dbInF, rhIn, elevation);
 
-  const envelopeGain = calcTotalEnvelopeGain(env.elements, climate, dbInF, season);
+  const envelopeGain = calcTotalEnvelopeGain(
+  env.elements, climate, dbInF, season, latitude, dailyRange
+);
 
   const Cs = ASHRAE.SENSIBLE_FACTOR * altCf;
   const Cl = ASHRAE.LATENT_FACTOR   * altCf;
 
   // ── People ─────────────────────────────────────────────────────────────────
-  const pplCount = parseFloat(int.people?.count)               || 0;
-  const pplSens  = pplCount * (int.people?.sensiblePerPerson   || ASHRAE.PEOPLE_SENSIBLE_SEATED);
-  const pplLat   = pplCount * (int.people?.latentPerPerson     || ASHRAE.PEOPLE_LATENT_SEATED);
+  const pplCount = parseFloat(int.people?.count)             || 0;
+  const pplSens  = pplCount * (int.people?.sensiblePerPerson || ASHRAE.PEOPLE_SENSIBLE_SEATED);
+  const pplLat   = pplCount * (int.people?.latentPerPerson   || ASHRAE.PEOPLE_LATENT_SEATED);
 
   // ── Lighting (always ON, CLF = 1.0) ───────────────────────────────────────
   const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0)
@@ -102,11 +107,11 @@ const calculateSeasonLoad = (
 
 // ── Main selector ─────────────────────────────────────────────────────────────
 export const selectRdsData = createSelector(
-  [selectRooms, selectEnvelopes, selectAhus, selectClimate, selectSystemDesign, selectElevation],
+  [selectRooms, selectEnvelopes, selectAhus, selectClimate, selectSystemDesign, selectElevation, selectLatitude, selectDailyRange,],
   (rooms, envelopes, ahus, climate, systemDesign, elevation) => {
 
-    const altCf = altitudeCorrectionFactor(elevation);
-    const Cs    = ASHRAE.SENSIBLE_FACTOR * altCf;
+    const altCf        = altitudeCorrectionFactor(elevation);
+    const Cs           = ASHRAE.SENSIBLE_FACTOR * altCf;
     const SEASONS_LIST = ['summer', 'monsoon', 'winter'];
 
     return rooms.map(room => {
@@ -122,18 +127,17 @@ export const selectRdsData = createSelector(
       SEASONS_LIST.forEach(season => {
         const calcs = calculateSeasonLoad(
           room, envelope, climate, season, systemDesign,
-          altCf, elevation, floorAreaFt2, volumeFt3
+          altCf, elevation, floorAreaFt2, volumeFt3,  latitude, dailyRange 
         );
         results[`ershOn_${season}`]  = calcs.ersh;
         results[`erlhOn_${season}`]  = calcs.erlh;
         results[`grains_${season}`]  = calcs.grains;
 
-        // Equipment OFF: remove both sensible AND latent equipment contributions.
         results[`ershOff_${season}`] = Math.round(
-          calcs.ersh - calcs.equipSens   * calcs.safetyMult
+          calcs.ersh - calcs.equipSens    * calcs.safetyMult
         );
         results[`erlhOff_${season}`] = Math.round(
-          calcs.erlh - calcs.equipLatent * calcs.safetyMult
+          calcs.erlh - calcs.equipLatent  * calcs.safetyMult
         );
 
         if (season === 'summer') summerCalcs = calcs;
@@ -147,22 +151,7 @@ export const selectRdsData = createSelector(
       const adpF     = systemDesign.adp          || 55;
       const supplyDT = (1 - bf) * (dbInF - adpF);
 
-      // ── BUG-03 FIX: enforce minimum ACPH for cleanroom classification ───────
-      //
-      // ASHRAE / ISO 14644 / GMP Annex 1 cleanroom air change requirements
-      // MUST govern supply air volume when they exceed the thermal CFM.
-      // Without this, a small well-insulated cleanroom would be supplied
-      // only enough air to meet the heat load — far below the particle
-      // dilution requirement for its ISO classification.
-      //
-      // minAcph is set per-room in roomSlice (default 10).
-      // designAcph is the target ACPH — used here as a second floor check.
-      //
-      // Precedence (highest wins):
-      //   1. designAcph minimum — classification compliance
-      //   2. minAcph minimum    — absolute floor per ISO standard
-      //   3. Thermal CFM        — heat load requirement
-      //
+      // ── BUG-03 FIX: enforce minimum ACPH ───────────────────────────────────
       const minAcphCFM    = Math.round(volumeFt3 * (parseFloat(room.minAcph)    || 0) / 60);
       const designAcphCFM = Math.round(volumeFt3 * (parseFloat(room.designAcph) || 0) / 60);
 
@@ -170,17 +159,13 @@ export const selectRdsData = createSelector(
         ? Math.ceil(peakErsh / (Cs * supplyDT))
         : 0;
 
-      // Take the maximum of all three constraints.
-      // supplyAir is the ACTUAL design supply air — governs everything downstream.
       const supplyAir = Math.max(thermalCFM, minAcphCFM, designAcphCFM);
 
-      // Track which constraint governed — useful for the RDS report.
       const supplyAirGoverned =
         supplyAir === thermalCFM && thermalCFM > 0 ? 'thermal'
-        : supplyAir === designAcphCFM             ? 'designAcph'
-        :                                           'minAcph';
+        : supplyAir === designAcphCFM              ? 'designAcph'
+        :                                            'minAcph';
 
-      // supplyAirMinAcph kept for display in the RDS fresh-air section
       const supplyAirMinAcph = minAcphCFM;
 
       // ── Fan heat & grand total ──────────────────────────────────────────────
@@ -188,15 +173,23 @@ export const selectRdsData = createSelector(
       const grandTotal   = (peakErsh + peakErlh) * fanHeatMult;
       const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
 
-      // ── ASHRAE 62.1 fresh air ───────────────────────────────────────────────
-      const pplCount  = envelope?.internalLoads?.people?.count || 0;
-      const freshAir  = Math.ceil(
-        (ASHRAE.VENT_PEOPLE_CFM * pplCount) + (ASHRAE.VENT_AREA_CFM * floorAreaFt2)
-      );
+      // ── ASHRAE 62.1 fresh air + FLOW-03 FIX: DOAS type ─────────────────────
+      // DOAS  → 100% outdoor air, freshAir = full supplyAir.
+      // Recirculating / FCU → ASHRAE 62.1 Ventilation Rate Procedure:
+      //   Vbz = Rp × Pz  +  Ra × Az
+      const pplCount = envelope?.internalLoads?.people?.count || 0;
+      const ahuType  = ahu.type || 'Recirculating';
+
+      const freshAir = ahuType === 'DOAS'
+        ? supplyAir   // entire supply is outdoor air
+        : Math.ceil(
+            (ASHRAE.VENT_PEOPLE_CFM * pplCount) +
+            (ASHRAE.VENT_AREA_CFM   * floorAreaFt2)
+          );
 
       // ── RSH & infiltration summary ──────────────────────────────────────────
       const rsh        = summerCalcs ? Math.round(summerCalcs.rawSensible) : 0;
-      const totalInfil = summerCalcs ? Math.round(summerCalcs.infilCFM)   : 0;
+      const totalInfil = summerCalcs ? Math.round(summerCalcs.infilCFM)    : 0;
       const totalExfil = totalInfil;
 
       // ── Fan heat breakdown ──────────────────────────────────────────────────
@@ -214,67 +207,38 @@ export const selectRdsData = createSelector(
       const maxPurgeAir       = Math.round(volumeFt3 * 20 / 60);
 
       // ── BUG-10 FIX: exhaust air subtracted from return air ─────────────────
-      //
-      // ASHRAE mass balance for a pressurized room:
-      //   Supply = Return + Exhaust_total + Net_exfiltration_through_envelope
-      //
-      // All three exhaust streams are stored in roomSlice.exhaustAir
-      // but were previously never read here. Without this, return air is
-      // overcalculated and duct sizing / pressurization data are wrong.
-      //
       const exhaustGeneral = parseFloat(room.exhaustAir?.general) || 0;
       const exhaustBibo    = parseFloat(room.exhaustAir?.bibo)    || 0;
       const exhaustMachine = parseFloat(room.exhaustAir?.machine) || 0;
       const totalExhaust   = exhaustGeneral + exhaustBibo + exhaustMachine;
 
-      // AHU air quantities — all now derived from the ACPH-governed supplyAir
+      // ── AHU air quantities ──────────────────────────────────────────────────
       const coilAir   = Math.round(supplyAir * (1 - bf));
       const bypassAir = Math.round(supplyAir * bf);
 
-      // Return air = supply minus fresh air minus all exhaust streams.
-      // Clamped to 0 — cannot be negative (would imply more exhaust than supply,
-      // which means the AHU supply air is undersized for the exhaust requirement).
+      // Return = supply − fresh − all exhausts (floored at 0)
       const returnAir = Math.max(0, supplyAir - freshAirCheck - totalExhaust);
 
       const ahuCap        = supplyAir;
       const coolingLoadHL = coolingCapTR;
 
-      // ── BUG-05 FIX: ACES summary derived fields ────────────────────────────
-      //
-      // These were declared as readOnly/derived in RDSConfig but never computed.
-      //
-      // dehumidifiedAir: portion of supply air that passes through the cooling
-      //   coil (i.e. not bypassed). In the ADP-bypass model this equals coilAir.
-      //   ASHRAE: dehumidified air is the air that exits at near-ADP conditions;
-      //   it is then mixed with bypass air to produce supply air at the desired
-      //   supply DB and gr/lb.
-      //
-      // freshAirAces: fresh air quantity used in the ACES AHU summary context.
-      //   We use freshAirCheck (which respects manual override if set).
-      //
-      // bleedAir: in a recirculating system, bleed air is the portion of return
-      //   air exhausted to prevent CO2/contaminant buildup beyond fresh air alone.
-      //   For cleanrooms with positive pressure and exhaust, this equals
-      //   supply minus return minus fresh air, floored at 0.
-      //
+      // ── BUG-05 FIX: derived ACES fields ────────────────────────────────────
       const dehumidifiedAir = coilAir;
       const freshAirAces    = freshAirCheck;
       const bleedAir        = Math.max(0, supplyAir - returnAir - freshAirCheck);
 
-      // CHW flow rate: GPM = BTU/hr / (500 × ΔT°F), ΔT = 10°F standard
+      // CHW flow: GPM = BTU/hr / (500 × 10°F ΔT)
       const chwFlowRate = grandTotal > 0 ? (grandTotal / 5000).toFixed(1) : '0.0';
 
       // ── Winter heating ──────────────────────────────────────────────────────
-      const winterSensLoss  = Math.min(0, results['ershOn_winter'] || 0);
-      const heatingCapBTU   = Math.abs(winterSensLoss);
-      const heatingCap      = (heatingCapBTU / ASHRAE.KW_TO_BTU).toFixed(2);
-      const hwFlowRate      = heatingCapBTU > 0 ? (heatingCapBTU / 10000).toFixed(1) : '0.0';
+      const winterSensLoss     = Math.min(0, results['ershOn_winter'] || 0);
+      const heatingCapBTU      = Math.abs(winterSensLoss);
+      const heatingCap         = (heatingCapBTU / ASHRAE.KW_TO_BTU).toFixed(2);
+      const hwFlowRate         = heatingCapBTU > 0 ? (heatingCapBTU / 10000).toFixed(1) : '0.0';
       const terminalHeatingCap = heatingCap;
       const extraHeatingCap    = (parseFloat(heatingCap) * 1.1).toFixed(2);
 
       // ── Room pick-up loads ──────────────────────────────────────────────────
-      // ΔT rise imposed on supply air: Pickup = ERSH / (Cs × supplyAir)
-      // supplyAir here is the ACPH-governed value — correct denominator.
       const pickupFields = {};
       SEASONS_LIST.forEach(s => {
         const e_on  = results[`ershOn_${s}`]  || 0;
@@ -285,8 +249,8 @@ export const selectRdsData = createSelector(
           ? (e_off / (Cs * supplyAir)).toFixed(1) : '0.0';
       });
 
-      // ── Achieved conditions (design setpoint for correctly sized system) ────
-      const raRH = parseFloat(room.designRH) || 50;
+      // ── Achieved conditions ─────────────────────────────────────────────────
+      const raRH      = parseFloat(room.designRH) || 50;
       const achFields = {};
       SEASONS_LIST.forEach(s => {
         achFields[`achOn_temp_${s}`]      = dbInF.toFixed(1);
@@ -320,35 +284,28 @@ export const selectRdsData = createSelector(
         const ambDB = parseFloat(out.db) || 0;
         const ambRH = parseFloat(out.rh) || 0;
 
-        // BUG-19 FIX: recalculate ambient gr at site elevation.
-        // Previously used the sea-level cached out.gr — wrong at altitude.
-        // This makes the psychro diagram consistent with the load calculations
-        // which already use elevation-corrected grains.
+        // BUG-19 FIX: recalculate at site elevation — not cached sea-level value
         const ambGr   = calculateGrains(ambDB, ambRH, elevation);
         const ambWB   = calculateWetBulb(ambDB, ambRH);
         const ambEnth = calculateEnthalpy(ambDB, ambGr);
 
-        // Ambient
         psychroFields[`amb_db_${s}`]   = ambDB.toFixed(1);
         psychroFields[`amb_wb_${s}`]   = ambWB.toFixed(1);
         psychroFields[`amb_gr_${s}`]   = ambGr.toFixed(1);
         psychroFields[`amb_enth_${s}`] = ambEnth.toFixed(2);
 
-        // Fresh air = ambient (no pre-treatment assumed)
         psychroFields[`fa_db_${s}`]   = ambDB.toFixed(1);
         psychroFields[`fa_wb_${s}`]   = ambWB.toFixed(1);
         psychroFields[`fa_gr_${s}`]   = ambGr.toFixed(1);
         psychroFields[`fa_enth_${s}`] = ambEnth.toFixed(2);
 
-        // Return air = room design setpoint
         const raWB = calculateWetBulb(dbInF, raRH);
         psychroFields[`ra_db_${s}`] = dbInF.toFixed(1);
         psychroFields[`ra_wb_${s}`] = raWB.toFixed(1);
         psychroFields[`ra_gr_${s}`] = raGr.toFixed(1);
 
-        // Supply air = coil leaving + bypass (ADP-bypass model)
-        const saDB   = adpF    * (1 - bf) + dbInF * bf;
-        const saGr   = grADP   * (1 - bf) + raGr  * bf;
+        const saDB   = adpF  * (1 - bf) + dbInF * bf;
+        const saGr   = grADP * (1 - bf) + raGr  * bf;
         const saRH   = rhFromGrains(saGr, saDB, elevation);
         const saWB   = calculateWetBulb(saDB, saRH);
         const saEnth = calculateEnthalpy(saDB, saGr);
@@ -358,12 +315,12 @@ export const selectRdsData = createSelector(
         psychroFields[`sa_gr_${s}`]   = saGr.toFixed(1);
         psychroFields[`sa_enth_${s}`] = saEnth.toFixed(2);
 
-        // Mixed air = return + fresh blended by CFM fraction
+        // Mixed air blended by CFM fraction
         const totalCFM = Math.max(1, supplyAir);
         const faCFM    = freshAirCheck;
         const raCFM    = Math.max(0, totalCFM - faCFM);
-        const maDB     = (raCFM * dbInF  + faCFM * ambDB) / totalCFM;
-        const maGr     = (raCFM * raGr   + faCFM * ambGr) / totalCFM;
+        const maDB     = (raCFM * dbInF + faCFM * ambDB) / totalCFM;
+        const maGr     = (raCFM * raGr  + faCFM * ambGr) / totalCFM;
         const maRH     = rhFromGrains(maGr, maDB, elevation);
         const maWB     = calculateWetBulb(maDB, maRH);
         const maEnth   = calculateEnthalpy(maDB, maGr);
@@ -373,7 +330,6 @@ export const selectRdsData = createSelector(
         psychroFields[`ma_gr_${s}`]   = maGr.toFixed(1);
         psychroFields[`ma_enth_${s}`] = maEnth.toFixed(2);
 
-        // Coil leaving = saturated at ADP
         const clEnth = calculateEnthalpy(adpF, grADP);
         psychroFields[`coilLeave_db_${s}`]   = adpF.toFixed(1);
         psychroFields[`coilLeave_wb_${s}`]   = adpF.toFixed(1);
@@ -386,13 +342,14 @@ export const selectRdsData = createSelector(
         id:         room.id,
         ahuId:      ahu.id   || '',
         typeOfUnit: ahu.type || '-',
-        people_count: envelope?.internalLoads?.people?.count  || 0,
-        equipment_kw: envelope?.internalLoads?.equipment?.kw  || 0,
+        isDOAS:     ahuType === 'DOAS',
+        people_count: envelope?.internalLoads?.people?.count || 0,
+        equipment_kw: envelope?.internalLoads?.equipment?.kw || 0,
 
         // Core outputs
         supplyAir,
-        supplyAirGoverned,   // 'thermal' | 'designAcph' | 'minAcph'
-        thermalCFM,          // pure heat-load CFM before ACPH enforcement
+        supplyAirGoverned,
+        thermalCFM,
         coolingCapTR,
         grandTotal: Math.round(grandTotal),
         freshAir,
@@ -425,9 +382,9 @@ export const selectRdsData = createSelector(
         coilAir,
         bypassAir,
         returnAir,
-        dehumidifiedAir,   // BUG-05 FIX
-        freshAirAces,      // BUG-05 FIX
-        bleedAir,          // BUG-05 FIX
+        dehumidifiedAir,
+        freshAirAces,
+        bleedAir,
         ahuCap,
         coolingLoadHL,
         chwFlowRate,

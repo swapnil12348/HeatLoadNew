@@ -8,7 +8,7 @@ export default function ProjectDetails() {
   const dispatch = useDispatch();
   const { info, ambient, systemDesign } = useSelector((state) => state.project);
 
-  const handleTextChange   = (e) =>
+  const handleTextChange = (e) =>
     dispatch(updateProjectInfo({ field: e.target.name, value: e.target.value }));
 
   const handleAmbientChange = (field, value) =>
@@ -23,11 +23,21 @@ export default function ProjectDetails() {
     }
   };
 
-  // Live preview: reference indoor temp 72°F (22.2°C) — typical cleanroom design point
+  // Live preview uses 72°F (22.2°C) reference indoor temp
   const refDbInF   = 72;
   const supplyDT   = (1 - systemDesign.bypassFactor) * (refDbInF - systemDesign.adp);
   const safetyDisp = (1 + systemDesign.safetyFactor / 100).toFixed(2);
   const fanDisp    = (1 + systemDesign.fanHeat       / 100).toFixed(2);
+
+  // BUG-09: live diurnal range label helper
+  const getDiurnalLabel = (val) => {
+    const v = parseFloat(val) || 0;
+    if (v === 0)  return 'Using seasonal defaults (18°F summer / 12°F monsoon / 20°F winter)';
+    if (v < 12)   return 'Coastal / humid site (typical: 8–12°F)';
+    if (v < 20)   return 'Inland plains site (typical: 14–22°F)';
+    if (v < 30)   return 'Semi-arid / continental site (typical: 22–28°F)';
+    return              'Desert site — high swing (typical: 28–40°F)';
+  };
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-8">
@@ -90,7 +100,7 @@ export default function ProjectDetails() {
               Site Conditions
             </h3>
 
-            {/* Elevation — actively used in calculations */}
+            {/* Elevation — altitude correction */}
             <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
               <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wide mb-2">
                 ↳ Used in load calculations
@@ -107,18 +117,46 @@ export default function ProjectDetails() {
               </p>
             </div>
 
-            {/* Latitude — stored, reserved for SHGF correction */}
-            <div className="mb-5">
+            {/* BUG-07 FIX: Latitude — now actively used in CLTD/SHGF corrections */}
+            <div className="mb-4 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
+              <p className="text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-2">
+                ↳ Used in CLTD + SHGF calculations
+              </p>
               <NumberControl
-                label="Latitude"
-                value={ambient.latitude}
+                label="Project Latitude"
+                value={ambient.latitude ?? 28}
                 onChange={(val) => handleAmbientChange('latitude', val)}
                 unit="°"
                 min={-90}
                 max={90}
               />
-              <p className="text-[10px] text-gray-400 mt-1">
-                Reserved — SHGF latitude correction not yet applied.
+              <p className="text-[10px] text-indigo-600 mt-1 leading-relaxed">
+                Shifts wall CLTD from 40°N reference and corrects SHGF from 32°N
+                reference to actual site latitude.
+                Negative = southern hemisphere (N↔S orientations swapped automatically).
+              </p>
+            </div>
+
+            {/* BUG-09 FIX: Daily Temperature Range */}
+            <div className="mb-5 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+              <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide mb-2">
+                ↳ Used in CLTD mean-temp correction
+              </p>
+              <NumberControl
+                label="Daily Temp Range"
+                value={ambient.dailyRange ?? 0}
+                onChange={(val) => handleAmbientChange('dailyRange', val)}
+                unit="°F"
+                min={0}
+                max={50}
+              />
+              <p className="text-[10px] text-amber-600 mt-1 leading-relaxed">
+                {getDiurnalLabel(ambient.dailyRange)}
+              </p>
+              <p className="text-[10px] text-amber-500 mt-1">
+                Set 0 to use built-in seasonal defaults.
+                ASHRAE: t_mean = t_peak − range/2. Desert sites (Riyadh, Jodhpur)
+                need 30–38°F here — hardcoded 20°F understates cooling load by 5–15%.
               </p>
             </div>
 
@@ -132,9 +170,30 @@ export default function ProjectDetails() {
               </span>
             </p>
             <div className="space-y-4">
-              <NumberControl label="Dry Bulb Temp"     value={ambient.dryBulbTemp}      onChange={(val) => handleAmbientChange('dryBulbTemp', val)}      unit="°C" min={-60} max={60} />
-              <NumberControl label="Wet Bulb Temp"     value={ambient.wetBulbTemp}      onChange={(val) => handleAmbientChange('wetBulbTemp', val)}      unit="°C" min={-60} max={60} />
-              <NumberControl label="Relative Humidity" value={ambient.relativeHumidity} onChange={(val) => handleAmbientChange('relativeHumidity', val)} unit="%" min={0} max={100}  />
+              <NumberControl
+                label="Dry Bulb Temp"
+                value={ambient.dryBulbTemp}
+                onChange={(val) => handleAmbientChange('dryBulbTemp', val)}
+                unit="°C"
+                min={-60}
+                max={60}
+              />
+              <NumberControl
+                label="Wet Bulb Temp"
+                value={ambient.wetBulbTemp}
+                onChange={(val) => handleAmbientChange('wetBulbTemp', val)}
+                unit="°C"
+                min={-60}
+                max={60}
+              />
+              <NumberControl
+                label="Relative Humidity"
+                value={ambient.relativeHumidity}
+                onChange={(val) => handleAmbientChange('relativeHumidity', val)}
+                unit="%"
+                min={0}
+                max={100}
+              />
             </div>
           </div>
         </div>
@@ -147,7 +206,8 @@ export default function ProjectDetails() {
               System Design Parameters
             </h3>
             <p className="text-xs text-gray-500 mb-6">
-              These four values drive all load calculations across every room. Changes update results instantly.
+              These values drive all load calculations across every room.
+              Changes update results instantly.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <NumberControl
@@ -197,15 +257,89 @@ export default function ProjectDetails() {
                 Safety multiplier = <strong>{safetyDisp}×</strong>
                 &nbsp;· Fan heat multiplier = <strong>{fanDisp}×</strong>
               </p>
+              {/* BUG-14 note: safety and fan heat are applied independently */}
+              <p className="text-[10px] text-amber-600 mt-1">
+                Safety factor applied to room loads only.
+                Fan heat is added after — not compounded with safety factor.
+                Grand total = (ERSH + ERLH) × safetyMult × fanHeatMult.
+              </p>
               <p className="text-[10px] text-amber-500 mt-1">
-                ΔT preview uses 72°F reference indoor temp (22.2°C). Actual ΔT uses each room's designTemp.
+                ΔT preview uses 72°F reference indoor temp (22.2°C).
+                Actual ΔT uses each room's designTemp.
                 {supplyDT <= 0 && (
                   <span className="text-red-600 font-bold ml-2">
-                    ⚠ ADP ≥ indoor temp — supply air calculation will produce 0 CFM. Lower ADP.
+                    ⚠ ADP ≥ indoor temp — supply air will be 0 CFM. Lower ADP.
                   </span>
                 )}
               </p>
             </div>
+          </div>
+        </div>
+
+        {/* ── 4. Calculation Reference Card ── */}
+        <div className="lg:col-span-4">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h3 className="text-lg font-bold text-gray-800 flex items-center mb-4 border-b pb-2">
+              <span className="bg-green-100 text-green-700 w-8 h-8 flex items-center justify-center rounded-full mr-3 text-sm">4</span>
+              Active Site Parameters
+            </h3>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-3">
+              Currently applied to all envelope calculations
+            </p>
+            <ul className="space-y-2 text-sm">
+              <li className="flex justify-between border-b border-gray-50 pb-2">
+                <span className="text-gray-500">Latitude</span>
+                <span className="font-bold text-indigo-700">
+                  {Math.abs(ambient.latitude ?? 28).toFixed(1)}°
+                  {(ambient.latitude ?? 28) >= 0 ? ' N' : ' S'}
+                </span>
+              </li>
+              <li className="flex justify-between border-b border-gray-50 pb-2">
+                <span className="text-gray-500">Daily Temp Range</span>
+                <span className="font-bold text-amber-700">
+                  {(ambient.dailyRange ?? 0) > 0
+                    ? `${ambient.dailyRange} °F`
+                    : 'Seasonal defaults'}
+                </span>
+              </li>
+              <li className="flex justify-between border-b border-gray-50 pb-2">
+                <span className="text-gray-500">Elevation</span>
+                <span className="font-bold text-blue-700">
+                  {ambient.elevation || 0} ft
+                </span>
+              </li>
+              <li className="flex justify-between border-b border-gray-50 pb-2">
+                <span className="text-gray-500">Alt. Correction (Cf)</span>
+                <span className="font-bold text-blue-700 font-mono">
+                  {(ambient.elevation > 0
+                    ? (29.921 * Math.pow(1 - 6.8754e-6 * ambient.elevation, 5.2559) / 29.921)
+                    : 1.0
+                  ).toFixed(4)}
+                </span>
+              </li>
+              <li className="flex justify-between border-b border-gray-50 pb-2">
+                <span className="text-gray-500">CLTD Reference</span>
+                <span className="font-mono text-xs text-gray-600">40°N Jul (corrected)</span>
+              </li>
+              <li className="flex justify-between pb-2">
+                <span className="text-gray-500">SHGF Reference</span>
+                <span className="font-mono text-xs text-gray-600">32°N (corrected)</span>
+              </li>
+            </ul>
+
+            {/* Southern hemisphere notice */}
+            {(ambient.latitude ?? 28) < 0 && (
+              <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                <p className="text-[10px] font-bold text-purple-700 uppercase mb-1">
+                  Southern Hemisphere Active
+                </p>
+                <p className="text-[10px] text-purple-600 leading-relaxed">
+                  N↔S wall orientations are automatically swapped for CLTD LM
+                  and SHGF latitude corrections.
+                  NE↔SE and SW↔NW are also swapped accordingly.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

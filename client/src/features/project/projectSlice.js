@@ -25,6 +25,16 @@ const initialState = {
     dryBulbTemp:      35,    // °C — project brief reference only
     wetBulbTemp:      24,    // °C — project brief reference only
     relativeHumidity: 50,    // %  — project brief reference only
+    // ...existing fields...
+
+  // BUG-07 FIX: latitude used for CLTD/SHGF corrections
+  // Default 28°N = Delhi. Range: -90 to +90 (negative = southern hemisphere)
+  latitude: 28,
+
+  // BUG-09 FIX: site-specific daily temperature range (°F, full swing)
+  // 0 = use seasonal defaults (18°F summer, 12°F monsoon, 20°F winter)
+  // Typical values: coastal 10-14°F, inland plains 18-25°F, desert 28-40°F
+  dailyRange: 0,
   },
 
   // ── System design parameters ──────────────────────────────────────────────

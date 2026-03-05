@@ -1,29 +1,33 @@
 /**
  * ASHRAE CLTD / CLF / SHGF Reference Tables
  * Reference: ASHRAE Handbook of Fundamentals (2021), Chapter 18
- *            ASHRAE Cooling & Heating Load Calculation Manual
+ *            ASHRAE Cooling & Heating Load Calculation Manual (2nd ed)
  *
- * CLTD  — Cooling Load Temperature Difference (°F)
- * SHGF  — Solar Heat Gain Factor (BTU/hr·ft²)
- * CLF   — Cooling Load Factor (dimensionless)
- * SC    — Shading Coefficient (dimensionless)
- * U     — Overall Heat Transfer Coefficient (BTU/hr·ft²·°F)
+ * BUG-07 FIX: Two new correction tables added:
  *
- * Notes:
- *  - CLTD values are for 40°N latitude, July 15, peak hour (15:00 solar time)
- *  - Corrections applied for actual indoor/outdoor design temps via correctCLTD()
- *  - SHGF values are maximum daily values for 32°N latitude (appropriate for
- *    tropical/subtropical climates — adjust latitude correction as needed)
- *  - All values in IP (Imperial) units — BTU, ft², °F
+ *   CLTD_LM  — Latitude Month correction (°F) to add to CLTD.
+ *              Shifts the 40°N reference table to actual project latitude.
+ *              Source: ASHRAE CHLCM Table B-6, July, northern hemisphere.
+ *
+ *   SHGF_LATITUDE_FACTOR — Multiplier applied to the 32°N SHGF base table.
+ *              Corrects solar heat gain for actual project latitude.
+ *              Source: ASHRAE Fundamentals Ch 27, Tables 15–19, interpolated.
+ *
+ *   interpolateLatitude() — Linear interpolation between table rows.
+ *
+ * BUG-09 FIX: DIURNAL_HALF removed from envelopeCalc.js (hardcoded).
+ *   Replaced by DIURNAL_RANGE_DEFAULTS — used only when the project does
+ *   not supply an explicit dailyRange value. Engineers can now set the
+ *   actual site daily temperature range in ProjectDetails.
  */
 
 // ── Wall CLTD (°F) ───────────────────────────────────────────────────────────
-// Source: ASHRAE Table 1, Chapter 28 (Cooling Load Calculation Methods)
-// Wall Group Classification (by thermal mass):
-//   Light  = frame walls, metal panels       (mass < 30 lb/ft²)
-//   Medium = brick veneer, concrete block    (mass 30–80 lb/ft²)
-//   Heavy  = concrete, brick                 (mass > 80 lb/ft²)
-// Peak CLTD at 3 PM solar time, July, 40°N
+// Source: ASHRAE Table 1, Chapter 28
+// Reference: 40°N latitude, July 15, peak hour (15:00 solar time)
+// Wall mass groups:
+//   Light  = frame / metal panels       (< 30 lb/ft²)
+//   Medium = brick veneer / CMU block   (30–80 lb/ft²)
+//   Heavy  = concrete / solid brick     (> 80 lb/ft²)
 export const WALL_CLTD = {
   N:  { light: 12, medium:  9, heavy:  6 },
   NE: { light: 22, medium: 17, heavy: 12 },
@@ -37,13 +41,13 @@ export const WALL_CLTD = {
 
 export const WALL_CLTD_SEASONAL = {
   summer:  1.00,
-  monsoon: 0.85, // reduced solar due to cloud cover
-  winter:  0.40, // transmission dominant, minimal solar contribution
+  monsoon: 0.85,
+  winter:  0.40,
 };
 
 // ── Roof CLTD (°F) ───────────────────────────────────────────────────────────
 // Source: ASHRAE Table 4, Chapter 28
-// Flat roofs — peak CLTD at 3 PM, July, 40°N
+// Flat roofs, peak CLTD at 3 PM, July, 40°N
 export const ROOF_CLTD = {
   'No insulation':        54,
   '1" insulation':        40,
@@ -60,15 +64,37 @@ export const ROOF_CLTD_SEASONAL = {
   winter:  0.30,
 };
 
+// ── BUG-07 FIX: CLTD Latitude Month (LM) Correction ─────────────────────────
+// Source: ASHRAE Cooling & Heating Load Calculation Manual, Table B-6
+//
+// These values are ADDED to the corrected CLTD to shift the 40°N reference
+// table to the actual project latitude (July, northern hemisphere).
+//
+// Physical meaning:
+//   Negative LM → less solar exposure at that orientation for that latitude
+//                 (e.g. South-facing walls receive less summer sun at low latitudes
+//                  because the sun is more directly overhead, not at a low angle)
+//   Positive LM → more solar exposure (e.g. high-latitude S-facing surfaces
+//                  see more oblique summer sun → higher CLTD)
+//
+// Latitude 40 = 0 for all orientations (it's the reference).
+// Southern hemisphere: use abs(latitude) but swap N↔S.
+//
+export const CLTD_LM = {
+  //        N    NE    E    SE    S    SW    W    NW
+   0: { N:  1, NE: -2, E: -5, SE: -3, S: -7, SW: -3, W: -5, NW: -2 },
+  10: { N:  0, NE: -1, E: -3, SE: -2, S: -5, SW: -2, W: -3, NW: -1 },
+  20: { N: -1, NE:  0, E: -2, SE: -1, S: -3, SW: -1, W: -2, NW:  0 },
+  24: { N: -1, NE:  0, E: -1, SE: -1, S: -2, SW: -1, W: -1, NW:  0 },
+  32: { N:  0, NE:  0, E: -1, SE:  0, S: -1, SW:  0, W: -1, NW:  0 },
+  36: { N:  0, NE:  0, E:  0, SE:  0, S: -1, SW:  0, W:  0, NW:  0 },
+  40: { N:  0, NE:  0, E:  0, SE:  0, S:  0, SW:  0, W:  0, NW:  0 },
+  48: { N:  1, NE:  1, E:  2, SE:  1, S:  3, SW:  1, W:  2, NW:  1 },
+  56: { N:  2, NE:  2, E:  3, SE:  2, S:  5, SW:  2, W:  3, NW:  2 },
+};
+
 // ── Glass Conduction CLTD (°F) ───────────────────────────────────────────────
 // Source: ASHRAE Handbook — Fundamentals, Table 7, Ch 18
-// Base CLTD for glass conduction (before correctCLTD() adjustment).
-// Glass has negligible thermal mass — no wall-group classification needed.
-// Winter value is negative: at reference conditions (78°F indoor, 85°F mean outdoor)
-// a −5°F base produces a strongly negative corrected value in cold climates,
-// correctly representing heat loss rather than gain.
-// Example: winter db=45°F → tMean≈36°F →
-//   corrected = −5 + (78−72) + (36−85) = −5 + 6 − 49 = −48°F → heat loss ✓
 export const GLASS_CLTD = {
   summer:  15,
   monsoon: 12,
@@ -77,7 +103,8 @@ export const GLASS_CLTD = {
 
 // ── Solar Heat Gain Factor — SHGF (BTU/hr·ft²) ───────────────────────────────
 // Source: ASHRAE Table 15, Chapter 27
-// Maximum SHGF for 32°N latitude (India, Middle East, subtropics)
+// Maximum SHGF — reference latitude: 32°N
+// (India, Middle East, subtropics)
 export const SHGF = {
   N:          { summer:  20, monsoon:  18, winter:  10 },
   NE:         { summer:  73, monsoon:  65, winter:  30 },
@@ -90,10 +117,89 @@ export const SHGF = {
   Horizontal: { summer: 248, monsoon: 210, winter: 148 },
 };
 
+// ── BUG-07 FIX: SHGF Latitude Correction Factors ─────────────────────────────
+// Source: ASHRAE Fundamentals Ch 27, Tables 15–19, interpolated.
+//
+// Applied as: SHGF_actual = SHGF_32N × factor
+//
+// Physical meaning:
+//   N-facing: tropical sites (lat < 32°N) get MORE direct sun on N face because
+//             the sun passes slightly north of zenith at solstice → factor < 1.0
+//             Higher latitudes: sun stays south → N face gets less sun → factor > 1.0
+//             Wait — actually at latitudes < 23.5°N the sun IS north at solstice,
+//             meaning N-facing gets significant solar → factor < 1.0 vs 32°N ref.
+//   S-facing: at low latitudes, summer sun is directly overhead or slightly north,
+//             so S-facing surfaces see much less summer radiation → factor < 1.0.
+//             At high latitudes, summer sun stays low in south → S face gets more.
+//   E/W:      relatively stable across latitudes in summer → factors near 1.0.
+//
+export const SHGF_LATITUDE_FACTOR = {
+  //       N     NE    E     SE    S     SW    W     NW    Horizontal
+   0: { N: 0.60, NE: 1.00, E: 1.00, SE: 0.82, S: 0.38, SW: 0.82, W: 1.00, NW: 1.00, Horizontal: 1.06 },
+  10: { N: 0.72, NE: 1.00, E: 1.00, SE: 0.88, S: 0.55, SW: 0.88, W: 1.00, NW: 1.00, Horizontal: 1.04 },
+  20: { N: 0.88, NE: 1.00, E: 1.00, SE: 0.95, S: 0.78, SW: 0.95, W: 1.00, NW: 1.00, Horizontal: 1.01 },
+  32: { N: 1.00, NE: 1.00, E: 1.00, SE: 1.00, S: 1.00, SW: 1.00, W: 1.00, NW: 1.00, Horizontal: 1.00 },
+  40: { N: 1.15, NE: 1.00, E: 1.00, SE: 1.04, S: 1.22, SW: 1.04, W: 1.00, NW: 1.00, Horizontal: 0.97 },
+  48: { N: 1.35, NE: 1.02, E: 0.98, SE: 1.08, S: 1.52, SW: 1.08, W: 0.98, NW: 1.02, Horizontal: 0.93 },
+  56: { N: 1.60, NE: 1.05, E: 0.96, SE: 1.14, S: 1.90, SW: 1.14, W: 0.96, NW: 1.05, Horizontal: 0.88 },
+};
+
+// ── BUG-09 FIX: Diurnal Range Defaults ───────────────────────────────────────
+// Used ONLY when the project does not supply an explicit dailyRange value.
+// Engineers should override this in ProjectDetails → Ambient → Daily Temp Range.
+//
+// These are typical values by season — NOT site-specific.
+// Source: ASHRAE Fundamentals Ch 14.
+//
+// Site categories:
+//   Coastal / humid: 8–12°F (e.g. Mumbai, Chennai)
+//   Inland plains:   18–25°F (e.g. Delhi, Karachi)
+//   Desert:          28–40°F (e.g. Riyadh, Jodhpur)
+//
+// Default season splits reflect the fact that monsoon suppresses the diurnal
+// range (cloud cover and latent heat buffer the swing).
+export const DIURNAL_RANGE_DEFAULTS = {
+  summer:  18,  // °F — inland typical (was hardcoded 10×2=20 half)
+  monsoon: 12,  // °F — cloud cover suppresses swing
+  winter:  20,  // °F — clear skies increase swing
+};
+
+// ── Latitude interpolation helper ─────────────────────────────────────────────
+/**
+ * Linearly interpolate a value from a latitude-keyed table.
+ *
+ * @param {Object} table  - Object with numeric latitude keys, each mapping to
+ *                          an object of { orientationKey: number }
+ * @param {number} lat    - Actual latitude in degrees (use Math.abs for S hemi)
+ * @param {string} key    - Orientation key e.g. 'N', 'E', 'Horizontal'
+ * @returns {number} Interpolated value
+ */
+export const interpolateLatitude = (table, lat, key) => {
+  const latitudes = Object.keys(table).map(Number).sort((a, b) => a - b);
+
+  // Clamp to table bounds
+  if (lat <= latitudes[0])                  return table[latitudes[0]][key]                   ?? 0;
+  if (lat >= latitudes[latitudes.length - 1]) return table[latitudes[latitudes.length - 1]][key] ?? 0;
+
+  // Find bounding rows
+  let lower = latitudes[0];
+  let upper = latitudes[latitudes.length - 1];
+  for (let i = 0; i < latitudes.length - 1; i++) {
+    if (lat >= latitudes[i] && lat <= latitudes[i + 1]) {
+      lower = latitudes[i];
+      upper = latitudes[i + 1];
+      break;
+    }
+  }
+
+  const lv = table[lower][key] ?? 0;
+  const uv = table[upper][key] ?? 0;
+  const t  = (lat - lower) / (upper - lower);
+  return lv + t * (uv - lv);
+};
+
 // ── Cooling Load Factor — CLF (dimensionless) ─────────────────────────────────
 // Source: ASHRAE Table 13, Chapter 28
-// Fraction of instantaneous solar gain that becomes cooling load at peak hour.
-// Conservative values (no internal shading) used for safety margin.
 export const CLF = {
   N:          { light: 0.73, medium: 0.62, heavy: 0.49 },
   NE:         { light: 0.38, medium: 0.30, heavy: 0.22 },
@@ -106,8 +212,7 @@ export const CLF = {
   Horizontal: { light: 0.75, medium: 0.65, heavy: 0.55 },
 };
 
-// ── Shading Coefficient — SC (dimensionless) ──────────────────────────────────
-// Source: ASHRAE Table 11, Chapter 27
+// ── Shading Coefficient — SC ──────────────────────────────────────────────────
 export const SC_OPTIONS = [
   { label: 'Single Clear Glass',            value: 1.00 },
   { label: 'Single Tinted (Bronze/Grey)',   value: 0.70 },
@@ -122,7 +227,6 @@ export const SC_OPTIONS = [
 ];
 
 // ── U-Value Presets (BTU/hr·ft²·°F) ──────────────────────────────────────────
-// Source: ASHRAE Tables 4 & 22, Chapter 27 — overall U-values including air films
 export const U_VALUE_PRESETS = {
   walls: [
     { label: '8" Concrete Block (uninsulated)',   value: 0.48 },
@@ -143,14 +247,14 @@ export const U_VALUE_PRESETS = {
     { label: 'Custom',                             value: null },
   ],
   glass: [
-    { label: 'Single Clear (1/4")',         value: 1.04 },
-    { label: 'Single Tinted (1/4")',        value: 1.04 },
-    { label: 'Double Clear (1/2" air)',     value: 0.55 },
-    { label: 'Double Clear (1/2" argon)',   value: 0.48 },
-    { label: 'Double Low-E (1/2" air)',     value: 0.38 },
-    { label: 'Double Low-E (1/2" argon)',   value: 0.30 },
-    { label: 'Triple Clear',               value: 0.28 },
-    { label: 'Custom',                     value: null },
+    { label: 'Single Clear (1/4")',        value: 1.04 },
+    { label: 'Single Tinted (1/4")',       value: 1.04 },
+    { label: 'Double Clear (1/2" air)',    value: 0.55 },
+    { label: 'Double Clear (1/2" argon)',  value: 0.48 },
+    { label: 'Double Low-E (1/2" air)',    value: 0.38 },
+    { label: 'Double Low-E (1/2" argon)',  value: 0.30 },
+    { label: 'Triple Clear',              value: 0.28 },
+    { label: 'Custom',                    value: null },
   ],
   partitions: [
     { label: 'Gypsum Board + Stud (uninsulated)', value: 0.35 },
@@ -167,17 +271,11 @@ export const U_VALUE_PRESETS = {
   ],
 };
 
-// ── Orientation Options ───────────────────────────────────────────────────────
-export const ORIENTATIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-
-// ── Wall Construction Options ─────────────────────────────────────────────────
+// ── Orientation & Construction Options ───────────────────────────────────────
+export const ORIENTATIONS       = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 export const WALL_CONSTRUCTIONS = ['light', 'medium', 'heavy'];
-
-// ── Roof Construction Options ─────────────────────────────────────────────────
 export const ROOF_CONSTRUCTIONS = Object.keys(ROOF_CLTD);
-
-// ── Room Mass Options (for CLF selection) ─────────────────────────────────────
-export const ROOM_MASS_OPTIONS = ['light', 'medium', 'heavy'];
+export const ROOM_MASS_OPTIONS  = ['light', 'medium', 'heavy'];
 
 // ── CLTD Correction Formula ───────────────────────────────────────────────────
 /**
@@ -186,48 +284,39 @@ export const ROOM_MASS_OPTIONS = ['light', 'medium', 'heavy'];
  *
  *   CLTD_corrected = CLTD_table + (78 − t_room) + (t_outdoor_mean − 85)
  *
- * Reference conditions baked into the table values:
- *   t_room         = 78°F (indoor design temp)
- *   t_outdoor_mean = 85°F (mean outdoor temp = (DB_max + DB_min) / 2)
- *
- * When actual conditions differ, both correction terms shift the CLTD.
- * Result can be negative — callers decide whether to clamp (see envelopeCalc.js).
- *
- * @param {number} cltdTable     - tabulated CLTD (after seasonal multiplier applied)
- * @param {number} tRoom         - actual indoor design temp (°F)
- * @param {number} tOutdoorMean  - actual mean outdoor temp (°F)
- * @returns {number} corrected CLTD (°F), signed
+ * Reference conditions in table:
+ *   t_room         = 78°F
+ *   t_outdoor_mean = 85°F  (= (DB_max + DB_min) / 2)
  */
 export const correctCLTD = (cltdTable, tRoom, tOutdoorMean) =>
   cltdTable + (78 - tRoom) + (tOutdoorMean - 85);
 
 // ── Default element templates ─────────────────────────────────────────────────
-// uValue MUST match the uPreset's value field — they are kept in sync here.
 export const DEFAULT_ELEMENTS = {
   walls: {
     label:        'Exposed Wall',
     orientation:  'N',
     construction: 'medium',
     area:         0,
-    uValue:       0.48, // ← matches '8" Concrete Block (uninsulated)'
+    uValue:       0.48,
     uPreset:      '8" Concrete Block (uninsulated)',
   },
   roofs: {
     label:        'Roof Exposed',
     construction: '2" insulation',
     area:         0,
-    uValue:       0.15, // ← matches 'Built-up + 2" rigid insulation'
+    uValue:       0.15,
     uPreset:      'Built-up + 2" rigid insulation',
   },
   glass: {
-    label:    'Exposed Glass',
+    label:       'Exposed Glass',
     orientation: 'E',
-    area:     0,
-    uValue:   0.55, // ← matches 'Double Clear (1/2" air)'
-    uPreset:  'Double Clear (1/2" air)',
-    sc:       0.88,
-    scPreset: 'Double Clear Glass',
-    roomMass: 'medium',
+    area:        0,
+    uValue:      0.55,
+    uPreset:     'Double Clear (1/2" air)',
+    sc:          0.88,
+    scPreset:    'Double Clear Glass',
+    roomMass:    'medium',
   },
   skylights: {
     label:    'Skylight',
@@ -241,15 +330,15 @@ export const DEFAULT_ELEMENTS = {
   partitions: {
     label:   'Partition Wall',
     area:    0,
-    uValue:  0.35, // ← matches 'Gypsum Board + Stud (uninsulated)'
+    uValue:  0.35,
     uPreset: 'Gypsum Board + Stud (uninsulated)',
-    tAdj:    85,   // adjacent unconditioned space temp (°F)
+    tAdj:    85,
   },
   floors: {
     label:   'Floor',
     area:    0,
-    uValue:  0.10, // ← matches 'Concrete Slab on Grade'
+    uValue:  0.10,
     uPreset: 'Concrete Slab on Grade',
-    tAdj:    75,   // below-grade or slab-on-grade ground temp (°F)
+    tAdj:    75,
   },
 };
