@@ -1,0 +1,69 @@
+﻿└── client/
+│   └── public/
+│   │   └── vite.svg
+│   └── src/
+│   │   └── app/
+│   │   │   └── store.js
+│   │   └── assets/
+│   │   │   └── react.svg
+│   │   └── components/
+│   │   │   └── Layout/
+│   │   │   │   └── Header.jsx
+│   │   │   │   └── RoomSidebar.jsx
+│   │   │   │   └── TabNav.jsx
+│   │   │   └── UI/
+│   │   │   │   └── InputField.jsx
+│   │   │   │   └── NumberControl.jsx
+│   │   └── constants/
+│   │   │   └── ashrae.js
+│   │   │   └── ashraeTables.js
+│   │   └── features/
+│   │   │   └── ahu/
+│   │   │   │   └── ahuSlice.js
+│   │   │   └── climate/
+│   │   │   │   └── climateSlice.js
+│   │   │   └── envelope/
+│   │   │   │   └── BuildingShell.jsx
+│   │   │   │   └── envelopeSlice.js
+│   │   │   └── project/
+│   │   │   │   └── projectSlice.js
+│   │   │   └── results/
+│   │   │   │   └── rdsSelector.js
+│   │   │   └── room/
+│   │   │   │   └── roomActions.js
+│   │   │   │   └── roomSlice.js
+│   │   └── pages/
+│   │   │   └── rds/
+│   │   │   │   └── RDSCellComponents.jsx
+│   │   │   │   └── RDSConfig.js
+│   │   │   │   └── RDSRow.jsx
+│   │   │   │   └── RoomDetailPanel.jsx
+│   │   │   └── AHUConfig.jsx
+│   │   │   └── ClimateConfig.jsx
+│   │   │   └── EnvelopeConfig.jsx
+│   │   │   └── Home.jsx
+│   │   │   └── ProjectDetails.jsx
+│   │   │   └── RDSPage.jsx
+│   │   │   └── ResultsPage.jsx
+│   │   │   └── RoomConfig.jsx
+│   │   └── utils/
+│   │   │   └── envelopeCalc.js
+│   │   │   └── psychro.js
+│   │   └── App.css
+│   │   └── App.jsx
+│   │   └── index.css
+│   │   └── main.jsx
+│   │   └── setupTests.js
+│   │   └── test-utils.jsx
+│   └── .gitignore
+│   └── eslint.config.js
+│   └── index.html
+│   └── modularization.md
+│   └── package-lock.json
+│   └── package.json
+│   └── README.md
+│   └── vercel.json
+│   └── vite.config.js
+└── package-lock.json
+└── package.json
+└── vercel.json
