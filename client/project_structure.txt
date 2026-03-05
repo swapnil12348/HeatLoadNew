@@ -28,8 +28,6 @@
 │   │   │   └── projectSlice.js
 │   │   └── results/
 │   │   │   └── rdsSelector.js
-│   │   │   └── rdsSelector.test.js
-│   │   │   └── resultsSlice.js
 │   │   └── room/
 │   │   │   └── roomActions.js
 │   │   │   └── roomSlice.js
@@ -45,14 +43,11 @@
 │   │   └── Home.jsx
 │   │   └── ProjectDetails.jsx
 │   │   └── RDSPage.jsx
-│   │   └── RDSPage.test.jsx
 │   │   └── ResultsPage.jsx
 │   │   └── RoomConfig.jsx
 │   └── utils/
 │   │   └── envelopeCalc.js
-│   │   └── hvacMath.js
 │   │   └── psychro.js
-│   │   └── psychro.test.js
 │   └── App.css
 │   └── App.jsx
 │   └── index.css
