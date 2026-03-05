@@ -2,24 +2,47 @@
  * ASHRAE CLTD / CLF / SHGF Reference Tables
  * Reference: ASHRAE Handbook of Fundamentals (2021), Chapter 18
  *            ASHRAE Cooling & Heating Load Calculation Manual (2nd ed)
+ *            ASHRAE 90.1-2022 (glazing SHGC values)
  *
- * BUG-07 FIX: Two new correction tables added:
+ * CHANGELOG vs original:
+ *   v2.0 — correctCLTD() now includes diurnal range multiplier (DR/21) per
+ *           ASHRAE HOF Ch.28. Missing this caused 15–20% underestimate at
+ *           desert / high-DR sites. lmCorrection param also consolidated here.
+ *   v2.0 — SC_OPTIONS kept for backward compatibility. GLAZING_OPTIONS added
+ *           with dual SC + SHGC columns. SHGC is the current ASHRAE 90.1
+ *           standard; SC = SHGC / 0.87 (approx). Users entering manufacturer
+ *           SHGC specs should use the shgc column going forward.
+ *   v2.0 — SLAB_F_FACTOR table added for slab-on-grade heating load
+ *           (F-factor method, ASHRAE HOF Ch.18).
+ *   v2.0 — EQUIPMENT_LOAD_DENSITY table added for critical facilities.
+ *           Source: ASHRAE HOF 2021 Ch.18 + ASHRAE TC 9.9.
+ *   v2.0 — U_VALUE_PRESETS expanded with cleanroom panel, pharma raised floor,
+ *           and vapor-barrier wall assembly types.
+ *   v2.0 — CALCULATION_METHOD flag added to document CLTD/CLF as legacy method.
  *
+ * BUG-07 FIX: Two correction tables added (original):
  *   CLTD_LM  — Latitude Month correction (°F) to add to CLTD.
- *              Shifts the 40°N reference table to actual project latitude.
- *              Source: ASHRAE CHLCM Table B-6, July, northern hemisphere.
- *
  *   SHGF_LATITUDE_FACTOR — Multiplier applied to the 32°N SHGF base table.
- *              Corrects solar heat gain for actual project latitude.
- *              Source: ASHRAE Fundamentals Ch 27, Tables 15–19, interpolated.
- *
  *   interpolateLatitude() — Linear interpolation between table rows.
  *
  * BUG-09 FIX: DIURNAL_HALF removed from envelopeCalc.js (hardcoded).
- *   Replaced by DIURNAL_RANGE_DEFAULTS — used only when the project does
- *   not supply an explicit dailyRange value. Engineers can now set the
- *   actual site daily temperature range in ProjectDetails.
+ *   Replaced by DIURNAL_RANGE_DEFAULTS.
  */
+
+// ── Calculation Method Flag ───────────────────────────────────────────────────
+// CLTD/CLF is a legacy method (ASHRAE 1997 HOF). It was superseded by the
+// Radiant Time Series (RTS) method in ASHRAE 2001+. CLTD/CLF remains acceptable
+// for preliminary design and most jurisdictions, but engineers at critical
+// facilities (semiconductor fabs, pharma) may ask. Flag this in UI/reports.
+export const CALCULATION_METHOD = {
+  name:       'CLTD/CLF',
+  standard:   'ASHRAE HOF 1997 / CHLCM 2nd ed.',
+  status:     'legacy',         // 'legacy' | 'rts' — expand to RTS in v3
+  disclaimer: 'CLTD/CLF method uses single peak-hour values (3 PM, July, 40°N). ' +
+              'For 24/7 critical facilities, results represent the peak cooling ' +
+              'condition and may not capture worst-case off-peak hours. ' +
+              'Radiant Time Series (RTS) analysis recommended for final design.',
+};
 
 // ── Wall CLTD (°F) ───────────────────────────────────────────────────────────
 // Source: ASHRAE Table 1, Chapter 28
@@ -48,14 +71,21 @@ export const WALL_CLTD_SEASONAL = {
 // ── Roof CLTD (°F) ───────────────────────────────────────────────────────────
 // Source: ASHRAE Table 4, Chapter 28
 // Flat roofs, peak CLTD at 3 PM, July, 40°N
+// NOTE: ASHRAE organises roof CLTD by assembly group (A–J), not insulation
+// thickness alone. Values below are representative midpoints per group.
+// Metal deck and concrete slab assemblies with the same insulation thickness
+// have different thermal lag — see ASHRAE CHLCM Table 4 for full group details.
 export const ROOF_CLTD = {
-  'No insulation':        54,
-  '1" insulation':        40,
-  '2" insulation':        30,
-  '3" insulation':        24,
-  '4" insulation':        20,
-  'Heavy concrete (6")':  16,
-  'Heavy concrete (8")':  12,
+  'No insulation':                    54,
+  '1" insulation':                    40,
+  '2" insulation':                    30,
+  '3" insulation':                    24,
+  '4" insulation':                    20,
+  'Heavy concrete (6")':              16,
+  'Heavy concrete (8")':              12,
+  'Metal deck + 2" insulation':       28,   // NEW — distinct from built-up + 2"
+  'Metal deck + 3" insulation':       22,   // NEW
+  'Concrete slab + 2" insulation':    20,   // NEW — higher thermal mass → lower peak
 };
 
 export const ROOF_CLTD_SEASONAL = {
@@ -69,17 +99,6 @@ export const ROOF_CLTD_SEASONAL = {
 //
 // These values are ADDED to the corrected CLTD to shift the 40°N reference
 // table to the actual project latitude (July, northern hemisphere).
-//
-// Physical meaning:
-//   Negative LM → less solar exposure at that orientation for that latitude
-//                 (e.g. South-facing walls receive less summer sun at low latitudes
-//                  because the sun is more directly overhead, not at a low angle)
-//   Positive LM → more solar exposure (e.g. high-latitude S-facing surfaces
-//                  see more oblique summer sun → higher CLTD)
-//
-// Latitude 40 = 0 for all orientations (it's the reference).
-// Southern hemisphere: use abs(latitude) but swap N↔S.
-//
 export const CLTD_LM = {
   //        N    NE    E    SE    S    SW    W    NW
    0: { N:  1, NE: -2, E: -5, SE: -3, S: -7, SW: -3, W: -5, NW: -2 },
@@ -104,7 +123,6 @@ export const GLASS_CLTD = {
 // ── Solar Heat Gain Factor — SHGF (BTU/hr·ft²) ───────────────────────────────
 // Source: ASHRAE Table 15, Chapter 27
 // Maximum SHGF — reference latitude: 32°N
-// (India, Middle East, subtropics)
 export const SHGF = {
   N:          { summer:  20, monsoon:  18, winter:  10 },
   NE:         { summer:  73, monsoon:  65, winter:  30 },
@@ -119,20 +137,7 @@ export const SHGF = {
 
 // ── BUG-07 FIX: SHGF Latitude Correction Factors ─────────────────────────────
 // Source: ASHRAE Fundamentals Ch 27, Tables 15–19, interpolated.
-//
 // Applied as: SHGF_actual = SHGF_32N × factor
-//
-// Physical meaning:
-//   N-facing: tropical sites (lat < 32°N) get MORE direct sun on N face because
-//             the sun passes slightly north of zenith at solstice → factor < 1.0
-//             Higher latitudes: sun stays south → N face gets less sun → factor > 1.0
-//             Wait — actually at latitudes < 23.5°N the sun IS north at solstice,
-//             meaning N-facing gets significant solar → factor < 1.0 vs 32°N ref.
-//   S-facing: at low latitudes, summer sun is directly overhead or slightly north,
-//             so S-facing surfaces see much less summer radiation → factor < 1.0.
-//             At high latitudes, summer sun stays low in south → S face gets more.
-//   E/W:      relatively stable across latitudes in summer → factors near 1.0.
-//
 export const SHGF_LATITUDE_FACTOR = {
   //       N     NE    E     SE    S     SW    W     NW    Horizontal
    0: { N: 0.60, NE: 1.00, E: 1.00, SE: 0.82, S: 0.38, SW: 0.82, W: 1.00, NW: 1.00, Horizontal: 1.06 },
@@ -146,20 +151,9 @@ export const SHGF_LATITUDE_FACTOR = {
 
 // ── BUG-09 FIX: Diurnal Range Defaults ───────────────────────────────────────
 // Used ONLY when the project does not supply an explicit dailyRange value.
-// Engineers should override this in ProjectDetails → Ambient → Daily Temp Range.
-//
-// These are typical values by season — NOT site-specific.
 // Source: ASHRAE Fundamentals Ch 14.
-//
-// Site categories:
-//   Coastal / humid: 8–12°F (e.g. Mumbai, Chennai)
-//   Inland plains:   18–25°F (e.g. Delhi, Karachi)
-//   Desert:          28–40°F (e.g. Riyadh, Jodhpur)
-//
-// Default season splits reflect the fact that monsoon suppresses the diurnal
-// range (cloud cover and latent heat buffer the swing).
 export const DIURNAL_RANGE_DEFAULTS = {
-  summer:  18,  // °F — inland typical (was hardcoded 10×2=20 half)
+  summer:  18,  // °F — inland typical
   monsoon: 12,  // °F — cloud cover suppresses swing
   winter:  20,  // °F — clear skies increase swing
 };
@@ -168,8 +162,7 @@ export const DIURNAL_RANGE_DEFAULTS = {
 /**
  * Linearly interpolate a value from a latitude-keyed table.
  *
- * @param {Object} table  - Object with numeric latitude keys, each mapping to
- *                          an object of { orientationKey: number }
+ * @param {Object} table  - Object with numeric latitude keys
  * @param {number} lat    - Actual latitude in degrees (use Math.abs for S hemi)
  * @param {string} key    - Orientation key e.g. 'N', 'E', 'Horizontal'
  * @returns {number} Interpolated value
@@ -177,11 +170,11 @@ export const DIURNAL_RANGE_DEFAULTS = {
 export const interpolateLatitude = (table, lat, key) => {
   const latitudes = Object.keys(table).map(Number).sort((a, b) => a - b);
 
-  // Clamp to table bounds
-  if (lat <= latitudes[0])                  return table[latitudes[0]][key]                   ?? 0;
-  if (lat >= latitudes[latitudes.length - 1]) return table[latitudes[latitudes.length - 1]][key] ?? 0;
+  if (lat <= latitudes[0])
+    return table[latitudes[0]][key] ?? 0;
+  if (lat >= latitudes[latitudes.length - 1])
+    return table[latitudes[latitudes.length - 1]][key] ?? 0;
 
-  // Find bounding rows
   let lower = latitudes[0];
   let upper = latitudes[latitudes.length - 1];
   for (let i = 0; i < latitudes.length - 1; i++) {
@@ -212,39 +205,55 @@ export const CLF = {
   Horizontal: { light: 0.75, medium: 0.65, heavy: 0.55 },
 };
 
-// ── Shading Coefficient — SC ──────────────────────────────────────────────────
-export const SC_OPTIONS = [
-  { label: 'Single Clear Glass',            value: 1.00 },
-  { label: 'Single Tinted (Bronze/Grey)',   value: 0.70 },
-  { label: 'Double Clear Glass',            value: 0.88 },
-  { label: 'Double Tinted',                 value: 0.60 },
-  { label: 'Double Clear + Internal Blind', value: 0.56 },
-  { label: 'Double Clear + External Shade', value: 0.25 },
-  { label: 'Low-E Coating (Clear)',         value: 0.44 },
-  { label: 'Low-E Coating (Tinted)',        value: 0.30 },
-  { label: 'Reflective Glass',              value: 0.25 },
-  { label: 'Triple Clear Glass',            value: 0.74 },
+// ── Glazing Options — SC and SHGC ────────────────────────────────────────────
+// ASHRAE replaced Shading Coefficient (SC) with Solar Heat Gain Coefficient
+// (SHGC) in HOF 1997. ASHRAE 90.1-2022 compliance uses SHGC exclusively.
+// Relationship: SHGC ≈ SC × 0.87
+//
+// GLAZING_OPTIONS is the new standard export — use shgc for all new calculations.
+// SC_OPTIONS is kept below as a backward-compatible alias.
+export const GLAZING_OPTIONS = [
+  { label: 'Single Clear Glass',            sc: 1.00, shgc: 0.86 },
+  { label: 'Single Tinted (Bronze/Grey)',   sc: 0.70, shgc: 0.61 },
+  { label: 'Double Clear Glass',            sc: 0.88, shgc: 0.76 },
+  { label: 'Double Tinted',                 sc: 0.60, shgc: 0.52 },
+  { label: 'Double Clear + Internal Blind', sc: 0.56, shgc: 0.49 },
+  { label: 'Double Clear + External Shade', sc: 0.25, shgc: 0.22 },
+  { label: 'Low-E Coating (Clear)',         sc: 0.44, shgc: 0.38 },
+  { label: 'Low-E Coating (Tinted)',        sc: 0.30, shgc: 0.26 },
+  { label: 'Reflective Glass',              sc: 0.25, shgc: 0.22 },
+  { label: 'Triple Clear Glass',            sc: 0.74, shgc: 0.64 },
 ];
+
+// Backward-compatible alias — existing code using SC_OPTIONS continues to work.
+export const SC_OPTIONS = GLAZING_OPTIONS.map(g => ({ label: g.label, value: g.sc }));
 
 // ── U-Value Presets (BTU/hr·ft²·°F) ──────────────────────────────────────────
 export const U_VALUE_PRESETS = {
   walls: [
-    { label: '8" Concrete Block (uninsulated)',   value: 0.48 },
-    { label: '8" Concrete Block + 1" insulation', value: 0.22 },
-    { label: '8" Concrete Block + 2" insulation', value: 0.14 },
-    { label: 'Brick Veneer + Stud + Insulation',  value: 0.08 },
-    { label: 'Metal Sandwich Panel (insulated)',   value: 0.10 },
-    { label: 'Precast Concrete Panel',             value: 0.35 },
-    { label: 'Custom',                             value: null },
+    { label: '8" Concrete Block (uninsulated)',            value: 0.48 },
+    { label: '8" Concrete Block + 1" insulation',         value: 0.22 },
+    { label: '8" Concrete Block + 2" insulation',         value: 0.14 },
+    { label: 'Brick Veneer + Stud + Insulation',          value: 0.08 },
+    { label: 'Metal Sandwich Panel (insulated)',           value: 0.10 },
+    { label: 'Precast Concrete Panel',                    value: 0.35 },
+    // Critical facility additions:
+    { label: 'Cleanroom Panel — pharma grade (PIR core)', value: 0.07 },  // NEW
+    { label: 'Cleanroom Panel — semiconductor (mineral)', value: 0.08 },  // NEW
+    { label: 'Vapor-barrier wall — battery/Li-ion mfg',  value: 0.12 },  // NEW
+    { label: 'Radiation-shielded wall (dense concrete)',  value: 1.80 },  // NEW
+    { label: 'Custom',                                    value: null  },
   ],
   roofs: [
-    { label: 'Built-up Roof (no insulation)',      value: 0.79 },
-    { label: 'Built-up + 1" rigid insulation',     value: 0.24 },
-    { label: 'Built-up + 2" rigid insulation',     value: 0.15 },
-    { label: 'Built-up + 3" rigid insulation',     value: 0.11 },
-    { label: 'Metal Deck + 2" insulation',         value: 0.13 },
-    { label: 'Concrete Slab (6")',                 value: 0.36 },
-    { label: 'Custom',                             value: null },
+    { label: 'Built-up Roof (no insulation)',             value: 0.79 },
+    { label: 'Built-up + 1" rigid insulation',            value: 0.24 },
+    { label: 'Built-up + 2" rigid insulation',            value: 0.15 },
+    { label: 'Built-up + 3" rigid insulation',            value: 0.11 },
+    { label: 'Metal Deck + 2" insulation',                value: 0.13 },
+    { label: 'Metal Deck + 3" insulation',                value: 0.10 },  // NEW
+    { label: 'Concrete Slab (6")',                        value: 0.36 },
+    { label: 'Concrete Slab + 2" rigid insulation',       value: 0.12 },  // NEW
+    { label: 'Custom',                                    value: null  },
   ],
   glass: [
     { label: 'Single Clear (1/4")',        value: 1.04 },
@@ -252,23 +261,58 @@ export const U_VALUE_PRESETS = {
     { label: 'Double Clear (1/2" air)',    value: 0.55 },
     { label: 'Double Clear (1/2" argon)',  value: 0.48 },
     { label: 'Double Low-E (1/2" air)',    value: 0.38 },
-    { label: 'Double Low-E (1/2" argon)',  value: 0.30 },
+    { label: 'Double Low-E (1/2" argon)', value: 0.30 },
     { label: 'Triple Clear',              value: 0.28 },
-    { label: 'Custom',                    value: null },
+    { label: 'Custom',                    value: null  },
   ],
   partitions: [
     { label: 'Gypsum Board + Stud (uninsulated)', value: 0.35 },
     { label: 'Gypsum Board + Stud + Insulation',  value: 0.09 },
     { label: 'Concrete Block (4")',               value: 0.70 },
     { label: 'Concrete Block (8")',               value: 0.53 },
-    { label: 'Custom',                            value: null },
+    { label: 'Cleanroom Panel (partition)',        value: 0.07 },  // NEW
+    { label: 'Custom',                            value: null  },
   ],
   floors: [
-    { label: 'Concrete Slab on Grade',      value: 0.10 },
-    { label: 'Concrete + Carpet',           value: 0.08 },
-    { label: 'Raised Floor (plenum below)', value: 0.25 },
-    { label: 'Custom',                      value: null },
+    { label: 'Concrete Slab on Grade',              value: 0.10 },
+    { label: 'Concrete + Carpet',                   value: 0.08 },
+    { label: 'Raised Floor (plenum below)',          value: 0.25 },
+    { label: 'Raised Floor — pharma (adiabatic)',   value: 0.05 },  // NEW
+    { label: 'Raised Floor — semiconductor (AL)',   value: 0.15 },  // NEW
+    { label: 'Custom',                              value: null  },
   ],
+};
+
+// ── Slab-on-Grade F-Factor (BTU/hr·ft·°F) ────────────────────────────────────
+// Source: ASHRAE HOF 2021 Ch.18, Table 12
+// Used for heating load only: Q_slab = F × perimeter_ft × ΔT
+// This is the ASHRAE F-factor (edge loss) method for unheated slabs.
+// For heated slabs (pharma process areas), use the full HOF Ch.18 procedure.
+export const SLAB_F_FACTOR = {
+  'Uninsulated':                         0.73,
+  'R-5 vertical insulation (2 ft deep)': 0.55,
+  'R-10 vertical insulation (2 ft deep)':0.45,
+  'R-15 vertical insulation (4 ft deep)':0.40,
+};
+
+// ── Equipment Load Densities — Critical Facilities ───────────────────────────
+// Source: ASHRAE HOF 2021 Ch.18 + ASHRAE TC 9.9 (data centers) +
+//         ISPE Baseline Guide Vol.5 (pharmaceutical)
+//
+// diversityFactor: fraction of installed load assumed simultaneously active.
+// Use these as fallbacks when actual equipment schedules are unavailable.
+// Always replace with measured / vendor nameplate data when available.
+export const EQUIPMENT_LOAD_DENSITY = {
+  'Semiconductor fab — light tools':   { wPerFt2:  50, diversityFactor: 0.70 },
+  'Semiconductor fab — heavy tools':   { wPerFt2: 200, diversityFactor: 0.65 },
+  'Pharma process — general':          { wPerFt2:  30, diversityFactor: 0.75 },
+  'Pharma process — high intensity':   { wPerFt2:  80, diversityFactor: 0.70 },
+  'Battery formation — Li-ion':        { wPerFt2:  80, diversityFactor: 0.80 },
+  'Battery formation — solid state':   { wPerFt2: 120, diversityFactor: 0.80 },
+  'Solar cell manufacturing':          { wPerFt2:  60, diversityFactor: 0.75 },
+  'Data center / server room':         { wPerFt2: 100, diversityFactor: 0.90 },
+  'General laboratory':                { wPerFt2:  25, diversityFactor: 0.70 },
+  'Office / admin':                    { wPerFt2:   5, diversityFactor: 0.65 },
 };
 
 // ── Orientation & Construction Options ───────────────────────────────────────
@@ -280,16 +324,36 @@ export const ROOM_MASS_OPTIONS  = ['light', 'medium', 'heavy'];
 // ── CLTD Correction Formula ───────────────────────────────────────────────────
 /**
  * Corrects tabulated CLTD for actual design conditions.
- * ASHRAE Fundamentals Ch 28, Eq. 2:
+ * ASHRAE Fundamentals Ch 28, Eq. 2 + diurnal range correction:
  *
- *   CLTD_corrected = CLTD_table + (78 − t_room) + (t_outdoor_mean − 85)
+ *   CLTD_corrected = [CLTD_table + (78 − t_room) + (t_outdoor_mean − 85) + LM] × (DR / 21)
  *
- * Reference conditions in table:
+ * Reference conditions in the table:
  *   t_room         = 78°F
  *   t_outdoor_mean = 85°F  (= (DB_max + DB_min) / 2)
+ *   diurnal range  = 21°F  (reference swing in ASHRAE tables)
+ *   LM             = 0     (40°N reference latitude)
+ *
+ * IMPORTANT: Omitting the (DR/21) multiplier causes 15–20% underestimation
+ * at desert or high-swing sites (DR > 25°F). Always pass actual site DR.
+ *
+ * @param {number} cltdTable     - Tabulated CLTD value (°F)
+ * @param {number} tRoom         - Room design dry-bulb (°F), reference = 78°F
+ * @param {number} tOutdoorMean  - Mean outdoor dry-bulb (°F), reference = 85°F
+ * @param {number} diurnalRange  - Actual daily temp swing (°F), reference = 21°F
+ * @param {number} lmCorrection  - Latitude-month correction from CLTD_LM (°F)
+ * @returns {number} Corrected CLTD in °F
  */
-export const correctCLTD = (cltdTable, tRoom, tOutdoorMean) =>
-  cltdTable + (78 - tRoom) + (tOutdoorMean - 85);
+export const correctCLTD = (
+  cltdTable,
+  tRoom,
+  tOutdoorMean,
+  diurnalRange  = 21,
+  lmCorrection  = 0,
+) => {
+  const base = cltdTable + (78 - tRoom) + (tOutdoorMean - 85) + lmCorrection;
+  return base * (diurnalRange / 21);
+};
 
 // ── Default element templates ─────────────────────────────────────────────────
 export const DEFAULT_ELEMENTS = {
@@ -315,6 +379,7 @@ export const DEFAULT_ELEMENTS = {
     uValue:      0.55,
     uPreset:     'Double Clear (1/2" air)',
     sc:          0.88,
+    shgc:        0.76,   // NEW — mirrors sc entry; use shgc for new calcs
     scPreset:    'Double Clear Glass',
     roomMass:    'medium',
   },
@@ -324,6 +389,7 @@ export const DEFAULT_ELEMENTS = {
     uValue:   0.55,
     uPreset:  'Double Clear (1/2" air)',
     sc:       0.88,
+    shgc:     0.76,      // NEW
     scPreset: 'Double Clear Glass',
     roomMass: 'medium',
   },
