@@ -1,22 +1,19 @@
-import React from 'react';
+import { ASHRAE_STANDARDS } from '../../constants/ashrae';
 
 /**
  * Header
  * App-level header displaying title and active ASHRAE standard badges.
+ * Standards sourced from constants/ashrae.js — single source of truth.
  */
 export default function Header() {
-  const standards = [
-    "ASHRAE 62.1 Ventilation",
-    "ASHRAE 55 Comfort",
-    "ASHRAE 90.1 Lighting",
-    "ASHRAE Handbook — Fundamentals",
-  ];
-
   return (
-    <header style={{
-      background: "linear-gradient(135deg, #1e3a5f 0%, #0f4c81 50%, #1565c0 100%)",
-      borderBottom: "3px solid #f59e0b",
-    }}>
+    <header
+      role="banner"
+      style={{
+        background: "linear-gradient(135deg, #1e3a5f 0%, #0f4c81 50%, #1565c0 100%)",
+        borderBottom: "3px solid #f59e0b",
+      }}
+    >
       <div className="container mx-auto px-4 py-4">
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{
@@ -40,7 +37,7 @@ export default function Header() {
         </div>
 
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {standards.map((s) => (
+          {ASHRAE_STANDARDS.map((s) => (
             <span key={s} style={{
               fontSize: 10, fontWeight: 700, letterSpacing: 1,
               background: "rgba(245,158,11,0.15)",
