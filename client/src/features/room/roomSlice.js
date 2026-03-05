@@ -93,8 +93,8 @@ const roomSlice = createSlice({
       state.activeRoomId = action.payload;
     },
 
-    addRoom: (state) => {
-      const newId = generateRoomId();
+    addRoom: (state, action) => {
+      const newId = action.payload || generateRoomId()
       const newRoom = {
         id:   newId,
         name: `Room ${state.list.length + 1}`,

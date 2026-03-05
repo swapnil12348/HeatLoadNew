@@ -4,7 +4,7 @@ import ahuReducer from '../features/ahu/ahuSlice';
 import roomReducer from '../features/room/roomSlice';
 import climateReducer from '../features/climate/climateSlice';
 import envelopeReducer from '../features/envelope/envelopeSlice';
-import resultsReducer from '../features/results/resultsSlice'
+
 
 export const store = configureStore({
   reducer: {
@@ -13,7 +13,6 @@ export const store = configureStore({
     room: roomReducer,
     climate: climateReducer,
     envelope: envelopeReducer,
-    results: resultsReducer,
   },
 });
 
