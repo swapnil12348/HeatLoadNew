@@ -100,6 +100,7 @@ export default function ProjectDetails() {
                 value={ambient.elevation}
                 onChange={(val) => handleAmbientChange('elevation', val)}
                 unit="ft"
+                min={0}
               />
               <p className="text-[10px] text-blue-600 mt-1">
                 Corrects 1.08 / 0.68 psychrometric factors and site Patm for altitude.
@@ -113,6 +114,8 @@ export default function ProjectDetails() {
                 value={ambient.latitude}
                 onChange={(val) => handleAmbientChange('latitude', val)}
                 unit="°"
+                min={-90}
+                max={90}
               />
               <p className="text-[10px] text-gray-400 mt-1">
                 Reserved — SHGF latitude correction not yet applied.
@@ -129,9 +132,9 @@ export default function ProjectDetails() {
               </span>
             </p>
             <div className="space-y-4">
-              <NumberControl label="Dry Bulb Temp"     value={ambient.dryBulbTemp}      onChange={(val) => handleAmbientChange('dryBulbTemp', val)}      unit="°C" />
-              <NumberControl label="Wet Bulb Temp"     value={ambient.wetBulbTemp}      onChange={(val) => handleAmbientChange('wetBulbTemp', val)}      unit="°C" />
-              <NumberControl label="Relative Humidity" value={ambient.relativeHumidity} onChange={(val) => handleAmbientChange('relativeHumidity', val)} unit="%"  />
+              <NumberControl label="Dry Bulb Temp"     value={ambient.dryBulbTemp}      onChange={(val) => handleAmbientChange('dryBulbTemp', val)}      unit="°C" min={-60} max={60} />
+              <NumberControl label="Wet Bulb Temp"     value={ambient.wetBulbTemp}      onChange={(val) => handleAmbientChange('wetBulbTemp', val)}      unit="°C" min={-60} max={60} />
+              <NumberControl label="Relative Humidity" value={ambient.relativeHumidity} onChange={(val) => handleAmbientChange('relativeHumidity', val)} unit="%" min={0} max={100}  />
             </div>
           </div>
         </div>
@@ -152,24 +155,33 @@ export default function ProjectDetails() {
                 value={systemDesign.safetyFactor}
                 onChange={(val) => handleSystemDesignChange('safetyFactor', val)}
                 unit="%"
+                min={0}
+                max={100}
               />
               <NumberControl
                 label="Apparatus Dew Point (ADP)"
                 value={systemDesign.adp}
                 onChange={(val) => handleSystemDesignChange('adp', val)}
                 unit="°F"
+                min={32}
+                max={65}
               />
               <NumberControl
                 label="Bypass Factor (BF)"
                 value={systemDesign.bypassFactor}
                 onChange={(val) => handleSystemDesignChange('bypassFactor', val)}
                 unit="—"
+                min={0}
+                max={0.5}
+                step={0.01}
               />
               <NumberControl
                 label="Fan Heat Allowance"
                 value={systemDesign.fanHeat}
                 onChange={(val) => handleSystemDesignChange('fanHeat', val)}
                 unit="%"
+                min={0}
+                max={15}
               />
             </div>
 
