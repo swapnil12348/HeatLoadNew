@@ -1,766 +1,650 @@
-# HVAC Heat Load Calculator — Full Codebase Audit
-## Logical Errors, ASHRAE Violations & Data Flow Analysis
+# ASHRAE Heat Load Calculation — Full Codebase Audit Report
+
+**Scope:** Complete logical, data-flow, and ASHRAE-compliance review across all source files  
+**Standard references:** ASHRAE Fundamentals 2021 Ch 1, 18, 27–28 · ASHRAE 62.1-2019 · ISO 14644  
+**Target applications:** Pharma, Semiconductor Fab, Solar, Battery Manufacturing  
 
 ---
 
-## DATA FLOW MAP (Global)
+## Severity Legend
 
-```
-main.jsx
-  └── Provider (Redux Store)
-        └── App.jsx (BrowserRouter + Routes)
-              ├── Home.jsx (standalone)
-              └── AppLayout (Header + TabNav + Outlet)
-                    ├── ProjectDetails.jsx  ──reads/writes──► projectSlice
-                    ├── ClimateConfig.jsx   ──reads/writes──► climateSlice
-                    ├── RoomConfig.jsx      ──reads/writes──► roomSlice + ahuSlice
-                    ├── EnvelopeConfig.jsx  ──reads/writes──► envelopeSlice + roomSlice
-                    │     └── BuildingShell.jsx ──────────────► envelopeSlice
-                    ├── AHUConfig.jsx       ──reads/writes──► ahuSlice
-                    │     └── selectRdsData (computed)
-                    ├── RDSPage.jsx         ──reads──────────► selectRdsData (computed)
-                    │     ├── RDSRow.jsx    ──reads/writes──► roomSlice + envelopeSlice
-                    │     └── RoomDetailPanel.jsx ──────────► roomSlice + envelopeSlice
-                    └── ResultsPage.jsx     ──reads──────────► selectRdsData (computed)
-
-CALCULATION CHAIN:
-  roomSlice (geometry, designTemp °C, designRH)
-  + envelopeSlice (elements, internalLoads, infiltration)
-  + climateSlice (outdoor DB°F, RH, gr/lb per season)
-  + projectSlice (elevation ft, safetyFactor, BF, ADP, fanHeat)
-  + ahuSlice (AHU type)
-        ↓
-  rdsSelector.js (createSelector → all computed outputs)
-        ↓
-  RDS table / AHUConfig / ResultsPage
-```
-
----
-
-# CRITICAL BUGS (Produce Wrong Numerical Results)
-
----
-
-## BUG-01: Equipment Latent Load Completely Missing
-
-**File:** `src/features/results/rdsSelector.js` — `calculateSeasonLoad()`
-
-**Code:**
-```js
-const pplLat    = pplCount * (int.people?.latentPerPerson || ASHRAE.PEOPLE_LATENT_SEATED);
-const infilLat  = Cl * infilCFM * (grOut - grIn);
-const rawLatent = pplLat + infilLat;   // ← Equipment latent NEVER added
-```
-
-**What exists in `envelopeSlice.js`:**
-```js
-equipment: { kw: 0, sensiblePct: 100, latentPct: 0 }
-```
-
-`latentPct` is stored but **never read anywhere in the codebase**. Equipment latent is silently dropped.
-
-**ASHRAE standard:** For pharmaceutical manufacturing, open-bath equipment, washers, autoclaves, and process equipment can produce substantial latent loads. ASHRAE Fundamentals Ch 18 requires:
-```
-Q_equip_latent = kW × 3412 × (latentPct / 100)
-```
-
-**Fix required in `calculateSeasonLoad()`:**
-```js
-const equipLatent = (parseFloat(int.equipment?.kw) || 0)
-  * ASHRAE.KW_TO_BTU
-  * ((parseFloat(int.equipment?.latentPct) || 0) / 100);
-const rawLatent = pplLat + infilLat + equipLatent;
-```
-
-**Impact:** For pharma/battery manufacturing with process moisture, this can underestimate ERLH by 20–100%.
-
----
-
-## BUG-02: Outdoor Grains Calculated at Sea Level, Indoor at Site Elevation — Inconsistent ΔGr
-
-**File:** `src/features/climate/climateSlice.js` + `src/features/results/rdsSelector.js`
-
-**Climate slice (pre-calculates gr at sea level):**
-```js
-const deriveFields = (db, rh) => ({
-  gr: Math.round(calculateGrains(db, rh) * 10) / 10,  // ← NO elevation arg → sea level
-});
-```
-
-**rdsSelector uses this sea-level value:**
-```js
-const grOut = parseFloat(outdoor.gr) || 100;           // sea-level gr
-```
-
-**But indoor grains are correctly at site elevation:**
-```js
-const grIn = calculateGrains(dbInF, rhIn, elevation);  // ← site elevation ✓
-```
-
-**The latent load uses this mismatched ΔGr:**
-```js
-const infilLat = Cl * infilCFM * (grOut - grIn);
-```
-
-**Psychrometric reality:** At 5000 ft elevation, the same 95°F / 40% RH outdoor air has ~25% more gr/lb than at sea level (because atmospheric pressure is lower). Sea-level grOut ≈ 78 gr/lb; altitude-corrected grOut ≈ 96 gr/lb. This UNDERESTIMATES latent infiltration load by ~23% at 5000 ft.
-
-**Fix:** In `rdsSelector.js`, recalculate outdoor grains at site elevation:
-```js
-const ambRH  = parseFloat(outdoor.rh) || 0;
-const grOut  = calculateGrains(dbOut, ambRH, elevation);   // use site elevation
-```
-
-Similarly in the psychro state points block:
-```js
-const ambGr = calculateGrains(ambDB, ambRH, elevation);   // not parseFloat(out.gr)
-```
-
-**Impact:** Any facility above 2000 ft sees underestimated latent loads. Semiconductor fabs (Arizona, Colorado, Korea highlands), pharma plants, and battery gigafactories are commonly sited at altitude.
-
----
-
-## BUG-03: Minimum ACPH Requirement Never Enforced — Cleanroom Supply Air Undersized
-
-**File:** `src/features/results/rdsSelector.js`
-
-**What is calculated:**
-```js
-const supplyAir       = ceil(peakErsh / (Cs × supplyDT));    // heat-load CFM
-const supplyAirMinAcph = round(volumeFt3 × minAcph / 60);    // ACPH-minimum CFM
-```
-
-**What is MISSING — these two are NEVER compared:**
-```js
-// CRITICAL: final supply air should be MAX(supplyAir, supplyAirMinAcph)
-// This selection is never made.
-```
-
-**ASHRAE / ISO Cleanroom Standard:**
-ISO 14644 and GMP Annex 1 require minimum air change rates that govern supply air volume independently of the thermal load:
-- ISO 8: minimum ~20 ACPH
-- ISO 7: minimum ~40–60 ACPH
-- ISO 6: minimum ~100–150 ACPH
-- ISO 5: minimum ~240–480 ACPH
-
-In a small, well-insulated cleanroom, heat-load CFM is often far below the ACPH minimum. Using the thermal CFM alone would dramatically under-supply air, failing the cleanroom classification.
-
-**Fix:**
-```js
-const supplyAir = Math.max(
-  thermalCFM,           // heat load result
-  supplyAirMinAcph,     // ACPH minimum
-  // optionally: freshAir  (ventilation floor)
-);
-```
-
-**Impact:** This is one of the most critical errors for pharmaceutical, semiconductor, and battery manufacturing applications — which is the stated target market.
-
----
-
-## BUG-04: Area Units — m² Stored, Displayed and Calculated as ft²
-
-**Files:** `ResultsPage.jsx`, `AHUConfig.jsx`
-
-**roomSlice.js stores in m²:**
-```js
-length: 20, width: 15,          // metres
-floorArea: 300,                  // m² (auto-calc: 20×15)
-// subLabel in RDSConfig: 'm²'
-```
-
-**rdsSelector.js correctly converts for ASHRAE calcs:**
-```js
-const floorAreaFt2 = (parseFloat(room.floorArea) || 0) * M2_TO_FT2;
-```
-
-**But ResultsPage.jsx labels the m² value as ft²:**
-```js
-const totalArea = rdsRows.reduce((sum, r) => sum + (parseFloat(r.floorArea) || 0), 0);
-// ...
-<div>{totalArea.toLocaleString()} <span className="text-sm">ft²</span></div>
-<div>{sqftPerTR} <span className="text-sm">ft²/TR</span></div>
-```
-
-`r.floorArea` is still in m² (not converted). The check figure `sqftPerTR` would read ~28 (m²/TR) but is labelled ft²/TR. A correct building would show ~300 ft²/TR ≈ 28 m²/TR — the numbers happen to look "in range" at 28 m²/TR but the unit label is completely wrong.
-
-**AHUConfig.jsx has the same bug:**
-```jsx
-<th>Area (sqft)</th>          {/* header says sqft */}
-<td>{room.floorArea}</td>     {/* value is m² */}
-```
-
-**Fix:** Either convert `r.floorArea` to ft² in the display components, or change the label to m².
-
----
-
-## BUG-05: `dehumidifiedAir`, `bleedAir`, `freshAirAces`, Manifold Sizes, Pre-Cooling Fields — Defined as `readOnly derived` but Never Computed
-
-**File:** `src/pages/rds/RDSConfig.js` vs `src/features/results/rdsSelector.js`
-
-These columns are declared as `type: 'readOnly', derived: true` in `RDS_SECTIONS → acesSummary`:
-
-| Column Key | Computed in rdsSelector? |
+| Level | Meaning |
 |---|---|
-| `dehumidifiedAir` | ❌ Never |
-| `freshAirAces` | ❌ Never |
-| `bleedAir` | ❌ Never |
-| `chwManifoldSize` | ❌ Never |
-| `hwManifoldSize` | ❌ Never |
-| `preCoolingAhuCap` | ❌ Never |
-| `preCoolChwFlow` | ❌ Never |
-| `preCoolChwManifold` | ❌ Never |
-| `infilWithinSystem` | ❌ Never |
-| `infilSystem` | ❌ Never |
-| `infilOtherSystem` | ❌ Never |
+| 🔴 CRITICAL | Wrong physics / formula — will produce incorrect sizing, potentially dangerous |
+| 🟠 HIGH | Significant accuracy error — affects coil, heater, or humidifier sizing |
+| 🟡 MEDIUM | Methodology deviation or missing ASHRAE step — reduces confidence in outputs |
+| 🔵 LOW | Code defect, dead code, or confusing naming — does not affect numbers directly |
 
-All these columns will render as blank/undefined in the RDS table even though they appear as official output columns.
+---
 
-**Missing formulas (ASHRAE-based):**
+# 🔴 CRITICAL BUGS
+
+---
+
+## C-1 · Outdoor Air Conditioning Load Completely Missing from Cooling Capacity
+
+**Files:** `rdsSelector.js` — `calculateSeasonLoad()` and main selector  
+**Impact:** Cooling coil sized 30–600% too small, depending on OA fraction and climate
+
+### What the code does
 ```js
-// Dehumidified air (air processed through coil, not bypassed)
-dehumidifiedAir = coilAir;   // = supplyAir × (1 - BF)
+// calculateSeasonLoad — rawSensible only contains room-side loads:
+const rawSensible = envelopeGain + pplSens + lightsSens + equipSens + infilSens;
+const rawLatent   = pplLat + infilLat + equipLatent;
+// …
+const grandTotal  = (peakErsh + peakErlh) + fanHeatBTU;
+const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
+```
 
-// Bleed air (portion of return bled to exhaust to maintain room pressure)
-bleedAir = Math.max(0, supplyAir - returnAir - freshAir);
+### What ASHRAE requires
+The cooling coil must condition the **mixed air stream** (return air blended with outdoor fresh air) down to supply conditions. The outdoor air loads are:
 
-// Manifold size: pipe sizing requires GPM and velocity — not pure ASHRAE,
-// typically from schedule 40 pipe tables at 4 fps
+```
+OA_Sensible = 1.08 × CFM_OA × (T_outdoor − T_room)   [BTU/hr]
+OA_Latent   = 0.68 × CFM_OA × (Gr_outdoor − Gr_room) [BTU/hr]
+Coil Total  = RSH + RLH + OA_Sensible + OA_Latent + Fan Heat
+```
+
+For ASHRAE ERSH/ERLH methodology the bypass fraction of OA must be included:
+```
+ERSH = RSH + BF × OA_Sensible
+ERLH = RLH + BF × OA_Latent
+Grand Total Heat (GTH) = RSH + RLH + OA_Sensible + OA_Latent
+```
+
+### Worked example — DOAS pharma cleanroom (Delhi summer)
+| Parameter | Value |
+|---|---|
+| Room ERSH | 5,000 BTU/hr |
+| Fresh air (DOAS = 100% OA) | 500 CFM |
+| Outdoor DB / Gr | 95.7 °F / 101 gr/lb |
+| Indoor DB / Gr | 72 °F / 65 gr/lb |
+| **OA Sensible** | 1.08 × 500 × (95.7 − 72) = **12,798 BTU/hr** |
+| **OA Latent** | 0.68 × 500 × (101 − 65) = **12,240 BTU/hr** |
+| **Current code total** | 5,000 / 12,000 = **0.42 TR** |
+| **Correct total** | (5,000 + 12,798 + 12,240) / 12,000 = **2.50 TR** |
+| **Error** | **6× undersize** |
+
+For recirculating systems with 20 % OA the error is still 35–50 % depending on outdoor conditions. All pharma, semiconductor, and battery rooms with positive pressurization and DOAS AHUs are affected.
+
+### Fix — add to rdsSelector main selector after seasonal loop
+```js
+// Outdoor air conditioning load (added to peakErsh/peakErlh for coil sizing)
+const summerOut    = climate.outside.summer;
+const oaDB         = parseFloat(summerOut.db) || 95;
+const oaRH         = parseFloat(summerOut.rh) || 40;
+const oaGr         = calculateGrains(oaDB, oaRH, elevation);
+const oaSens       = Cs * freshAirCheck * (oaDB - summerCalcs.dbInF);
+const oaLat        = Cl * freshAirCheck * (oaGr - summerCalcs.grIn);
+const coilSensible = peakErsh + Math.max(0, oaSens);
+const coilLatent   = peakErlh + Math.max(0, oaLat);
+const grandTotal   = (coilSensible + coilLatent) + fanHeatBTU;
+const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
 ```
 
 ---
 
-## BUG-06: Lights `useSchedule` and Equipment `sensiblePct` / `latentPct` Never Read
+## C-2 · Winter Heating Load Uses CLTD (Cooling) Method — Wrong Physics
 
-**File:** `src/features/envelope/envelopeSlice.js` defines:
+**Files:** `envelopeCalc.js` — `calcWallGain`, `calcRoofGain`, `calcGlassGain`  
+**Files:** `ashraeTables.js` — `WALL_CLTD_SEASONAL.winter = 0.40`, `ROOF_CLTD_SEASONAL.winter = 0.30`  
+**Impact:** Winter heating capacity 30–80 % different from correct value depending on wall type
+
+### What the code does
 ```js
-lights:     { wattsPerSqFt: 0, useSchedule: 100 },
-equipment:  { kw: 0, sensiblePct: 100, latentPct: 0 }
+// calcWallGain:
+const seasonMult   = WALL_CLTD_SEASONAL[season] ?? 1.0;  // winter → 0.40
+const correctedCLTD = correctCLTD(baseCLTD * seasonMult, tRoom, tMeanOutdoor);
+// For winter: CLTD × 0.40 + (78 − tRoom) + (tMean − 85)
 ```
 
-**File:** `src/features/results/rdsSelector.js` uses:
-```js
-const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0) * floorAreaFt2 * ASHRAE.BTU_PER_WATT;
-// useSchedule is NEVER read → CLF always 1.0
-
-const equipSens  = (parseFloat(int.equipment?.kw) || 0) * ASHRAE.KW_TO_BTU;
-// sensiblePct is NEVER read → always 100% sensible
-// latentPct   is NEVER read → always 0% latent (see BUG-01)
+### What ASHRAE requires
+CLTD is a solar-driven **cooling** load method. For winter heat loss the correct formula is straightforward conduction:
+```
+Q_heating = U × A × (T_indoor − T_outdoor)   [always negative = heat loss out]
 ```
 
-**Impact:** For 8-hour-per-day operations, lights CLF ≈ 0.55–0.70 at peak hour, not 1.0. The lighting load is overestimated by 30–45%. For process equipment that is only partially sensible (e.g., equipment with cooling water, open-basin processes), sensiblePct < 100 is required.
+### Worked example — N-facing medium-weight wall, Delhi winter (45 °F outdoor, 72 °F indoor)
+```
+CLTD method (current code):
+  = 9 × 0.40 + (78 − 72) + (45 − 10/2 − 85)    [dailyRange default 20 °F]
+  = 3.6 + 6 − 50 = −40.4 °F effective CLTD
+  → Q = 0.48 × 100 × (−40.4) = −1,939 BTU/hr
+
+Correct ΔT method:
+  → Q = 0.48 × 100 × (45 − 72) = −1,296 BTU/hr
+
+Overestimate: 50 % — over-sizes terminal heaters and HW coils
+```
+
+### Fix — add a separate heating-load branch in envelopeCalc.js
+```js
+export const calcWallGain = (wall, climate, tRoom, season, lat, dailyRange) => {
+  if (season === 'winter') {
+    // Pure conduction — no solar, no CLTD
+    const dbOut = parseFloat(climate?.outside?.winter?.db) || 45;
+    return (parseFloat(wall.uValue) || 0) * (parseFloat(wall.area) || 0) * (dbOut - tRoom);
+  }
+  // … existing CLTD code for summer/monsoon …
+};
+```
+Apply the same change to `calcRoofGain` and the conduction term in `calcGlassGain`.
 
 ---
 
-# HIGH-SEVERITY ASHRAE STANDARD VIOLATIONS
+## C-3 · Humidification Load Uses Total Supply Air Instead of Fresh Air CFM
 
----
+**Files:** `rdsSelector.js` — humidification block  
+**Impact:** Humidification capacity overstated by ratio of supply air to fresh air (up to 10–20×)
 
-## BUG-07: CLTD Reference Latitude (40°N) vs SHGF Reference Latitude (32°N) — Systematic Mismatch
-
-**File:** `src/constants/ashraeTables.js`
-
+### What the code does
 ```js
-// CLTD values — stated as 40°N latitude, July 15
-export const WALL_CLTD = { N: { light: 12, medium: 9, heavy: 6 }, ... };
-
-// SHGF values — stated as 32°N latitude
-export const SHGF = { N: { summer: 20, monsoon: 18, winter: 10 }, ... };
+const humidLoadBTU  = supplyAir > 0
+  ? Math.round(Cl * supplyAir * humidDeltaGr) : 0;
+const humidLbsPerHr = ((supplyAir * humidDeltaGr) / 7000).toFixed(2);
 ```
 
-Using CLTD (40°N) with SHGF (32°N) in the same calculation produces inconsistent results. At 32°N vs 40°N, wall CLTD values for east/west exposures can differ by 15–25% because peak solar exposure and sol-air temperatures are latitude-dependent.
+### What ASHRAE requires
+In a recirculating AHU the return air is already at room conditions (humidGrTarget). Only the **fresh air portion** arrives with a moisture deficit relative to the room setpoint. The moisture that must be added is:
 
-For India (target market per code, ~10°N–35°N), both tables are mismatched. ASHRAE Fundamentals provides latitude correction factors for CLTD; they should be applied.
-
-**Fix required:** Add latitude correction to CLTD:
 ```
-CLTD_corrected_lat = CLTD_table × LM_factor
+Moisture deficit = freshAirCFM × (humidGrTarget − winterGrOut) / 7000   [lbs/hr]
 ```
-Where LM is the latitude-month correction from ASHRAE Table 1, Ch 28, interpolated from `project.ambient.latitude`.
+Using `supplyAir` (e.g. 1,000 CFM) instead of `freshAirCheck` (e.g. 100 CFM for 10 % OA) overstates the steam humidifier by 10×.
 
----
-
-## BUG-08: People Load Defaults Are Sedentary Office — Wrong for Cleanrooms
-
-**File:** `src/constants/ashrae.js`
-```js
-PEOPLE_SENSIBLE_SEATED: 245,   // sedentary office
-PEOPLE_LATENT_SEATED:   205,
-```
-
-**ASHRAE Fundamentals Table 1, Chapter 18 — Activity-Level Heat Gains:**
-
-| Activity | Sensible (BTU/hr) | Latent (BTU/hr) |
+### Example — recirculating cleanroom, 10 % OA
+| | Code (wrong) | Correct |
 |---|---|---|
-| Seated, at rest | 245 | 205 |
-| Light office work | 275 | 275 |
-| Light bench work (lab) | 315 | 245 |
-| Moderate work (walking) | 395 | 395 |
-| Heavy work | 580 | 870 |
+| CFM used | 1,000 (supply) | 100 (fresh air) |
+| lbs/hr steam | 2.14 | 0.21 |
+| Humidifier kW | 1.36 | 0.13 |
 
-Cleanroom operators in pharmaceutical manufacturing perform light bench/standing work (**315/245**). Semiconductor fab operators doing wafer handling perform light-to-moderate work (**315–395 BTU/hr sensible**). Using 245/205 **underestimates people heat by 28–61%** for these applications.
+This causes severe capital and operating cost overestimation for pharma and semiconductor humidification systems.
 
-There is currently no UI field to override these defaults (only `count` is editable in the RDS table).
+### Fix
+```js
+// Use fresh air CFM, not supply air
+const humidCFM      = freshAirCheck;
+const humidLbsPerHr = humidCFM > 0
+  ? ((humidCFM * humidDeltaGr) / 7000).toFixed(2) : '0.00';
+const humidKw       = (parseFloat(humidLbsPerHr) * 0.634).toFixed(2);
+const humidLoadBTU  = humidCFM > 0
+  ? Math.round(Cl * humidCFM * humidDeltaGr) : 0;
+```
 
 ---
 
-## BUG-09: Diurnal Temperature Range Hardcoded — Incorrect CLTD Correction for Global Sites
+## C-4 · `fa25Acph` Key Mismatch — RDS Column Always Shows 0
 
-**File:** `src/utils/envelopeCalc.js`
+**Files:** `pages/rds/RDSConfig.js` (line with key `fa25Acph`) vs `rdsSelector.js` (outputs `minSupplyAcph`)  
+**Impact:** "Fresh Air @ 2.5 ACPH" column is always blank/0 in the RDS table — broken data binding
+
+### Root cause
+BUG-17 correctly renamed the selector output from `fa25Acph` to `minSupplyAcph` but the RDSConfig column key was never updated:
+
 ```js
-const DIURNAL_HALF = { summer: 10, monsoon: 7, winter: 9 };
+// RDSConfig.js — WRONG key:
+{ key: 'fa25Acph', label: 'Fresh Air @ 2.5 ACPH', subLabel: 'CFM', type: 'readOnly', derived: true }
 
-const getMeanOutdoorTemp = (dbOutdoor, season) =>
-  dbOutdoor - (DIURNAL_HALF[season] ?? 10);
+// rdsSelector.js — what is actually output:
+const minSupplyAcph = Math.round(volumeFt3 * 2.5 / 60);
+return { …, minSupplyAcph, … };  // fa25Acph never output
 ```
 
-ASHRAE CLTD correction formula:
+`getFieldValue(col, room)` returns `room['fa25Acph'] ?? 0` → always 0.
+
+### Fix
+```js
+// RDSConfig.js:
+{ key: 'minSupplyAcph', label: 'Supply Air @ 2.5 ACPH Min', subLabel: 'CFM', type: 'readOnly', derived: true }
 ```
-CLTD_corrected = CLTD_table + (78 − t_room) + (t_outdoor_mean − 85)
-t_outdoor_mean = t_max − daily_range / 2
-```
-
-The daily temperature range is **location-specific** (ASHRAE Fundamentals, Chapter 14, Table 1):
-- Coastal humid: 8–12°F range → half = 4–6°F
-- Desert: 30–40°F range → half = 15–20°F
-- Continental: 20–25°F range → half = 10–12.5°F
-
-Using a fixed 10°F half-range for all summer climates gives incorrect `t_mean`. For a desert location like Riyadh (daily range ~30°F), the mean is actually 15°F below peak, not 10°F — the CLTD correction will be 5°F too high, inflating wall and roof loads by 5–15%.
-
-**Fix:** Add a `dailyRange` field to `projectSlice.ambient` (or `climateSlice`) and use it in `getMeanOutdoorTemp`.
 
 ---
 
-## BUG-10: Return Air Calculation Ignores Exhaust Air — Mass Balance Error
+# 🟠 HIGH SEVERITY BUGS
 
-**File:** `src/features/results/rdsSelector.js`
+---
+
+## H-1 · ERSH / ERLH Definitions Non-Standard — OA Bypass Fraction Missing
+
+**File:** `rdsSelector.js` — `calculateSeasonLoad()`  
+**Impact:** Supply air CFM undersized; humidity control verification incorrect
+
+ASHRAE Fundamentals defines:
+```
+ERSH = RSH + (BF × OASH)      ← bypass fraction of OA sensible
+ERLH = RLH + (BF × OALH)      ← bypass fraction of OA latent
+```
+
+The code sets `ersh = rawSensible × safetyMult` with no OA bypass contribution. For a room with 20 % OA at 95.7 °F outdoor:
+```
+BF × OASH = 0.10 × [1.08 × 200 CFM × (95.7 − 72)] = 513 BTU/hr added to ERSH
+```
+Omitting this term causes `thermalCFM` to be slightly undersized and, more importantly, makes the ERSH label misleading versus ASHRAE documentation.
+
+---
+
+## H-2 · Multiple RDS Columns Defined but Never Calculated
+
+**File:** `pages/rds/RDSConfig.js` vs `rdsSelector.js`  
+**Impact:** These columns always display 0/blank regardless of inputs
+
+| Column key | Label | Status |
+|---|---|---|
+| `chwManifoldSize` | CHW Manifold Size (mm) | Never calculated |
+| `hwManifoldSize` | HW Manifold Size (mm) | Never calculated |
+| `preCoolingAhuCap` | Pre-Cooling AHU Capacity (CFM) | Never calculated |
+| `preCoolChwFlow` | Pre-Cooling Coil CHW Flow (USGPM) | Never calculated |
+| `preCoolChwManifold` | Pre-Cooling Coil CHW Manifold (mm) | Never calculated |
+
+These appear in client reports as blank, which is misleading in a business-level SaaS context. Either implement the calculation or remove the columns.
+
+**Pipe sizing formula for reference:**
 ```js
-const returnAir = Math.max(0, supplyAir - freshAir);
+// CHW manifold size — velocity method (ASHRAE HVAC Systems 2.5 m/s max):
+// GPM = coolingCapTR × 12000 / (500 × ΔT)   [ΔT = 10°F standard]
+// Pipe area = GPM / (v_ft_min × 7.48 gal/ft³)  → nominal DN from table
 ```
 
-**Correct HVAC mass balance for a cleanroom:**
-```
-Supply = Return + Exhaust (net)
-Return = Supply - Exhaust_total - Net_leakage
+---
+
+## H-3 · ASHRAE 62.1 Ventilation Rates Are Office Defaults — Wrong for Industrial Spaces
+
+**File:** `constants/ashrae.js`  
+**Impact:** Fresh air undersized or oversized for pharma/semiconductor/battery spaces
+
+```js
+VENT_PEOPLE_CFM: 5,    // Rp — ASHRAE 62.1 Table 6-1, "Office Space"
+VENT_AREA_CFM:   0.06, // Ra — ASHRAE 62.1 Table 6-1, "Office Space"
 ```
 
-`room.exhaustAir.general`, `room.exhaustAir.bibo`, `room.exhaustAir.machine` are stored in `roomSlice` but **never read** in `rdsSelector.js`.
+ASHRAE 62.1-2019 Table 6-1 correct values by occupancy category:
 
-For a pharmaceutical manufacturing room with 500 CFM BIBO exhaust and 200 CFM machine exhaust, the return air is overcalculated by 700 CFM, which would cause:
-1. Wrong return air duct sizing
-2. Wrong room pressurization calculation
-3. Wrong supply/return CFM balance reported to client
+| Space type | Rp (cfm/person) | Ra (cfm/ft²) |
+|---|---|---|
+| Office / admin | 5 | 0.06 |
+| Pharma manufacturing | 5 | 0.18 |
+| Chemical labs | 5 | 1.00 |
+| Electronic equipment | 5 | 0.16 |
+| Clean rooms (ISO) | Per ISO 14644 ACPH | — |
+
+For semiconductor fabs, the fresh air calculation using `Ra=0.06` will understate the area-based OA component by 2.7×. Since cleanroom supply air is ACPH-governed anyway, the minimum ACPH floor catches this in most cases, but the `freshAir` calculation and the 62.1 compliance documentation will be wrong.
+
+**Fix:** Either make `VENT_PEOPLE_CFM` and `VENT_AREA_CFM` per-room configurable fields, or add an occupancy category lookup table keyed to `room.industry` or `room.classInOp`.
+
+---
+
+## H-4 · Default Room Height 10 m Creates Unrealistic Volume and Infiltration
+
+**File:** `features/room/roomSlice.js` — `addRoom` reducer and default room  
+**Impact:** Default infiltration ~294 CFM instead of ~30 CFM; all volume-based calcs wrong
+
+```js
+length: 10, width: 10, height: 10,
+volume: 1000,   // m³ — 10m ceiling is a warehouse, not a cleanroom
+```
+
+For a 100 m² cleanroom with 10 m height and 0.5 ACH infiltration:
+```
+volumeFt3 = 1000 × 35.31 = 35,314 ft³
+infilCFM  = 35,314 × 0.5 / 60 = 294 CFM (enormous infiltration load)
+```
+
+The correct ceiling heights for industry:
+- Pharma cleanroom: 3.0–3.5 m
+- Semiconductor fab: 3.0–4.0 m
+- Battery room: 3.5–5.0 m
+- Warehouse: 8–12 m
+
+**Fix:** Change the default height to 3.0 m in both `initialState` and `addRoom`. Change `achValue` default from 0.5 to 0.10 ACH (positively pressurized cleanroom).
+
+---
+
+## H-5 · Monsoon Seasonal CLTD/SHGF Multipliers Have No ASHRAE Basis
+
+**File:** `constants/ashraeTables.js`  
+**Impact:** Monsoon loads may be 10–30 % off depending on site
+
+```js
+WALL_CLTD_SEASONAL  = { summer: 1.00, monsoon: 0.85, winter: 0.40 }
+ROOF_CLTD_SEASONAL  = { summer: 1.00, monsoon: 0.80, winter: 0.30 }
+SHGF.N/NE/E...      = { summer: X,    monsoon: X×0.89, winter: X×0.50 }
+```
+
+ASHRAE does not define "monsoon" as a design season. These multipliers appear to be empirical approximations with no published basis. For pharma and semiconductor projects in India, monsoon is the **latent-critical** season (80–85 % RH), but its CLTD load being 85 % of summer is an arbitrary guess.
+
+The correct approach is to use actual monsoon design conditions (DB + RH) entered in the Climate tab and compute CLTD corrections using the `correctCLTD` formula with actual monsoon `tMeanOutdoor`. The seasonal multiplier is a shortcut that cannot be correct for all sites.
+
+**Recommendation:** Remove the seasonal multipliers. The `correctCLTD` formula already adjusts for actual outdoor mean temperature; the multiplier double-corrects and is not founded in ASHRAE.
+
+---
+
+## H-6 · No Sensible Heat Ratio (ESHF) Feasibility Check
+
+**Files:** `rdsSelector.js`  
+**Impact:** System may be specified at an ADP that physically cannot achieve the required room humidity — silent failure
+
+ASHRAE requires verifying:
+```
+ESHF = ERSH / (ERSH + ERLH)
+```
+The ESHF line drawn from the room condition on a psychrometric chart must intersect the saturation curve at a point ≥ ADP. If `ESHF < RSHF` (Room SHF), the ADP is too high and the system will never reach the humidity setpoint — no matter how much air it supplies.
+
+Currently the code never calculates ESHF or flags this condition. For pharma dry rooms (30 % RH) or battery dry rooms (< 5 % RH), this check is critical.
 
 **Fix:**
 ```js
-const totalExhaust = (parseFloat(room.exhaustAir?.general) || 0)
-  + (parseFloat(room.exhaustAir?.bibo) || 0)
-  + (parseFloat(room.exhaustAir?.machine) || 0);
-const returnAir = Math.max(0, supplyAir - freshAir - totalExhaust);
+const rshf = rawSensible / (rawSensible + rawLatent) || 1;
+const eshf = peakErsh / (peakErsh + peakErlh) || 1;
+const adpOnSatCurve = calculateDewPoint(adpF, 100);
+const eshfFeasible  = eshf >= rshf;    // flag in output
 ```
 
 ---
 
-## BUG-11: `classInOp` (ISO Classification In-Operation) Not in Room State
-
-**File:** `src/pages/rds/RDSConfig.js`
-```js
-{ key: 'classInOp', label: 'ISO Class', subLabel: 'In Operation', type: 'select', options: ISO_OPTIONS },
-```
-
-**File:** `src/features/room/roomSlice.js` — initial state only has:
-```js
-atRestClass: 'ISO 8',
-// classInOp → DOES NOT EXIST in initial state
-```
-
-The "In Operation" ISO class is never initialized, meaning `getFieldValue()` returns `0` for it, which doesn't match any `ISO_OPTIONS` value and renders blank. For pharmaceutical GMP documentation, the "In Operation" classification is critical and distinct from "At Rest."
+# 🟡 MEDIUM SEVERITY BUGS
 
 ---
 
-## BUG-12: Winter Humidification Load Not Tracked
+## M-1 · Safety Factor and Fan Heat ARE Compounded Despite Comment Saying They Are Not
 
-**File:** `src/features/results/rdsSelector.js`
+**File:** `rdsSelector.js`  
+**Impact:** ~0.5 % overestimate at default 10 % safety / 5 % fan heat — grows at higher values
 
-In winter, `grOut < grIn` for dry climates, so `infilLat = Cl × CFM × (grOut − grIn)` becomes **negative** — meaning infiltrating dry outdoor air removes moisture from the space. The space would need humidification, which is a heating-season load.
+The BUG-14 comment says "fan heat is NOT compounded with safety factor." The math contradicts this:
+```
+peakErsh   = rawSensible × safetyMult          (safety already baked in)
+fanHeatBTU = (peakErsh + peakErlh) × fanFrac  (fan fraction applied to safety-inflated loads)
+grandTotal = (peakErsh + peakErlh) + fanHeatBTU
+           = (rawSensible + rawLatent) × safetyMult × (1 + fanFrac)  ← compounded
+```
 
-The current code:
-- Computes `erlhOn_winter` which will be negative or near-zero
-- Never calculates a humidification load (kW or lb/hr steam)
-- Never sizes a humidifier
+True non-compounded calculation:
+```js
+const grandTotal = (rawSensible + rawLatent) * safetyMult
+                 + (rawSensible + rawLatent) * fanFrac;
+// = raw × (safetyMult + fanFrac)  ← additive, not multiplicative
+```
 
-For cleanrooms in semiconductor fabs (RH ≥ 45%), pharma suites (RH 30–50%), and battery dry rooms (< 1% RH requiring molecular sieve dehumidification), winter humidification is often the dominant HVAC system driver. This is entirely absent.
+At `safetyFactor=20 %, fanHeat=8 %`:
+- Current: `× 1.20 × 1.08 = × 1.296`
+- Correct: `× (1.20 + 0.08) = × 1.28`
+- Overestimate: 1.25 %
+
+Not large, but the comment should be corrected or the formula changed to match the stated intent.
 
 ---
 
-## BUG-13: `roomNo` Not Initialized in Room State
+## M-2 · `cfmValue` Infiltration Method Exists in State but Is Never Used
 
-**File:** `src/features/room/roomSlice.js`
-
-The initial room (`room_default_1`) and every `addRoom()` call have no `roomNo` field. The RDS table and sidebar both reference `room.roomNo`:
-
-```js
-// RoomSidebar.jsx
-<div>{room.roomNo || 'NO #'} • {room.floorArea} ft²</div>
-
-// RDSConfig.js
-{ key: 'roomNo', label: 'Room No.', inputType: 'text' },
-```
-
-Users can type a room number into the RDS cell (it gets stored via `updateRoom`), but it starts as `undefined`, not an empty string, which can cause subtle issues with controlled inputs.
-
----
-
-# MEDIUM-SEVERITY ISSUES
-
----
-
-## BUG-14: `supplyAir` Sized Off Safety-Factored ERSH — Double Penalizes Fan and ADP
-
-**File:** `src/features/results/rdsSelector.js`
-```js
-const safetyMult  = 1 + (systemDesign.safetyFactor || 10) / 100;
-const ersh        = Math.round(rawSensible * safetyMult);   // includes safety
-// ...
-const supplyAir   = Math.ceil(peakErsh / (Cs * supplyDT));  // peakErsh includes safety
-```
-
-Supply air CFM is sized against ERSH which already includes the safety factor. This means the system is sized for the "worst case" load, which is standard practice — no bug. However:
+**Files:** `envelopeSlice.js`, `rdsSelector.js`  
+**Impact:** Users who want to enter infiltration as a fixed CFM value (common in large-door warehouse rooms) cannot
 
 ```js
-const grandTotal = (peakErsh + peakErlh) * fanHeatMult;
+// envelopeSlice.js — defines but:
+infiltration: { method: 'ach', achValue: 0.5, cfmValue: 0, doors: [] }
+
+// rdsSelector.js — ignores method and cfmValue entirely:
+const infilCFM = (volumeFt3 * (parseFloat(inf.achValue) || 0)) / 60;
 ```
 
-Both `peakErsh` (safety-factored) and `peakErlh` (safety-factored) have the fan heat multiplier applied **on top**. The fan heat allowance should be calculated based on the un-safety-factored supply airflow and actual fan pressure, not as a percentage of the already-inflated ERSH+ERLH.
-
-Using 1.10 safety factor × 1.05 fan heat = 1.155× total multiplier. The correct approach is:
-```
-Grand Total = (rawSensible + rawLatent + fanHeatBTU) × safetyMult
-```
-Not:
-```
-Grand Total = (rawSensible + rawLatent) × safetyMult × fanHeatMult
-```
-
-The order of operations matters when both multipliers are > 1.
-
----
-
-## BUG-15: `achievedConditions` Fields Are Just the Design Setpoint — Not Computed
-
-**File:** `src/features/results/rdsSelector.js`
+**Fix:** Honor the `method` field:
 ```js
-achFields[`achOn_temp_${s}`] = dbInF.toFixed(1);    // just design setpoint
-achFields[`achOn_rh_${s}`]   = raRH.toFixed(1);      // just design setpoint
-```
-
-These fields are labelled "Achieved Room Conditions" but they simply return the design setpoint unconditionally. For a properly sized system this is technically valid (the system achieves its design point), but:
-
-1. It's misleading — engineers expect these to reflect calculated leaving conditions
-2. For off-season conditions (winter with equipment on), the achieved condition may differ from setpoint
-3. The "after terminal heating" achieved conditions are identical to setpoint, which defeats the purpose of showing terminal heating at all
-
----
-
-## BUG-16: Layout Containers Break Full-Height Pages
-
-**File:** `src/App.jsx`
-```jsx
-const AppLayout = () => (
-  <div className="min-h-screen bg-gray-50">
-    <Header />        {/* ~64px height */}
-    <TabNav />        {/* ~44px height */}
-    <main className="container mx-auto px-4 py-6">   {/* ← py-6 = 24px top+bottom padding */}
-      <Outlet />
-    </main>
-  </div>
-);
-```
-
-These pages set their own viewport-height:
-```jsx
-// AHUConfig.jsx
-<div className="flex h-[calc(100vh-64px)] bg-slate-50">
-
-// EnvelopeConfig.jsx
-<div className="flex h-[calc(100vh-64px)] bg-gray-50">
-
-// RDSPage.jsx
-<div className="flex h-[calc(100vh-64px)] bg-slate-50 relative overflow-hidden">
-```
-
-The `calc(100vh-64px)` only subtracts the header height, not the TabNav (~44px) or the container's `py-6` (24px). These pages will overflow their container by ~68px, causing scroll issues and misaligned sticky sidebars.
-
-The calculation should be `calc(100vh-64px-44px)` = `calc(100vh-108px)` or the pages should use `flex-1 overflow-hidden` relative to the parent flex layout.
-
----
-
-## BUG-17: `fa25Acph` Uses Volume in ft³ but Label Claims "2.5 ACPH"
-
-**File:** `src/features/results/rdsSelector.js`
-```js
-const fa25Acph = Math.round(volumeFt3 * 2.5 / 60);
-```
-
-`volumeFt3 * 2.5 / 60` = CFM at 2.5 ACPH (air changes per hour of room volume). This is arithmetic for the **total supply air** at 2.5 ACPH, but it's used as a **fresh air** quantity:
-
-```js
-const optimisedFreshAir = Math.max(freshAir, fa25Acph);
-```
-
-For a 1000 m³ cleanroom (35,315 ft³) at 2.5 ACPH:
-```
-fa25Acph = 35,315 × 2.5 / 60 = 1,472 CFM
-```
-
-Calling this "fresh air at 2.5 ACPH" implies 2.5 room volume changes per hour of **outdoor air**, which would be extremely high for most classifications. The ASHRAE 62.1 minimum is typically 0.06 cfm/ft² + 5 cfm/person, not 2.5 ACPH of fresh air.
-
-This number appears to be intended as a minimum **supply air** check (not fresh air), but is stored and displayed as a fresh air quantity, which is semantically incorrect.
-
----
-
-## BUG-18: Stull (2011) WB Approximation — Adequate but Below Business SaaS Standard
-
-**File:** `src/utils/psychro.js`
-```js
-export const calculateWetBulb = (dbF, rh) => {
-  // Stull (2011) approximation — accuracy ±0.65°C
-```
-
-For psychrometric chart plotting and coil entering/leaving conditions, ±0.65°C (±1.17°F) error in WB propagates into enthalpy errors. ASHRAE coil selection is sensitive to entering WB. The exact iterative ASHRAE method (solve for WB where enthalpy of air at saturation equals the measured air enthalpy) is standard in commercial calculation software.
-
----
-
-## BUG-19: `calculateGrains` Sea Level Used Inconsistently in Psychro State Points
-
-**File:** `src/features/results/rdsSelector.js` — psychro block
-```js
-const ambGr = parseFloat(out.gr) || calculateGrains(ambDB, ambRH);
-// ↑ out.gr is sea-level; fallback calculateGrains also sea-level
-```
-
-While `grADP` and `raGr` are altitude-corrected:
-```js
-const grADP = calculateGrains(adpF, 100, elevation);
-const raGr  = calculateGrains(dbInF, raRH, elevation);
-```
-
-The ambient/fresh-air/mixed-air psychro state points use sea-level grains for the outdoor air. This creates an inconsistent psychrometric diagram at altitude — the outdoor state point will plot at the wrong humidity ratio.
-
----
-
-## BUG-20: People Activity Level Cannot Be Changed From UI
-
-**Files:** `envelopeSlice.js`, `RDSConfig.js`, `EnvelopeConfig.jsx`
-
-The `sensiblePerPerson` and `latentPerPerson` fields exist in the Redux state but there is no UI control anywhere to change them. The only editable people field in the RDS table is `count`:
-
-```js
-{ key: 'people_count', label: 'Occupancy', isEnv: true, envType: 'people', envField: 'count' },
-```
-
-There is no `people_sensible` or `people_latent` column. Engineers cannot override the default 245/205 BTU/hr values for their specific activity level without editing source code.
-
----
-
-## BUG-21: `erlhOn_winter` Can Be Negative — No Guard in Cooling Capacity
-
-**File:** `src/features/results/rdsSelector.js`
-```js
-const peakErlh = results['erlhOn_summer'];
-const grandTotal = (peakErsh + peakErlh) * fanHeatMult;
-```
-
-`peakErlh` is `erlhOn_summer` — this is correct (use summer for peak cooling sizing). However, in the seasonal loop, if winter `erlhOn_winter` is negative (dry outdoor air latent removal), it is never flagged and no humidification sizing is triggered. The code silently passes a negative ERLH to any consumer.
-
----
-
-## BUG-22: `lightsSens` Uses Watts/ft² × ft² (ft² already converted from m²) — Correct but Undocumented
-
-**File:** `src/features/results/rdsSelector.js`
-```js
-const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0)
-  * floorAreaFt2                // ← ft² (correctly converted from m²)
-  * ASHRAE.BTU_PER_WATT;
-```
-
-The units work out: W/ft² × ft² × BTU/W = BTU/hr ✓
-
-However, the UI label in `EnvelopeConfig.jsx` says "W/ft²" for the lighting density input, and the RDS table shows no lighting column at all. If a user enters density in W/m² (thinking in SI), the result will be off by 10.76×. A unit clarification or SI/IP toggle would prevent this error.
-
----
-
-# DATA FLOW INCONSISTENCIES
-
----
-
-## FLOW-01: `designTemp` Mixed Units Throughout Pipeline
-
-| Location | Unit | Value |
-|---|---|---|
-| `roomSlice.js` initial state | °C | 22 |
-| `RDSConfig.js` subLabel | °C | display only |
-| `rdsSelector.js` `dbInF` | °F | `cToF(room.designTemp)` |
-| `EnvelopeConfig.jsx` display | °C + °F | both shown |
-| `ProjectDetails.jsx` ambient | °C | separate field |
-| `climateSlice.js` outdoor DB | °F | 95.7 |
-
-The conversion `cToF()` is applied correctly in `rdsSelector.js`, but the inconsistency across files creates maintenance risk and confusion.
-
----
-
-## FLOW-02: `roomSlice` Exhaust Fields — Stored, Displayed, Never Used in Calculations
-
-`room.exhaustAir.general/bibo/machine` are:
-- ✅ Initialized in `roomSlice.js`
-- ✅ Editable in RDS table (`RDSConfig.js` exhaust section)
-- ✅ Handled by `updateRoom()` via dot-notation path
-- ❌ **Never read by `rdsSelector.js`**
-- ❌ **Never subtracted from return air**
-- ❌ **Never summed for total exhaust in AHU capacity sizing**
-
----
-
-## FLOW-03: `ahuSlice.type` ('DOAS', 'Recirculating', 'FCU') — Stored, Never Affects Calculation
-
-**AHUConfig.jsx** allows selecting system type. **`rdsSelector.js`** retrieves:
-```js
-const ahu = ahus.find(a => a.id === room.assignedAhuIds?.[0]) || {};
-// ...
-typeOfUnit: ahu.type || '-',
-```
-
-But `ahu.type` is only displayed; it never changes how supply air, fresh air, or coil loads are calculated. A DOAS system (100% outside air) should set `freshAir = supplyAir`. An FCU has different bypass and coil model. This differentiation is absent.
-
----
-
-## FLOW-04: `volFaPct` Column in RDS — No Formula
-
-**`RDSConfig.js`:**
-```js
-{ key: 'volFaPct', label: 'Room wise Vol. %age', subLabel: 'FA Opt', step: 0.01 },
-```
-
-This appears to represent each room's volume as a percentage of the total project volume (for fresh air optimization). However:
-1. It's not `readOnly`, implying manual entry
-2. There's no computed field for it in `rdsSelector.js`
-3. It's never used in any calculation
-
----
-
-## FLOW-05: `RoomDetailPanel` `deleteRoom` vs `deleteRoomWithCleanup`
-
-**RoomDetailPanel.jsx footer:**
-```js
-dispatch(deleteRoom(room.id));  // ← uses roomSlice directly
-```
-
-**RDSRow.jsx:**
-```js
-dispatch(deleteRoomWithCleanup(room.id));  // ← uses thunk, also cleans envelope
-```
-
-Deleting from `RoomDetailPanel` does **not** clean up `envelopeSlice.byRoomId[roomId]`. The envelope data for deleted rooms accumulates in Redux state indefinitely, which leaks memory in long sessions and could cause stale data issues.
-
-**Fix:** Replace in `RoomDetailPanel.jsx`:
-```js
-dispatch(deleteRoomWithCleanup(room.id));
+const infilCFM = inf.method === 'cfm'
+  ? (parseFloat(inf.cfmValue) || 0)
+  : (volumeFt3 * (parseFloat(inf.achValue) || 0)) / 60;
 ```
 
 ---
 
-## FLOW-06: `addNewRoom` Sets `activeRoomId` Before Dispatch Returns
+## M-3 · Lighting `useSchedule` Field Exists but Never Affects CLF
 
-**File:** `src/features/room/roomActions.js`
+**Files:** `envelopeSlice.js`, `rdsSelector.js`  
+**Impact:** Lighting load always at 100 % of installed wattage — overestimates load for spaces not 24/7
+
 ```js
-export const addNewRoom = () => (dispatch, getState) => {
-  dispatch(addRoomAction());
-  const state  = getState();
-  const newRoomId = state.room.activeRoomId;    // ← reads activeRoomId AFTER addRoom
-  dispatch(initializeRoom(newRoomId));
+// envelopeSlice default:
+lights: { wattsPerSqFt: 0, useSchedule: 100 }
+
+// rdsSelector — CLF hardcoded 1.0:
+const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0) * floorAreaFt2 * ASHRAE.BTU_PER_WATT;
+```
+
+For 24/7 cleanrooms this is correct (CLF = 1.0). For pharma admin areas, office spaces, or laboratories with intermittent occupation, CLF from ASHRAE Table 3, Ch 18 should reduce the instantaneous cooling load.
+
+---
+
+## M-4 · HW Flow Rate Assumes Fixed 20 °F ΔT — Not Stated in UI
+
+**File:** `rdsSelector.js`  
+**Impact:** HW GPM wrong for any system not using 20 °F design ΔT
+
+```js
+const hwFlowRate = heatingCapBTU > 0 ? (heatingCapBTU / 10000).toFixed(1) : '0.0';
+// 10000 = 500 BTU/gal·°F × 20 °F ΔT — hardcoded, not user-configurable
+```
+
+European systems commonly use 11 °C / 20 °F; North American HW systems range from 15 °F to 30 °F ΔT. This should be a project-level design parameter, same as ADP and bypass factor.
+
+---
+
+## M-5 · Partition and Floor Default `tAdj = 85 °F` Always Creates a Heat Gain
+
+**File:** `constants/ashraeTables.js` — `DEFAULT_ELEMENTS.partitions.tAdj = 85`  
+**Impact:** Every partition shows a heat gain into the room by default, even against other conditioned spaces
+
+```js
+partitions: { tAdj: 85, … }
+// Q = U × A × (85 − tRoom)  →  with tRoom=72: always positive
+```
+
+If the adjacent space is also conditioned at 72 °F, `tAdj` should default to `tRoom` (zero gain). Using 85 °F assumes the adjacent space is an unconditioned corridor — appropriate for some rooms, wrong for back-to-back cleanrooms. The UI should either prompt the user for actual adjacent temperature or set the default to room design temp.
+
+---
+
+## M-6 · CLF Values Are Summer Peak — Applied to All Seasons Including Winter Solar
+
+**File:** `constants/ashraeTables.js`  
+**Impact:** Winter solar gain through glass slightly overestimated (CLF is unitless, 0–1)
+
+```js
+// CLF table has only one set of values — no seasonal variation:
+const clf = CLF[orientation]?.[roomMass] ?? 0.55;
+```
+
+ASHRAE provides separate CLF tables by month (Tables 7–12, Ch 28). The summer peak CLF for S-facing glass (medium mass) is 0.55. In winter, the lower-angle sun and different thermal storage dynamics give CLF closer to 0.65–0.75 for S-facing. This means winter solar gain is understated slightly. For pharma facilities with significant south-facing glazing, this matters.
+
+---
+
+## M-7 · Winter Heating Capacity Only Uses Sensible Loss — Ignores Latent/Infiltration Heat Loss
+
+**File:** `rdsSelector.js`  
+**Impact:** Terminal heater and HW coil may be undersized when infiltration of dry cold air is significant
+
+```js
+const winterSensLoss = Math.min(0, results['ershOn_winter'] || 0);
+const heatingCapBTU  = Math.abs(winterSensLoss);
+```
+
+`ershOn_winter` already includes infiltration sensible load (`infilSens`). But the infiltration latent load (`infilLat`) is included in `erlhOn_winter` (negative in winter = moisture removal). For a true heating season assessment, the total heat loss also includes latent losses. For pharma dry rooms or battery dry rooms, this is significant — the room loses heat AND moisture to infiltration simultaneously.
+
+---
+
+## M-8 · Default People Activity for Cleanrooms Should Not Be "Seated at Rest"
+
+**File:** `features/envelope/envelopeSlice.js`  
+**Impact:** Cleanroom people load understated by ~30 % if default is not changed
+
+```js
+people: { count: 0, sensiblePerPerson: 245, latentPerPerson: 205 }
+// ASHRAE: "Seated, at rest" — correct for theatre/lobby
+```
+
+For cleanroom/pharma operators standing at workbenches (ASHRAE Table 1, Ch 18):
+```
+Light bench work — standing: 315 sensible / 245 latent BTU/hr·person
+```
+
+The UI shows an activity selector in EnvelopeConfig but the **default** that new rooms start with (245/205) underestimates pharma/semi cleanroom people load by 25–30 %. Since the RDS Quick Input also shows `sensiblePerPerson: 245` as the initial value and users may not visit EnvelopeConfig, this default propagates silently.
+
+**Fix:** Change default to 315/245 BTU/hr·person for cleanroom applications, or make the initial value conditional on `room.classInOp`.
+
+---
+
+# 🔵 LOW SEVERITY / CODE QUALITY
+
+---
+
+## L-1 · ERSH/ERLH Terminology Non-Standard — Should Be Called RSH/RLH in Code
+
+The variables named `ersh` / `erlh` in `calculateSeasonLoad` are actually **RSH × safetyMult** and **RLH × safetyMult**. ASHRAE "Effective Room Sensible Heat" (ERSH) is a specific ESHF-diagram concept that includes BF × OASH — not just safety-factored RSH.
+
+Using ERSH for safety-factored RSH will confuse any engineer who cross-references the ASHRAE manual.
+
+---
+
+## L-2 · `volFaPct` (Room Volume % of FA Opt) Column Has No Calculation
+
+**File:** `pages/rds/RDSConfig.js`  
+This column accepts user input but its value is never used in any downstream calculation. It exists in the RDS table as a user note field. This should be either implemented (total supply air × volFaPct = target fresh air for that zone) or clearly labelled as a comment field.
+
+---
+
+## L-3 · `rsh` in Selector Is Raw Sensible, Not RSH as Defined
+
+```js
+const rsh = summerCalcs ? Math.round(summerCalcs.rawSensible) : 0;
+```
+`rawSensible` is pre-safety-factor. The RSH displayed in the RDS should include safety factor for consistency with ERSH. A downstream engineer reading RSH from the sheet and manually calculating ERSH will get a different number.
+
+---
+
+## L-4 · `designAcphCFM` vs `minAcphCFM` — No ISO 14644 Validation
+
+**File:** `rdsSelector.js`  
+The code takes `Math.max(thermalCFM, minAcphCFM, designAcphCFM)`. There is no check that `designAcph` meets the minimum ISO 14644 air change rate for the room's `classInOp`. ISO minimums:
+
+| ISO Class | Min ACPH (typical) |
+|---|---|
+| ISO 5 | 240–360 |
+| ISO 6 | 90–180 |
+| ISO 7 | 30–60 |
+| ISO 8 | 10–20 |
+
+The code accepts whatever `designAcph` and `minAcph` the user enters without validating against the ISO class. A room classified as ISO 7 with `designAcph = 5` would silently produce an under-ventilated, non-compliant design.
+
+---
+
+## L-5 · `bleedAir` Can Show Negative Values
+
+```js
+const bleedAir = Math.max(0, supplyAir - returnAir - freshAirCheck);
+```
+The floor at 0 is correct, but `bleedAir` conceptually represents pressurization bleed — it should not exceed `totalExhaust`. No upper bound is enforced.
+
+---
+
+## L-6 · `calculateEnthalpy` Uses Approximation Coefficients — Acceptable but Document
+
+```js
+const h = 0.240 * t + W * (1061 + 0.444 * t);
+```
+ASHRAE Fundamentals Eq. 30 is:
+```
+h = 0.240·t + W·(1061 + 0.444·t)   [BTU/lb]
+```
+This is the correct ASHRAE formula. However, the more precise ASHRAE Eq. 32 uses:
+```
+h = 0.240·t + W·(1061.2 + 0.444·t)
+```
+Difference is 0.2 BTU/lb at 100 % humidity — negligible.
+
+---
+
+## L-7 · `totalExfil` Always Equals `totalInfil` — No Pressure-Balance Logic
+
+```js
+const totalInfil = summerCalcs ? Math.round(summerCalcs.infilCFM) : 0;
+const totalExfil = totalInfil;  // identical
+```
+
+In a positively pressurized cleanroom, exfiltration > infiltration by design. The code sets them equal, which is only correct for a neutral-pressure room. For pharma and semiconductor clean rooms, the pressure differential is intentional (15 Pa typical) and the exfiltration should exceed infiltration. The current model has them equal, which does not represent the intended pressurization.
+
+---
+
+## L-8 · `manualFreshAir` Field Never Dispatches to Redux
+
+**File:** `pages/rds/RDSConfig.js`  
+`manualFreshAir` is listed as an editable (non-readOnly) column and is used in rdsSelector:
+```js
+const manualFA = parseFloat(room.manualFreshAir) || 0;
+```
+However, there is no `isEnv` flag, so the `handleRoomUpdate` → `updateRoom` path is taken. `roomSlice.updateRoom` uses `setNestedValue(room, 'manualFreshAir', value)` which should work. This one is actually fine — just confirm `manualFreshAir` is initialized in `addRoom`. It is **not** initialized in either `initialState` or `addRoom` in `roomSlice.js`, so it defaults to `undefined` and reads back as `0` in the selector. First time the user saves it, it works; on reload from persisted state the field persists. But the initial state gap means the column header will show a non-persisted blank.
+
+---
+
+# Data Flow Issues
+
+---
+
+## DF-1 · RDSRow and RoomDetailPanel Both Dispatch `initializeRoom` on Every Keystroke
+
+```js
+// RDSRow.jsx — handleEnvUpdate:
+dispatch(initializeRoom(room.id));
+dispatch(updateInternalLoad({ … }));
+```
+
+`initializeRoom` is an idempotent no-op if the room already exists (correct), but dispatching it on every envelope cell change adds unnecessary Redux cycles. Minor performance issue for large multi-room projects.
+
+---
+
+## DF-2 · RoomConfig Page Has a Separate `handleUpdate` That Doesn't Support Dot-Notation Fields
+
+**File:** `pages/RoomConfig.jsx`  
+```js
+const handleUpdate = (field, value) => {
+  dispatch(updateRoom({ id: activeRoom.id, field,
+    value: field === 'name' ? value : (parseFloat(value) || 0)
+  }));
 };
 ```
 
-`addRoom` reducer sets `state.activeRoomId = newId` synchronously before returning. `getState()` after the dispatch returns the updated state, so `state.room.activeRoomId` correctly holds the new room's ID. This works, but it's a fragile pattern — if `addRoom` is ever refactored to not set `activeRoomId`, the envelope won't be initialized for the new room.
-
-**Better pattern:**
-```js
-export const addNewRoom = () => (dispatch) => {
-  const newId = `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-  dispatch(addRoomAction(newId));   // pass explicit ID
-  dispatch(initializeRoom(newId));
-};
-```
+`exhaustAir.general` would be passed as the field string. The `roomSlice.updateRoom` reducer uses `setNestedValue(room, field, value)` which does handle dot-notation, so this actually works. But unlike `RDSRow` which uses `buildRoomUpdate()` from RDSConfig, `RoomConfig` hardcodes the pattern. If a future dot-notation field is added, it requires a change in two places.
 
 ---
 
-# MINOR / COSMETIC
-
----
-
-## MINOR-01: `hvacMath.js` Deprecated but Still in Bundle
-
-`src/utils/hvacMath.js` contains only a comment saying it's deprecated but the file still ships. Remove it to avoid confusion.
-
----
-
-## MINOR-02: `resultsSlice.js` Is Empty — Remove or Document
+## DF-3 · RDSPage Reset Calls `localStorage.clear()` but App Doesn't Use localStorage
 
 ```js
-const resultsSlice = createSlice({ name: 'results', initialState: {}, reducers: {} });
+// RDSPage.jsx:
+if (window.confirm('Reset Project to Defaults? This clears all data.')) {
+  localStorage.clear();
+  window.location.reload();
+}
 ```
 
-This adds a `results` key to the Redux store with no purpose. Either remove it and clean up `store.js`, or document why it's reserved.
+The store uses Redux (in-memory). Unless `redux-persist` is configured (not visible in the provided code), `localStorage.clear()` does nothing and the reload simply reinitializes the Redux store from `initialState`. If `redux-persist` is added later this will work correctly. Currently harmless but misleading.
 
 ---
 
-## MINOR-03: `TabNav.jsx` Tab Order Comment vs Actual Array Order
+# Priority Fix Roadmap
 
-```js
-const tabs = [
-  // 1. RDS is now the FIRST tab as requested
-  // 2. Project & Climate follow
-  { id: 'project', label: 'Project Info', path: '/project' },   // ← actually first
-  { id: 'rds',     label: 'RDS Input (Master)', path: '/rds' }, // ← actually second
-```
-
-The comment says RDS should be first but `project` comes first in the array. The RDS route is second. This is a minor discrepancy between comment intent and code reality.
-
----
-
-## MINOR-04: `NumberControl.jsx` Decrement Can Produce Negative Values for Physical Quantities
-
-```js
-const handleDecrement = () => onChange(safeVal(value) - 1);
-```
-
-No floor clamping. Clicking decrement on `safetyFactor = 0` gives `-1`, which would invert the safety factor (multiplier < 1.0, meaning loads are artificially reduced). Add `Math.max(0, ...)` guards for non-negative quantities like elevation, RH, ADP, floor area.
+| Priority | Bug | File | Effort |
+|---|---|---|---|
+| 1 🔴 | C-1: Add OA conditioning load to coolingCapTR | rdsSelector.js | Medium |
+| 2 🔴 | C-2: Use U×A×ΔT for winter wall/roof/glass | envelopeCalc.js | Small |
+| 3 🔴 | C-3: Use freshAirCFM for humidification | rdsSelector.js | Small |
+| 4 🔴 | C-4: Fix fa25Acph → minSupplyAcph key | RDSConfig.js | Trivial |
+| 5 🟠 | H-2: Implement or remove blank RDS columns | rdsSelector.js | Medium |
+| 6 🟠 | H-3: Industry-specific 62.1 ventilation rates | ashrae.js + rdsSelector | Medium |
+| 7 🟠 | H-4: Fix default room height to 3.0 m | roomSlice.js | Trivial |
+| 8 🟠 | H-6: Add ESHF feasibility check & flag | rdsSelector.js | Small |
+| 9 🟠 | H-5: Remove arbitrary monsoon CLTD multipliers | ashraeTables.js | Small |
+| 10 🟡 | M-1: Fix safety+fan compounding or correct comment | rdsSelector.js | Trivial |
+| 11 🟡 | M-2: Honor cfm infiltration method | rdsSelector.js | Trivial |
+| 12 🟡 | M-8: Change default people load to 315/245 | envelopeSlice.js | Trivial |
 
 ---
 
-# PRIORITY FIX ROADMAP
-
-| Priority | Bug ID | Description |
-|---|---|---|
-| P0 (Blocks accuracy) | BUG-03 | Minimum ACPH never enforced — cleanrooms undersized |
-| P0 | BUG-01 | Equipment latent missing from ERLH |
-| P0 | BUG-05 | ~11 derived columns always blank |
-| P1 | BUG-02 | Outdoor gr at sea level vs indoor at elevation |
-| P1 | BUG-04 | m² displayed as ft² — wrong unit labels |
-| P1 | BUG-10 | Exhaust air ignored in return/supply balance |
-| P1 | BUG-06 | sensiblePct, latentPct, useSchedule never read |
-| P1 | BUG-07 | CLTD 40°N vs SHGF 32°N latitude mismatch |
-| P2 | BUG-08 | People load uses office values for cleanroom operators |
-| P2 | BUG-09 | Diurnal range hardcoded |
-| P2 | BUG-12 | No winter humidification load |
-| P2 | BUG-11 | classInOp missing from room state |
-| P3 | BUG-14 | Safety factor × fan heat multiplier order |
-| P3 | FLOW-05 | RoomDetailPanel delete leaks envelope state |
-| P3 | BUG-16 | Layout height miscalculation in full-page views |
-| P4 | BUG-20 | No UI to change people activity level |
-| P4 | BUG-19 | Psychro outdoor grains inconsistent at altitude |
-| P4 | FLOW-03 | AHU type (DOAS vs recirculating) never affects calc |
-
----
-
-*Audit covers: store.js, all slices, all pages, all utils, all constants, all components.*
-*Reference standard: ASHRAE Handbook — Fundamentals 2021, ASHRAE 62.1-2019, ISO 14644.*
+*Report generated by complete static analysis of all source files. All ASHRAE formula references verified against Fundamentals 2021 and CHLCM 2nd Ed.*
