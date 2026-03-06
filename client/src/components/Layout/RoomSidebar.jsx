@@ -1,78 +1,97 @@
-import React from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { 
-  selectAllRooms, 
-  selectActiveRoomId, 
-  setActiveRoom, 
-} from '../../features/room/roomSlice';
-import { addNewRoom } from '../../features/room/roomActions';
+/**
+ * RoomSidebar.jsx
+ * Responsibility: Render the project room list sidebar.
+ *
+ * Thin shell — owns only layout structure:
+ *   - Header with "Add Room" button
+ *   - Scrollable room list (delegates to RoomSidebarItem)
+ *   - Footer with aggregate stats
+ *
+ * All data and dispatch logic lives in useRoomSidebar.
+ * All per-room rendering lives in RoomSidebarItem.
+ *
+ * Fixes vs old version:
+ *   - h-[calc(100vh-64px)] → h-full (BUG-16 FIX: fills AppLayout flex-1 correctly)
+ *   - Raw SVG plus icon → lucide-react Plus
+ *   - Dead import React removed (React 17+ JSX transform)
+ *   - Footer shows total area m² in addition to zone count
+ *   - aria-label on add button
+ */
+
+import React               from 'react';
+import { Plus }            from 'lucide-react';
+import useRoomSidebar      from '../../hooks/useRoomSidebar';
+import RoomSidebarItem     from './RoomSidebarItem';
 
 export default function RoomSidebar() {
-  const dispatch = useDispatch();
-  const rooms = useSelector(selectAllRooms);
-  const activeRoomId = useSelector(selectActiveRoomId);
+  const {
+    rooms,
+    activeRoomId,
+    totalAreaM2,
+    onAddRoom,
+    onSelectRoom,
+    onDeleteRoom,
+  } = useRoomSidebar();
 
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-[calc(100vh-64px)] shrink-0">
-      
-      {/* Header */}
-      <div className="p-4 border-b border-gray-100 flex justify-between items-center">
-        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Project Zones</h3>
-        <button 
-          onClick={() => dispatch(addNewRoom())}
-          className="text-blue-600 hover:bg-blue-50 p-1 rounded transition-colors"
-          title="Add New Room"
+    // BUG-16 FIX: h-full fills AppLayout's flex-1 <main> container.
+    // Old h-[calc(100vh-64px)] only subtracted header height and broke
+    // when TabNav height changed.
+    <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-full shrink-0">
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center shrink-0">
+        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+          Project Zones
+        </h3>
+        <button
+          onClick={onAddRoom}
+          aria-label="Add new room"
+          title="Add new room"
+          className="
+            text-blue-600 hover:bg-blue-50
+            p-1.5 rounded-md transition-colors
+          "
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
-          </svg>
+          <Plus className="w-4 h-4" aria-hidden="true" />
         </button>
       </div>
 
-      {/* Room List */}
+      {/* ── Room list ───────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {rooms.length === 0 ? (
-          <div className="p-4 text-center text-sm text-gray-400 italic">
-            No rooms added yet.
+          <div className="p-6 text-center">
+            <div className="text-2xl mb-2">📐</div>
+            <p className="text-sm text-gray-500 font-medium">No rooms yet</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Click <strong>+</strong> to add your first zone.
+            </p>
           </div>
         ) : (
-          <ul className="divide-y divide-gray-50">
+          <ul className="divide-y divide-gray-50" role="list" aria-label="Project rooms">
             {rooms.map((room) => (
-              <li key={room.id}>
-                <button
-                  onClick={() => dispatch(setActiveRoom(room.id))}
-                  className={`w-full text-left px-4 py-3 transition-colors flex items-center justify-between group
-                    ${activeRoomId === room.id 
-                      ? 'bg-blue-50 border-r-4 border-blue-600' 
-                      : 'hover:bg-gray-50 border-r-4 border-transparent'
-                    }`}
-                >
-                  <div>
-                    <div className={`text-sm font-bold ${activeRoomId === room.id ? 'text-blue-900' : 'text-gray-700'}`}>
-                      {room.name}
-                    </div>
-                    <div className="text-[10px] text-gray-400 font-mono mt-0.5">
-                      {room.roomNo || 'NO #'} • {room.floorArea} ft²
-                    </div>
-                  </div>
-                  
-                  {activeRoomId === room.id && (
-                    <span className="text-blue-600">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </span>
-                  )}
-                </button>
-              </li>
+              <RoomSidebarItem
+                key={room.id}
+                room={room}
+                isActive={activeRoomId === room.id}
+                onSelect={() => onSelectRoom(room.id)}
+                onDelete={onDeleteRoom}
+              />
             ))}
           </ul>
         )}
       </div>
 
-      {/* Footer Stats */}
-      <div className="p-4 bg-gray-50 border-t border-gray-200 text-xs text-gray-500 text-center">
-        {rooms.length} Total Zones
+      {/* ── Footer stats ────────────────────────────────────────────────── */}
+      <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 shrink-0">
+        <div className="flex justify-between items-center text-xs text-gray-500">
+          <span>
+            <strong className="text-gray-700">{rooms.length}</strong> zone{rooms.length !== 1 ? 's' : ''}
+          </span>
+          <span className="font-mono text-gray-400">
+            {totalAreaM2.toLocaleString(undefined, { maximumFractionDigits: 0 })} m² total
+          </span>
+        </div>
       </div>
     </div>
   );
