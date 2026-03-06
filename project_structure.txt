@@ -10,7 +10,9 @@
 │   │   └── components/
 │   │   │   └── Layout/
 │   │   │   │   └── Header.jsx
+│   │   │   │   └── HeaderBadge.jsx
 │   │   │   │   └── RoomSidebar.jsx
+│   │   │   │   └── RoomSidebarItem.jsx
 │   │   │   │   └── TabNav.jsx
 │   │   │   └── UI/
 │   │   │   │   └── BtuBadge.jsx
@@ -52,9 +54,16 @@
 │   │   │   └── useNumberControl.js
 │   │   │   └── useProjectTotals.js
 │   │   │   └── useRdsRow.js
+│   │   │   └── useRoomSidebar.js
 │   │   └── pages/
 │   │   │   └── rds/
+│   │   │   │   └── sections/
+│   │   │   │   │   └── loadsSections.js
+│   │   │   │   │   └── psychroSections.js
+│   │   │   │   │   └── resultsSections.js
+│   │   │   │   │   └── setupSections.js
 │   │   │   │   └── RDSCellComponents.jsx
+│   │   │   │   └── RdsCellRenderer.jsx
 │   │   │   │   └── RDSConfig.js
 │   │   │   │   └── rdsFieldUtils.js
 │   │   │   │   └── RDSRow.jsx
