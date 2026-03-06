@@ -46,6 +46,7 @@
  */
 
 import ASHRAE from '../../constants/ashrae';
+import { calculateVbz } from '../../constants/ventilation';
 
 // ── Fresh air Ra selector ─────────────────────────────────────────────────────
 /**
@@ -153,12 +154,11 @@ export const calculateAirQuantities = (
   const ahuType     = ahu?.type || 'Recirculating';
   const isDOAS      = ahuType === 'DOAS';
   const ventCategory = room.ventCategory || 'general';
-  const Ra          = getRaForCategory(ventCategory);
-
-  const vbz = Math.ceil(
-    (ASHRAE.VENT_PEOPLE_CFM * pplCount) +
-    (Ra                     * floorAreaFt2)
-  );
+  const vbz = calculateVbz(
+  room.ventCategory,
+  pplCount,
+  floorAreaFt2,
+);
 
   // DOAS: entire supply is outdoor air.
   // Recirculating: minimum outdoor air = Vbz only.

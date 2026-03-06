@@ -1,40 +1,50 @@
 // src/features/room/roomActions.js
 import { addRoom as addRoomAction, deleteRoom } from './roomSlice';
-import { initializeRoom, removeRoomEnvelope } from '../envelope/envelopeSlice';
+import { initializeRoom, removeRoomEnvelope }   from '../envelope/envelopeSlice';
+import { getAcphDefaults }                       from '../../constants/isoCleanroom';
 
-// ── ID generator — duplicated here from roomSlice so the thunk owns the ID ───
-// FLOW-06 FIX: previously addNewRoom() dispatched addRoomAction() and then
-// read state.room.activeRoomId to get the new room's ID.
-// That works only because addRoom() happens to set activeRoomId synchronously.
-// If addRoom() were ever refactored to NOT set activeRoomId (e.g. to support
-// bulk import), initializeRoom() would receive the wrong ID silently.
-//
-// Fix: generate the ID HERE in the thunk before any dispatch.
-// Pass it explicitly to both addRoomAction and initializeRoom.
-// Neither call depends on the other's side-effects — fully decoupled.
+// ── ID generator ──────────────────────────────────────────────────────────────
+// FLOW-06 FIX: generate ID here in the thunk before any dispatch.
+// Neither addRoomAction nor initializeRoom depend on each other's side-effects.
 const generateRoomId = () =>
   `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
 /**
  * addNewRoom()
- * Thunk: creates a new room AND initializes its envelope data atomically.
+ * Thunk: creates a new room AND initializes its envelope atomically.
  *
- * The ID is generated once here and passed explicitly to both slices.
- * This eliminates the dependency on addRoom() setting activeRoomId as a
- * side-effect before getState() is called.
+ * ACPH defaults are pre-populated from isoCleanroom.js based on the
+ * room's default ISO classification (ISO 7 for new rooms).
+ * This means minAcph and designAcph are never 0 on a freshly created room —
+ * the selector can immediately compute a valid supply air value.
  */
 export const addNewRoom = () => (dispatch) => {
   const newId = generateRoomId();
 
-  // Both dispatches use the same pre-generated ID — no getState() needed.
-  dispatch(addRoomAction(newId));     // roomSlice: add room with this ID
-  dispatch(initializeRoom(newId));    // envelopeSlice: create empty envelope
+  // getAcphDefaults reads from ACPH_RANGES in isoCleanroom.js.
+  // New rooms default to ISO 7 (GMP Grade C — most common in our target markets).
+  // This matches makeRoom()'s atRestClass default in roomSlice.
+  const { minAcph, designAcph } = getAcphDefaults('ISO 7');
+
+  // Pass the pre-computed ACPH defaults alongside the ID.
+  // roomSlice.addRoom() merges these into the makeRoom() template.
+  dispatch(addRoomAction({
+    id: newId,
+    minAcph,
+    designAcph,
+  }));
+
+  // Envelope initialized with same ID — fully decoupled from addRoomAction.
+  dispatch(initializeRoom(newId));
 };
 
 /**
  * deleteRoomWithCleanup(roomId)
  * Thunk: removes room from roomSlice AND its envelope from envelopeSlice.
- * FLOW-05 FIX (applied in RoomDetailPanel.jsx Step 3).
+ *
+ * FLOW-05 FIX: plain deleteRoom() only removes from roomSlice.list —
+ * envelopeSlice.byRoomId[id] leaks memory on every delete.
+ * This thunk removes from both slices atomically.
  */
 export const deleteRoomWithCleanup = (roomId) => (dispatch) => {
   dispatch(deleteRoom(roomId));
