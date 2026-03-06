@@ -3,20 +3,20 @@ import { NavLink } from 'react-router-dom';
 
 export default function TabNav() {
   const tabs = [
-    // 1. RDS is now the FIRST tab as requested
     
     
-    // 2. Project & Climate follow
+    
+    
     { id: 'project', label: 'Project Info', path: '/project' },
     { id: 'rds', label: 'RDS Input (Master)', path: '/rds' },
     { id: 'climate', label: 'Climate', path: '/climate' },
     
-    // 3. Detailed Configs
+    
     { id: 'room', label: 'Room Geometry', path: '/room' },
     { id: 'envelope', label: 'Envelope & Loads', path: '/envelope' },
     { id: 'ahu', label: 'AHU Config', path: '/ahu' },
     
-    // 4. Output
+    
     { id: 'results', label: 'Results', path: '/results' },
   ];
 
