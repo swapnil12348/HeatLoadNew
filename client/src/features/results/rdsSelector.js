@@ -26,6 +26,7 @@ import { calculateAllSeasonOALoads }      from './outdoorAirLoad';
 import { calculateHeatingHumid }          from './heatingHumid';
 import { calculatePipeSizing }            from './pipeSizing';
 import { calculateAllSeasonStatePoints }  from './psychroStatePoints';
+import { m2ToFt2, m3ToFt3 } from '../../utils/units';
 
 import { calculateGrains }  from '../../utils/psychro';
 import ASHRAE               from '../../constants/ashrae';
