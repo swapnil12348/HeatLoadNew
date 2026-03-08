@@ -206,6 +206,8 @@ export const FormSelect = ({
 
 // ── SeasonBadge ───────────────────────────────────────────────────────────────
 // Coloured pill badge for season labels.
+
+
 // Consumed by RoomDetailPanel section dividers and rdsSeasons column headers.
 //
 // FIX: keys are now lowercase to match rdsSeasons.js which passes
