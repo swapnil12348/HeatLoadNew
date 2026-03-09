@@ -94,7 +94,7 @@
 import { calculateGrains, sensibleFactor, latentFactor } from '../../utils/psychro';
 import { cToF, KW_TO_BTU_HR }                           from '../../utils/units';
 import ASHRAE                                            from '../../constants/ashrae';
-import { calcTotalEnvelopeGain }                         from '../../utils/envelopeCalc';
+import { calcTotalEnvelopeGain }                         from '../../utils/envelopeAggregator';
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
