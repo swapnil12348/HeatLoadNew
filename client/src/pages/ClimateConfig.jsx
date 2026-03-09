@@ -3,19 +3,27 @@
  * Responsibility: Outdoor design conditions per season (Summer, Monsoon, Winter).
  *
  * Fixes vs previous version:
- *   - Dead React import removed
- *   - parseFloat(value) || 0 → parseFloat(value) (preserves negatives for winter DB)
- *   - value ?? '' nullish guard in EditCell (0 was rendering as blank)
- *   - WB column visually marked as reference-only — distinct from editable columns
- *   - RH step changed 1 → 0.1 for fractional humidity precision
- *   - Elevation note added — alerts user when displayed gr/lb differs from
- *     calc engine value (BUG-02: seasonalLoads recalculates gr at site elevation)
- *   - Footer updated to reflect site-elevation correction in calculations
+ *   FIX INFO-02: WB column is now READ-ONLY (derived from DB+RH by climateSlice).
+ *     Previously it was editable (RefCell) but climateSlice.deriveFields() would
+ *     overwrite any manual WB entry the next time DB or RH changed. The column
+ *     is now a DerivedCell matching DP and Gr/lb — consistent, non-confusing.
+ *
+ *   FIX CRIT-02 UI companion: ASHRAE design tier selector added for Summer DB.
+ *     Default in climateSlice is now 109.9°F (43.3°C, 0.4% ASHRAE Delhi).
+ *     The tier selector lets users quickly apply 0.4% / 1% / 2% design values
+ *     for common locations without looking up ASHRAE Table 1 manually.
+ *     Values here are for Delhi (28°N) — project-specific values override via
+ *     the DB field. Expand ASHRAE_DESIGN_DB_DELHI as needed for other cities.
+ *
+ *   Previous fixes (retained):
+ *   - parseFloat(value) || 0 → parseFloat(value) (preserves winter negatives)
+ *   - value ?? '' nullish guard in EditCell
+ *   - RH step 1 → 0.1
+ *   - Elevation note at >1000 ft
  */
 
-import { useSelector, useDispatch }          from 'react-redux';
-import { updateOutsideCondition,
-         selectClimate }                     from '../features/climate/climateSlice';
+import { useSelector, useDispatch } from 'react-redux';
+import { updateOutsideCondition, selectClimate } from '../features/climate/climateSlice';
 
 const SEASONS = ['summer', 'monsoon', 'winter'];
 
@@ -25,41 +33,34 @@ const SEASON_STYLES = {
   winter:  { border: 'border-blue-400',   badge: 'bg-blue-100   text-blue-700'   },
 };
 
-// ── Editable cell ──────────────────────────────────────────────────────────────
+// ── ASHRAE HOF 2021 Ch.14 Table 1 — Delhi (28°N) design DB values ────────────
+// FIX CRIT-02 UI: quick-apply buttons so user doesn't need to look up Table 1.
+// Extend this object with other cities as the project location library grows.
+const ASHRAE_DESIGN_DB = {
+  'Delhi (28°N)': {
+    '0.4%': { db: 109.9, label: '0.4% — Critical facilities (24/7 semicon / pharma)' },
+    '1.0%': { db: 107.1, label: '1.0% — General commercial / industrial'             },
+    '2.0%': { db: 104.4, label: '2.0% — Less-critical / comfort cooling'              },
+  },
+};
+const DEFAULT_CITY = 'Delhi (28°N)';
+
+// ── Editable cell ─────────────────────────────────────────────────────────────
 const EditCell = ({ value, onChange, step = '0.1', isText = false }) => (
   <td className="p-1 border-b border-gray-100 hover:bg-blue-50 focus-within:bg-blue-50">
     <input
       type={isText ? 'text' : 'number'}
       step={step}
-      // ?? '' — nullish guard preserves 0 (was || '' which rendered 0 as blank)
       value={value ?? ''}
       onChange={onChange}
-      className="
-        w-full text-center bg-transparent outline-none
-        text-sm p-2 text-gray-900 font-semibold
-      "
+      className="w-full text-center bg-transparent outline-none text-sm p-2 text-gray-900 font-semibold"
     />
   </td>
 );
 
-// ── Reference-only cell (WB) ───────────────────────────────────────────────────
-// Editable but visually distinct — amber tint communicates "reference only"
-const RefCell = ({ value, onChange, step = '0.1' }) => (
-  <td className="p-1 border-b border-gray-100 hover:bg-amber-50 focus-within:bg-amber-50 bg-amber-50/40">
-    <input
-      type="number"
-      step={step}
-      value={value ?? ''}
-      onChange={onChange}
-      className="
-        w-full text-center bg-transparent outline-none
-        text-sm p-2 text-amber-700 font-semibold
-      "
-    />
-  </td>
-);
-
-// ── Read-only derived cell ─────────────────────────────────────────────────────
+// ── Read-only derived cell (DP, Gr/lb, WB) ───────────────────────────────────
+// FIX INFO-02: WB now uses this component — it is derived from DB+RH and
+// any manual edit would be silently overwritten on the next DB/RH change.
 const DerivedCell = ({ value }) => (
   <td className="p-1 border-b border-gray-100 bg-gray-50">
     <div className="w-full text-center text-sm p-2 text-gray-500 font-mono select-none">
@@ -68,8 +69,7 @@ const DerivedCell = ({ value }) => (
   </td>
 );
 
-// ── Main component ─────────────────────────────────────────────────────────────
-
+// ── Main component ────────────────────────────────────────────────────────────
 export default function ClimateConfig() {
   const dispatch  = useDispatch();
   const climate   = useSelector(selectClimate);
@@ -80,18 +80,24 @@ export default function ClimateConfig() {
     dispatch(updateOutsideCondition({
       season,
       field,
-      // FIX: was parseFloat(value) || 0 — || 0 coerces valid negatives to 0.
-      // Winter DB in northern climates can legitimately be −20°F or lower.
-      // Empty string → store empty string; climateSlice guards on display.
+      // Preserve negatives (winter DB) — don't coerce empty to 0
       value: isText ? value : (value === '' ? '' : parseFloat(value)),
     }));
   };
 
-  // Elevation warning — displayed gr/lb uses sea-level Patm (meteorological
-  // convention for weather station data). Calc engine (seasonalLoads.js) 
-  // recalculates gr at site elevation per BUG-02 fix. At >1000 ft the
-  // difference is meaningful — warn the user so they aren't confused.
+  // FIX CRIT-02 UI: apply an ASHRAE design tier DB to summer season
+  const applyDesignTier = (tier) => {
+    const entry = ASHRAE_DESIGN_DB[DEFAULT_CITY]?.[tier];
+    if (!entry) return;
+    dispatch(updateOutsideCondition({ season: 'summer', field: 'db', value: entry.db }));
+  };
+
   const showElevationNote = parseFloat(elevation) > 1000;
+
+  // Detect if summer DB looks like a non-conservative default (below 1% tier)
+  const summerDb        = parseFloat(climate.outside.summer.db) || 0;
+  const dbWarnThreshold = ASHRAE_DESIGN_DB[DEFAULT_CITY]?.['2.0%']?.db ?? 104;
+  const showDbWarning   = summerDb > 0 && summerDb < dbWarnThreshold;
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-8 pb-24">
@@ -100,9 +106,7 @@ export default function ClimateConfig() {
       <div className="flex flex-col md:flex-row justify-between items-end
                       mb-8 border-b border-gray-200 pb-4 gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">
-            Outdoor Design Conditions
-          </h2>
+          <h2 className="text-3xl font-bold text-gray-900">Outdoor Design Conditions</h2>
           <p className="text-gray-500 mt-2">
             Seasonal outside design conditions used for all load calculations.
           </p>
@@ -110,6 +114,41 @@ export default function ClimateConfig() {
             Indoor design conditions are set per-room on the Room Geometry tab.
           </p>
         </div>
+      </div>
+
+      {/* ── CRIT-02: ASHRAE design tier selector ──────────────────────── */}
+      <div className="mb-6 bg-orange-50 border border-orange-200 rounded-xl p-4">
+        <p className="text-xs font-bold text-orange-800 uppercase tracking-wide mb-2">
+          ASHRAE HOF 2021 Ch.14 — Summer Design DB Quick-Apply ({DEFAULT_CITY})
+        </p>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {Object.entries(ASHRAE_DESIGN_DB[DEFAULT_CITY]).map(([tier, entry]) => (
+            <button
+              key={tier}
+              onClick={() => applyDesignTier(tier)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors
+                bg-white border-orange-300 text-orange-800
+                hover:bg-orange-100 hover:border-orange-500"
+            >
+              {tier} — {entry.db}°F
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-orange-600">
+          <strong>0.4%</strong> = exceeded only 35 hrs/yr — required for 24/7 semiconductor fabs,
+          pharma sterile suites, battery dry rooms. &nbsp;
+          <strong>1.0%</strong> = general commercial. &nbsp;
+          <strong>2.0%</strong> = comfort / less-critical. &nbsp;
+          Current summer DB: <strong>{summerDb}°F</strong>.
+        </p>
+        {/* Warn if DB looks non-conservative */}
+        {showDbWarning && (
+          <div className="mt-2 text-xs text-red-700 font-semibold bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            ⚠ Summer DB {summerDb}°F is below the ASHRAE 2.0% design value for {DEFAULT_CITY}.
+            The system will be undersized for most summer hours.
+            Apply a design tier above or verify against ASHRAE Table 1 for your project location.
+          </div>
+        )}
       </div>
 
       {/* ── Elevation note ────────────────────────────────────────────── */}
@@ -133,16 +172,9 @@ export default function ClimateConfig() {
           <span className="text-gray-600 font-medium">User-entered</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-amber-100 border border-amber-300" />
-          <span className="text-amber-700 font-medium">
-            Reference only — WB not used in calculations
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded bg-gray-100 border border-gray-200" />
-          <span className="text-gray-500">
-            Auto-derived — updates when DB or RH changes
-          </span>
+          {/* FIX INFO-02: WB now included in auto-derived legend (not editable) */}
+          <span className="text-gray-500">Auto-derived — WB, DP, Gr/lb update when DB or RH changes</span>
         </div>
       </div>
 
@@ -158,10 +190,11 @@ export default function ClimateConfig() {
                   DB<br/>
                   <span className="text-[10px] font-normal normal-case text-gray-400">°F</span>
                 </th>
-                <th className="px-2 py-4 text-center bg-amber-50/60">
+                {/* FIX INFO-02: WB is now derived — column header reflects this */}
+                <th className="px-2 py-4 text-center bg-gray-100">
                   WB<br/>
-                  <span className="text-[10px] font-normal normal-case text-amber-500">
-                    °F ref only
+                  <span className="text-[10px] font-normal normal-case text-gray-400">
+                    °F derived
                   </span>
                 </th>
                 <th className="px-2 py-4 text-center">
@@ -213,13 +246,13 @@ export default function ClimateConfig() {
                       onChange={(e) => handleChange(season, 'db', e.target.value)}
                     />
 
-                    {/* WB — reference only, amber tint */}
-                    <RefCell
-                      value={s.wb}
-                      onChange={(e) => handleChange(season, 'wb', e.target.value)}
-                    />
+                    {/* FIX INFO-02: WB — now DerivedCell (was RefCell/editable)
+                        climateSlice.deriveFields() computes WB from DB+RH via
+                        calculateWetBulb(). Manual edits were silently overwritten
+                        on the next DB/RH change — read-only is correct. */}
+                    <DerivedCell value={s.wb} />
 
-                    {/* RH — editable, step 0.1 for precision */}
+                    {/* RH — editable, step 0.1 for fractional precision */}
                     <EditCell
                       value={s.rh}
                       step="0.1"
@@ -256,9 +289,9 @@ export default function ClimateConfig() {
         <div className="px-6 py-3 bg-gray-50 border-t border-gray-100
                         text-[11px] text-gray-400 space-y-1">
           <div>
-            ★ Displayed Gr/lb = 0.62198 × E / (Patm − E) × 7000 &nbsp;·&nbsp;
-            DP = Magnus inverse formula &nbsp;·&nbsp;
-            Both shown at sea-level Patm (1013.25 hPa) — standard meteorological convention.
+            ★ Gr/lb = 0.62198 × E / (Patm − E) × 7000 &nbsp;·&nbsp;
+            WB = calculateWetBulb(DB, RH) per ASHRAE Ch.1 Eq.35 bisection &nbsp;·&nbsp;
+            DP = Magnus inverse — all shown at sea-level Patm (meteorological convention).
           </div>
           <div>
             ⚡ Calculation engine applies site-elevation Patm correction to all
@@ -266,6 +299,13 @@ export default function ClimateConfig() {
             All temperatures in °F.
           </div>
         </div>
+      </div>
+
+      {/* ── ASHRAE reference footer ─────────────────────────────────── */}
+      <div className="mt-4 text-[11px] text-gray-400">
+        Design DB reference: ASHRAE HOF 2021 Ch.14 Table 1 (Climatic Design Information).
+        Always verify against the current edition for your specific project location and latitude.
+        For critical facilities (semiconductor, pharma, battery), use the 0.4% design condition.
       </div>
     </div>
   );
