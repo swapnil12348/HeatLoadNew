@@ -19,6 +19,20 @@
  *                         SA_DB = CL_DB × (1−BF) + RA_DB × BF
  *                         SA_gr = CL_gr × (1−BF) + RA_gr × BF
  *
+ * ── WINTER MODEL BOUNDARY ────────────────────────────────────────────────────
+ *
+ *   The ADP-bypass model applies to COOLING MODE ONLY.
+ *   In winter, the cooling coil is OFF; the ADP concept is meaningless.
+ *
+ *   Winter state points are therefore set as follows:
+ *     CL (coil leaving) = RA (return air) — no cooling, no dehumidification
+ *     SA (supply air)   = RA              — supply is room setpoint
+ *   This reflects steady-state winter operation where the AHU is in heating/
+ *   humidification mode. Actual winter supply air temperature (post-heat coil)
+ *   and humidity ratio (post-humidifier) are computed in heatingHumid.js.
+ *
+ *   CONSEQUENCE: coil_shr and coil_contactFactor are derived from summer only.
+ *
  * ── PSYCHROMETRIC PROPERTIES COMPUTED PER POINT ──────────────────────────────
  *
  *   DB    — dry-bulb temperature (°F)
@@ -30,64 +44,33 @@
  * ── ALTITUDE CORRECTION ──────────────────────────────────────────────────────
  *
  *   All gr calculations use site Patm via elevation parameter.
- *   ASHRAE Ch.1 Eq.3: Patm = 29.921 × (1 − 6.8754×10⁻⁶ × elev)^5.2559 inHg
- *   This corrects the humidity ratio for reduced atmospheric pressure at altitude.
  *   WB iterative method also uses site Patm (psychro.js handles this internally).
- *
- * ── SIGN / VALUE CONVENTIONS ─────────────────────────────────────────────────
- *
- *   All temperatures in °F.
- *   All humidity ratios in gr/lb (grains per pound of dry air).
- *   All enthalpies in BTU/lb dry air.
- *   All values returned as strings toFixed(1) or toFixed(2) for display.
- *   Numeric versions available as _num suffix for downstream calculations.
  */
 
 import {
   calculateGrains,
   calculateEnthalpy,
   calculateWetBulb,
+  calculateRH,          // FIX PSP-01: imported from psychro.js (replaces local rhFromGrains)
 } from '../../utils/psychro';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Derive RH from humidity ratio and DB at a given elevation.
- * Used to back-calculate RH for mixed air and supply air state points
- * where we know gr but not RH directly.
- *
- * @param {number} grains    - humidity ratio (gr/lb)
- * @param {number} dbF       - dry-bulb temperature (°F)
- * @param {number} elevation - site elevation (ft)
- * @returns {number} relative humidity (%)
- */
-const rhFromGrains = (grains, dbF, elevation = 0) => {
-  const grainsSat = calculateGrains(dbF, 100, elevation);
-  return grainsSat > 0 ? Math.min(100, (grains / grainsSat) * 100) : 50;
-};
-
-/**
  * Compute the full psychrometric state for one air point.
  * Returns both display strings and numeric values.
  *
+ * FIX PSP-01: The previous local rhFromGrains(grains, dbF, elevation) function
+ * is removed. calculateRH(dbF, grains, elevFt) from psychro.js is the single
+ * source of truth — it uses the Hyland-Wexler saturation pressure equation,
+ * which is correct for sub-zero dew point conditions (1%RH critical facilities).
+ *
  * @param {number} dbF       - dry-bulb temperature (°F)
  * @param {number} grains    - humidity ratio (gr/lb)
  * @param {number} elevation - site elevation (ft)
- * @returns {{
- *   db:     string,   DB (°F) toFixed(1)
- *   wb:     string,   WB (°F) toFixed(1)
- *   gr:     string,   gr/lb   toFixed(1)
- *   enth:   string,   BTU/lb  toFixed(2)
- *   rh:     string,   RH%     toFixed(1)
- *   db_num: number,
- *   wb_num: number,
- *   gr_num: number,
- *   enth_num: number,
- *   rh_num:   number,
- * }}
  */
 const computeStatePoint = (dbF, grains, elevation = 0) => {
-  const rh   = rhFromGrains(grains, dbF, elevation);
+  const rh   = calculateRH(dbF, grains, elevation); // FIX PSP-01: was local rhFromGrains
   const wb   = calculateWetBulb(dbF, rh, elevation);
   const enth = calculateEnthalpy(dbF, grains);
 
@@ -113,7 +96,7 @@ const computeStatePoint = (dbF, grains, elevation = 0) => {
  * calculatePsychroStatePoints()
  *
  * Computes psychrometric state points for all six AHU air streams
- * across all three seasons for one room.
+ * for one room and one season.
  *
  * @param {object} climate        - full climate state (state.climate)
  * @param {string} season         - 'summer' | 'monsoon' | 'winter'
@@ -124,17 +107,6 @@ const computeStatePoint = (dbF, grains, elevation = 0) => {
  * @param {number} freshAirCFM    - fresh air CFM (freshAirCheck)
  * @param {number} supplyAir      - total supply air CFM
  * @param {number} elevation      - site elevation (ft)
- *
- * @returns {{
- *   amb:       object,   ambient / outdoor air state point
- *   fa:        object,   fresh air state point (= ambient, no pre-treatment)
- *   ra:        object,   return air state point (room setpoint)
- *   ma:        object,   mixed air state point (RA + FA blend)
- *   cl:        object,   coil leaving air state point (saturated at ADP)
- *   sa:        object,   supply air state point (coil leaving + bypass blend)
- *   sensibleHeatRatio: string,  SHR = sensible / total coil load, toFixed(3)
- *   contactFactor:     string,  CF = 1 − BF, toFixed(3)
- * }}
  */
 export const calculatePsychroStatePoints = (
   climate,
@@ -156,7 +128,7 @@ export const calculatePsychroStatePoints = (
 
   // ── 2. Fresh air ───────────────────────────────────────────────────────────
   // No pre-treatment assumed — FA state = ambient state.
-  // If pre-cooling/pre-heating is added in future, this is the place to modify.
+  // If pre-cooling/pre-heating is modelled in future, modify here.
   const fa = { ...amb };
 
   // ── 3. Return air (room setpoint) ──────────────────────────────────────────
@@ -164,60 +136,71 @@ export const calculatePsychroStatePoints = (
   const ra   = computeStatePoint(dbInF, raGr, elevation);
 
   // ── 4. Mixed air (RA + FA blend by CFM fraction) ───────────────────────────
-  // MA_DB = (RA_CFM × RA_DB + FA_CFM × FA_DB) / total_CFM
-  // MA_gr = (RA_CFM × RA_gr + FA_CFM × FA_gr) / total_CFM
-  // Guards against divide-by-zero on zero-CFM rooms.
-  const totalCFM  = Math.max(1, supplyAir);
-  const faCFM     = Math.min(freshAirCFM, totalCFM);
-  const raCFM     = Math.max(0, totalCFM - faCFM);
+  const totalCFM = Math.max(1, supplyAir);
+  const faCFM    = Math.min(freshAirCFM, totalCFM);
+  const raCFM    = Math.max(0, totalCFM - faCFM);
 
   const maDB = (raCFM * dbInF  + faCFM * ambDB) / totalCFM;
   const maGr = (raCFM * raGr   + faCFM * ambGr) / totalCFM;
   const ma   = computeStatePoint(maDB, maGr, elevation);
 
-  // ── 5. Coil leaving air (saturated at ADP) ─────────────────────────────────
-  // By definition: air leaves the cooling coil saturated at ADP.
-  // DB = WB = ADP, RH = 100%, gr = humidity ratio at ADP saturated.
-  const grADP  = calculateGrains(adpF, 100, elevation);
-  const clDB   = adpF;
-  const clGr   = grADP;
-  const clEnth = calculateEnthalpy(clDB, clGr);
-  const cl = {
-    db:       clDB.toFixed(1),
-    wb:       clDB.toFixed(1),    // WB = DB at saturation
-    gr:       clGr.toFixed(1),
-    enth:     clEnth.toFixed(2),
-    rh:       '100.0',
-    db_num:   clDB,
-    wb_num:   clDB,
-    gr_num:   clGr,
-    enth_num: clEnth,
-    rh_num:   100,
-  };
+  // ── 5 + 6: Season-aware coil leaving and supply air ───────────────────────
+  // FIX PSP-02: Winter uses heating mode — ADP-bypass model does not apply.
+  //
+  // COOLING (summer, monsoon):
+  //   CL = saturated air at ADP, DB = WB = ADP, RH = 100%.
+  //   SA = ADP-bypass blend: SA_DB = CL_DB(1-BF) + RA_DB×BF
+  //
+  // HEATING (winter):
+  //   The cooling coil is OFF. No dehumidification occurs.
+  //   CL = RA (return air — coil passes air through unchanged).
+  //   SA = RA (steady-state: supply = room conditions before heating coil).
+  //   Actual post-heat-coil and post-humidifier conditions are in heatingHumid.js.
+  let cl, sa, shr, contactFactor;
 
-  // ── 6. Supply air (ADP-bypass blend) ───────────────────────────────────────
-  // SA_DB = CL_DB × (1−BF) + RA_DB × BF
-  // SA_gr = CL_gr × (1−BF) + RA_gr × BF
-  // This is the fundamental ADP-bypass coil model from ASHRAE HOF Ch.18.
-  const saDB = clDB * (1 - bf) + dbInF * bf;
-  const saGr = clGr * (1 - bf) + raGr  * bf;
-  const sa   = computeStatePoint(saDB, saGr, elevation);
+  if (season === 'winter') {
+    // FIX PSP-02: Winter heating mode — no ADP, no bypass, no dehumidification
+    cl = { ...ra };     // coil leaving = return air (coil off)
+    sa = { ...ra };     // supply air   = return air (setpoint maintained by heating)
+    shr           = 1.0;  // sensible-only in heating mode (no latent exchange at coil)
+    contactFactor = 1 - bf;
+  } else {
+    // Cooling mode: summer and monsoon
+    const grADP  = calculateGrains(adpF, 100, elevation);
+    const clDB   = adpF;
+    const clGr   = grADP;
+    const clEnth = calculateEnthalpy(clDB, clGr);
+    cl = {
+      db:       clDB.toFixed(1),
+      wb:       clDB.toFixed(1),   // WB = DB at saturation
+      gr:       clGr.toFixed(1),
+      enth:     clEnth.toFixed(2),
+      rh:       '100.0',
+      db_num:   clDB,
+      wb_num:   clDB,
+      gr_num:   clGr,
+      enth_num: clEnth,
+      rh_num:   100,
+    };
 
-  // ── 7. Derived coil performance metrics ───────────────────────────────────
+    // Supply air: ADP-bypass blend (ASHRAE HOF Ch.18)
+    const saDB = clDB * (1 - bf) + dbInF * bf;
+    const saGr = clGr * (1 - bf) + raGr  * bf;
+    sa = computeStatePoint(saDB, saGr, elevation);
 
-  // Sensible Heat Ratio (SHR):
-  //   SHR = (h_ra − h_sa_sensible_only) / (h_ra − h_sa_total)
-  //   Simplified using enthalpy difference:
-  //   sensible component = 0.240 × (RA_DB − SA_DB)  [BTU/lb]
-  //   total component    = RA_enth − SA_enth          [BTU/lb]
-  const enthDiff     = ra.enth_num - sa.enth_num;
-  const sensDiff     = 0.240 * (dbInF - saDB);
-  const shr          = enthDiff > 0
-    ? Math.min(1, Math.max(0, sensDiff / enthDiff))
-    : 1.0;
+    // ── 7. Coil SHR ──────────────────────────────────────────────────────────
+    // FIX PSP-03: Use moist-air Cp = 0.240 + 0.444×W [BTU/lb·°F]
+    //   (was 0.240 — dry air only, ~1.8% error at typical HVAC conditions)
+    // W = raGr / 7000 [lb moisture / lb dry air]
+    const cpMoist  = 0.240 + 0.444 * (raGr / 7000); // FIX PSP-03
+    const enthDiff = ra.enth_num - sa.enth_num;
+    const sensDiff = cpMoist * (dbInF - saDB);        // FIX PSP-03
+    shr = enthDiff > 0
+      ? Math.min(1, Math.max(0, sensDiff / enthDiff))
+      : 1.0;
 
-  // Contact factor = 1 − bypass factor (ASHRAE definition)
-  const contactFactor = 1 - bf;
+    contactFactor = 1 - bf;
+  }
 
   return {
     amb,
@@ -237,23 +220,10 @@ export const calculatePsychroStatePoints = (
  * calculateAllSeasonStatePoints()
  *
  * Runs calculatePsychroStatePoints() for all three seasons.
- * Returns a flat keyed object matching the existing rdsSelector
- * psychroFields naming convention:
+ * Returns a flat keyed object for spread into rdsSelector return.
  *
- *   {amb_db_summer, amb_wb_summer, ..., sa_enth_winter, ...}
- *
- * This allows a clean spread into the rdsSelector return object.
- *
- * @param {object} climate      - full climate state
- * @param {number} dbInF        - room design dry-bulb (°F)
- * @param {number} rhIn         - room design RH (%)
- * @param {number} adpF         - apparatus dew point (°F)
- * @param {number} bf           - bypass factor (0–1)
- * @param {number} freshAirCFM  - fresh air CFM
- * @param {number} supplyAir    - total supply CFM
- * @param {number} elevation    - site elevation (ft)
- *
- * @returns {object} flat psychroFields object for spread into rdsSelector return
+ * coil_shr and coil_contactFactor are derived from SUMMER ONLY.
+ * Winter psychro state points use the heating-mode model (see above).
  */
 export const calculateAllSeasonStatePoints = (
   climate,
@@ -309,7 +279,7 @@ export const calculateAllSeasonStatePoints = (
     fields[`sa_gr_${season}`]    = pts.sa.gr;
     fields[`sa_enth_${season}`]  = pts.sa.enth;
 
-    // Coil performance (summer only — single season metric)
+    // Coil performance — summer only (cooling mode metric)
     if (season === 'summer') {
       fields['coil_shr']           = pts.sensibleHeatRatio;
       fields['coil_contactFactor'] = pts.contactFactor;

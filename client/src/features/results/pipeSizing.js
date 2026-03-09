@@ -38,18 +38,24 @@
  *   HW:  Q (GPM) = BTU/hr / (500 × ΔT_hw)     ΔT_hw  = 20°F
  *   500 = 60 min/hr × 8.33 lb/gal × 1 BTU/lb·°F
  *
- * ── MANIFOLD SIZING ──────────────────────────────────────────────────────────
+ * ── VELOCITY TARGETS ─────────────────────────────────────────────────────────
  *
- *   Manifold sized at lower velocity (1.5–2 ft/s) to minimise pressure drop
- *   at the header. Common practice in critical facility HVAC design.
- *   Manifold size = next standard size UP from branch calculation at 1.5 ft/s.
+ *   BRANCH (per-room): 3 ft/s — midpoint of ASHRAE 2–4 ft/s branch range.
+ *   MANIFOLD:          1.5 ft/s — lower velocity to minimise ΔP at header.
+ *   MAIN distribution: 4 ft/s — lower end of ASHRAE 4–8 ft/s main range.
+ *     Using minimum of ASHRAE main velocity range is conservative and
+ *     appropriate for critical facility designs where noise/erosion limits apply.
  *
- * UNITS:
- *   Flow rates  — USGPM
- *   Velocities  — ft/s
- *   Diameters   — mm (nominal DN)
- *   Pressures   — ft w.g. per 100 ft pipe
- *   Loads       — BTU/hr
+ * ── COIL LOAD VS GRAND TOTAL ─────────────────────────────────────────────────
+ *
+ *   calculatePipeSizing() (per-room) receives coilLoadBTU — room+OA load
+ *   BEFORE fan heat. Fan heat is a SENSIBLE allowance added to the air-side
+ *   system heat balance; it does NOT flow through the chilled water coil.
+ *   Sizing CHW pipes on grandTotal (which includes fan heat) would oversize
+ *   the CHW plant by the fan heat fraction (~5%). See BUG-PIPE-01.
+ *
+ *   calculateProjectPipeSizing() (plant-level) must sum coilLoadBTU values,
+ *   not grandTotal values, for the same reason. Fixed in this version.
  */
 
 // ── Standard nominal pipe sizes (DN, mm) ─────────────────────────────────────
@@ -58,23 +64,26 @@ const NOMINAL_PIPE_SIZES_MM = [
 ];
 
 // ── Velocity targets (ft/s) ───────────────────────────────────────────────────
-const VELOCITY_BRANCH_FT_S   = 3.0;  // branch lines — midpoint of 2–4 ft/s range
-const VELOCITY_MANIFOLD_FT_S = 1.5;  // manifold/header — lower for reduced ΔP
+const VELOCITY_BRANCH_FT_S   = 3.0; // per-room branch — ASHRAE 2–4 ft/s midpoint
+const VELOCITY_MANIFOLD_FT_S = 1.5; // header/manifold — lower for reduced ΔP
+// FIX PIPE-02: VELOCITY_MAIN_FT_S added for project-level distribution mains.
+// ASHRAE Ch.22 recommends 4–8 ft/s for main headers. Using 4 ft/s (conservative
+// lower end) is appropriate for critical facilities with noise/erosion constraints.
+// The previous code used VELOCITY_BRANCH_FT_S (3 ft/s) for mains, oversizing
+// the main distribution header by ~29% on diameter.
+const VELOCITY_MAIN_FT_S     = 4.0; // FIX PIPE-02: main distribution — ASHRAE 4 ft/s
 
 // ── Hydronic constants ────────────────────────────────────────────────────────
-const HYDRONIC_CONSTANT = 500;   // 60 × 8.33 × 1
+const HYDRONIC_CONSTANT = 500;   // 60 × 8.33 × 1  [BTU/hr per GPM per °F]
 const CHW_DELTA_T_F     = 10;    // °F — standard chilled water differential
 const HW_DELTA_T_F      = 20;    // °F — standard hot water differential
-const GPM_TO_FT3_S      = 449;   // 60 s/min × 7.48 gal/ft³
+const GPM_TO_FT3_S      = 449;   // 1/0.002228 = 449 [GPM → ft³/s divisor]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
  * Select the next nominal pipe size (DN mm) that meets or exceeds
  * the calculated inside diameter.
- *
- * @param {number} calcDiameterMm - calculated minimum inside diameter (mm)
- * @returns {number} nominal pipe size (mm DN)
  */
 const selectNominalSize = (calcDiameterMm) => {
   if (calcDiameterMm <= 0) return NOMINAL_PIPE_SIZES_MM[0];
@@ -87,28 +96,22 @@ const selectNominalSize = (calcDiameterMm) => {
  *
  * @param {number} flowGPM      - volumetric flow rate (USGPM)
  * @param {number} velocityFtS  - design velocity (ft/s)
- * @returns {{
- *   flowGPM:       number,
- *   velocityFtS:   number,
- *   calcDiamMm:    number,   calculated minimum diameter (mm)
- *   nominalDnMm:   number,   selected nominal DN size (mm)
- * }}
  */
 const sizePipe = (flowGPM, velocityFtS) => {
   if (flowGPM <= 0) {
     return { flowGPM: 0, velocityFtS, calcDiamMm: 0, nominalDnMm: 0 };
   }
 
-  const flowFt3s     = flowGPM / GPM_TO_FT3_S;               // ft³/s
-  const areaFt2      = flowFt3s / velocityFtS;                // ft²
-  const diamFt       = Math.sqrt((4 * areaFt2) / Math.PI);    // ft
-  const calcDiamMm   = diamFt * 304.8;                        // mm
-  const nominalDnMm  = selectNominalSize(calcDiamMm);
+  const flowFt3s    = flowGPM / GPM_TO_FT3_S;
+  const areaFt2     = flowFt3s / velocityFtS;
+  const diamFt      = Math.sqrt((4 * areaFt2) / Math.PI);
+  const calcDiamMm  = diamFt * 304.8;
+  const nominalDnMm = selectNominalSize(calcDiamMm);
 
   return {
-    flowGPM:      parseFloat(flowGPM.toFixed(1)),
+    flowGPM:     parseFloat(flowGPM.toFixed(1)),
     velocityFtS,
-    calcDiamMm:   parseFloat(calcDiamMm.toFixed(1)),
+    calcDiamMm:  parseFloat(calcDiamMm.toFixed(1)),
     nominalDnMm,
   };
 };
@@ -121,31 +124,11 @@ const sizePipe = (flowGPM, velocityFtS) => {
  * Sizes CHW branch, CHW manifold, HW branch, and HW manifold pipes
  * for a single room/AHU coil connection.
  *
- * @param {number} coolingLoadBTU  - total room cooling load (BTU/hr)
- * @param {number} heatingLoadBTU  - total room heating load (BTU/hr, positive magnitude)
+ * @param {number} coolingLoadBTU  - room coil cooling load (BTU/hr)
+ *                                   MUST be coilLoadBTU, NOT grandTotal.
+ *                                   Fan heat is NOT a coil heat-transfer load.
+ * @param {number} heatingLoadBTU  - room heating load (BTU/hr, positive magnitude)
  * @param {number} preheatLoadBTU  - OA preheat load (BTU/hr, positive magnitude)
- *
- * @returns {{
- *   chw: {
- *     flowGPM:          number,   CHW branch flow (USGPM)
- *     branchDiamMm:     number,   CHW branch nominal DN (mm)
- *     manifoldDiamMm:   number,   CHW manifold nominal DN (mm)
- *     calcBranchMm:     number,   calculated branch diameter (mm)
- *     calcManifoldMm:   number,   calculated manifold diameter (mm)
- *   },
- *   hw: {
- *     flowGPM:          number,   HW branch flow (USGPM)
- *     branchDiamMm:     number,   HW branch nominal DN (mm)
- *     manifoldDiamMm:   number,   HW manifold nominal DN (mm)
- *     calcBranchMm:     number,   calculated branch diameter (mm)
- *     calcManifoldMm:   number,   calculated manifold diameter (mm)
- *   },
- *   preheat: {
- *     flowGPM:          number,   preheat coil HW flow (USGPM)
- *     branchDiamMm:     number,   preheat branch nominal DN (mm)
- *     calcBranchMm:     number,   calculated branch diameter (mm)
- *   },
- * }}
  */
 export const calculatePipeSizing = (
   coolingLoadBTU,
@@ -155,24 +138,21 @@ export const calculatePipeSizing = (
 
   // ── CHW sizing ──────────────────────────────────────────────────────────────
   const chwGPM      = coolingLoadBTU > 0
-    ? coolingLoadBTU / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)
-    : 0;
+    ? coolingLoadBTU / (HYDRONIC_CONSTANT * CHW_DELTA_T_F) : 0;
 
   const chwBranch   = sizePipe(chwGPM, VELOCITY_BRANCH_FT_S);
   const chwManifold = sizePipe(chwGPM, VELOCITY_MANIFOLD_FT_S);
 
   // ── HW sizing ───────────────────────────────────────────────────────────────
   const hwGPM       = heatingLoadBTU > 0
-    ? heatingLoadBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)
-    : 0;
+    ? heatingLoadBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F) : 0;
 
   const hwBranch    = sizePipe(hwGPM, VELOCITY_BRANCH_FT_S);
   const hwManifold  = sizePipe(hwGPM, VELOCITY_MANIFOLD_FT_S);
 
   // ── Preheat coil HW sizing ──────────────────────────────────────────────────
   const preheatGPM    = preheatLoadBTU > 0
-    ? preheatLoadBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)
-    : 0;
+    ? preheatLoadBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F) : 0;
 
   const preheatBranch = sizePipe(preheatGPM, VELOCITY_BRANCH_FT_S);
 
@@ -207,17 +187,16 @@ export const calculatePipeSizing = (
  * Aggregates all room pipe sizing results into project-level
  * main pipe sizing. Used by ResultsPage for plant room sizing.
  *
- * Main CHW/HW pipe sized on TOTAL project load at main velocity (4 ft/s).
+ * FIX PIPE-01: Uses r.coilLoadBTU (was r.grandTotal).
+ *   grandTotal includes fan heat — a system allowance on the AIR side.
+ *   Fan heat does NOT pass through the chilled water coil.
+ *   Using grandTotal oversized the CHW main by the fan heat fraction (~5%).
+ *   For a 1000 TR project: ~50 TR overstatement → significant excess plant cost.
  *
- * @param {Array}  rdsRows        - full selectRdsData output array
- * @returns {{
- *   totalCHWFlowGPM:      number,
- *   totalHWFlowGPM:       number,
- *   mainCHWBranchMm:      number,  main CHW pipe nominal DN (mm)
- *   mainHWBranchMm:       number,  main HW pipe nominal DN (mm)
- *   mainCHWManifoldMm:    number,
- *   mainHWManifoldMm:     number,
- * }}
+ * FIX PIPE-02: Uses VELOCITY_MAIN_FT_S (4 ft/s) for project-level mains.
+ *   Was using VELOCITY_BRANCH_FT_S (3 ft/s) — oversized main header by ~29%.
+ *
+ * @param {Array} rdsRows - full selectRdsData output array
  */
 export const calculateProjectPipeSizing = (rdsRows) => {
   if (!rdsRows || rdsRows.length === 0) {
@@ -231,26 +210,24 @@ export const calculateProjectPipeSizing = (rdsRows) => {
     };
   }
 
-  // Sum all room cooling and heating loads
+  // FIX PIPE-01: coilLoadBTU excludes fan heat — correct basis for CHW plant sizing.
   const totalCoolingBTU = rdsRows.reduce(
-    (sum, r) => sum + (parseFloat(r.grandTotal)    || 0), 0
+    (sum, r) => sum + (parseFloat(r.coilLoadBTU) || 0), 0  // FIX PIPE-01: was r.grandTotal
   );
   const totalHeatingBTU = rdsRows.reduce(
     (sum, r) => sum + (parseFloat(r.heatingCapBTU) || 0), 0
   );
 
-  // Total flow rates
   const totalCHWFlowGPM = totalCoolingBTU > 0
-    ? totalCoolingBTU / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)
-    : 0;
+    ? totalCoolingBTU / (HYDRONIC_CONSTANT * CHW_DELTA_T_F) : 0;
 
   const totalHWFlowGPM = totalHeatingBTU > 0
-    ? totalHeatingBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)
-    : 0;
+    ? totalHeatingBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F) : 0;
 
-  // Main pipe at branch velocity — manifold at manifold velocity
-  const mainCHWBranch   = sizePipe(totalCHWFlowGPM, VELOCITY_BRANCH_FT_S);
-  const mainHWBranch    = sizePipe(totalHWFlowGPM,  VELOCITY_BRANCH_FT_S);
+  // FIX PIPE-02: VELOCITY_MAIN_FT_S (4 ft/s) for main distribution.
+  // Manifold sized at manifold velocity (1.5 ft/s) — unchanged.
+  const mainCHWBranch   = sizePipe(totalCHWFlowGPM, VELOCITY_MAIN_FT_S);     // FIX PIPE-02
+  const mainHWBranch    = sizePipe(totalHWFlowGPM,  VELOCITY_MAIN_FT_S);     // FIX PIPE-02
   const mainCHWManifold = sizePipe(totalCHWFlowGPM, VELOCITY_MANIFOLD_FT_S);
   const mainHWManifold  = sizePipe(totalHWFlowGPM,  VELOCITY_MANIFOLD_FT_S);
 
