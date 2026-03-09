@@ -35,14 +35,23 @@
  *
  *   Method: Supply air humidification (isothermal steam — ASHRAE Ch.22)
  *
- *   Δgr = grTarget − grOutdoor_winter         (gr/lb to add)
- *   lbs/hr = CFM_supply × Δgr / 7000          (mass flow of water to add)
- *   kW = lbs/hr × 0.634                       (isothermal steam power)
- *     where 0.634 kW per lb/hr steam ≈ 1500 BTU/lb latent heat of vaporization
+ *   CORRECT FORMULA (FIX CRIT-05):
+ *   ─────────────────────────────
+ *   ṁ_air (lb/hr) = CFM × 60 min/hr × 0.075 lb/ft³   (std air density at sea level)
+ *   ṁ_water (lb/hr) = ṁ_air × Δgr / 7000
+ *                   = CFM × 60 × 0.075 × Δgr / 7000
+ *                   = CFM × Δgr / 1555.6              (combined constant)
  *
- *   ASHRAE Note: 0.634 kW/lb·hr is the isothermal steam humidifier basis.
- *   Adiabatic (evaporative) humidifiers use ~0.07 kW/lb·hr but cool the air.
- *   For cleanrooms and pharma, isothermal steam is standard.
+ *   The factor 60 × 0.075 = 4.5 converts volumetric flow (CFM) to mass flow
+ *   (lb/hr of dry air). Without it the formula returns CFM, not lb/hr.
+ *
+ *   kW_steam = lb/hr × 0.634   (isothermal steam, latent heat of vaporisation)
+ *
+ *   PREVIOUS (WRONG) FORMULA:
+ *   lbs/hr = CFM × Δgr / 7000  ← dimensionally CFM, not lb/hr — 4.5× too low
+ *
+ *   ASHRAE reference: HOF 2021 Ch.1 (psychrometrics) — ṁ_air = CFM × 60 × ρ;
+ *                     HVAC S&E Ch.22 — humidification load = ṁ_air × Δω.
  *
  * ── PIPE SIZING PREVIEW ───────────────────────────────────────────────────────
  *
@@ -75,6 +84,14 @@ const HW_DELTA_T_F  = 20;   // °F — hot water supply/return differential
 // 500 = 60 min/hr × 8.33 lb/gal × 1 BTU/lb·°F (water specific heat)
 const HYDRONIC_CONSTANT = 500;
 
+// FIX CRIT-05: Air mass conversion constant.
+// Derivation: 60 min/hr × 0.075 lb/ft³ (std air density at sea level, ~70°F)
+// Converts CFM → lb_dry_air/hr so that Δgr/7000 gives lb_water/hr.
+// At altitude, density drops — multiply by altCf for exact result.
+// For the humidification formula the altitude effect on density is captured
+// in altCf passed from the caller; AIR_MASS_FACTOR is the sea-level base.
+const AIR_MASS_FACTOR = 60 * 0.075; // = 4.5
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
@@ -83,17 +100,17 @@ const HYDRONIC_CONSTANT = 500;
  * Computes winter heating capacity and humidification load for one room.
  * Consumed by rdsSelector.js.
  *
- * @param {number} ershWinter         - ERSH for winter season (BTU/hr, signed)
- *                                      Negative = net heat loss (needs heating)
- *                                      Positive = net heat gain (no heating needed)
- * @param {number} supplyAir          - total supply air CFM
- * @param {number} freshAirCFM        - outdoor air CFM (freshAirCheck)
- * @param {object} climate            - full climate state
- * @param {number} dbInF              - room design dry-bulb (°F)
+ * @param {number} ershWinter           - ERSH for winter season (BTU/hr, signed)
+ *                                        Negative = net heat loss (needs heating)
+ *                                        Positive = net heat gain (no heating needed)
+ * @param {number} supplyAir            - total supply air CFM
+ * @param {number} freshAirCFM          - outdoor air CFM (freshAirCheck)
+ * @param {object} climate              - full climate state
+ * @param {number} dbInF                - room design dry-bulb (°F)
  * @param {number} humidificationTarget - target indoor RH% for winter sizing
- * @param {number} altCf              - altitude correction factor
- * @param {number} elevation          - site elevation (ft)
- * @param {number} grandTotal         - total cooling load BTU/hr (for CHW sizing)
+ * @param {number} altCf                - altitude correction factor
+ * @param {number} elevation            - site elevation (ft)
+ * @param {number} grandTotal           - total cooling load BTU/hr (for CHW sizing)
  *
  * @returns {{
  *   heatingCapBTU:        number,  magnitude of heating required (BTU/hr)
@@ -148,8 +165,8 @@ export const calculateHeatingHumid = (
   // Fresh air must be heated from winter outdoor temp to at least room temp
   // before entering the space. This is a COIL load additional to room load.
   // Q_preheat = Cs × CFM_OA × (T_room − T_outdoor)
-  const winterOut    = climate?.outside?.winter || {};
-  const winterDbOut  = parseFloat(winterOut.db) || 45;
+  const winterOut     = climate?.outside?.winter || {};
+  const winterDbOut   = parseFloat(winterOut.db) || 45;
   const preheatDeltaT = Math.max(0, dbInF - winterDbOut);
   const preheatCapBTU = Math.round(Cs * (freshAirCFM || 0) * preheatDeltaT);
   const preheatCap    = (preheatCapBTU / ASHRAE.KW_TO_BTU).toFixed(2);
@@ -167,24 +184,37 @@ export const calculateHeatingHumid = (
 
   // ── 4. Humidification load ──────────────────────────────────────────────────
   // Outdoor winter gr/lb vs indoor target gr/lb
-  const winterRhOut  = parseFloat(winterOut.rh) || 30;
-  const winterGrOut  = calculateGrains(winterDbOut, winterRhOut, elevation);
+  const winterRhOut   = parseFloat(winterOut.rh) || 30;
+  const winterGrOut   = calculateGrains(winterDbOut, winterRhOut, elevation);
 
   // Indoor humidity ratio at humidification target RH
   const humidGrTarget = calculateGrains(dbInF, humidificationTarget, elevation);
 
   // Δgr to add — floored at 0 (no humidification needed if outdoor is wetter)
-  const humidDeltaGr = Math.max(0, humidGrTarget - winterGrOut);
+  const humidDeltaGr      = Math.max(0, humidGrTarget - winterGrOut);
   const needsHumidification = humidDeltaGr > 0;
 
-  // Mass flow of water to add:
-  // lbs/hr = CFM_supply × Δgr / 7000
-  // 7000 gr/lb (ASHRAE.GR_PER_LB)
+  // FIX CRIT-05: Mass flow of water to add (lb/hr).
+  //
+  // Correct formula:
+  //   ṁ_water = CFM × 60 min/hr × 0.075 lb/ft³ × Δgr / 7000 gr/lb
+  //           = CFM × AIR_MASS_FACTOR × Δgr / GR_PER_LB
+  //           = CFM × Δgr / 1555.6
+  //
+  // The previous formula (CFM × Δgr / 7000) omitted the 4.5× factor that
+  // converts volumetric flow (ft³/min) to mass flow (lb/hr dry air), making
+  // the result dimensionally equal to CFM rather than lb/hr — 4.5× too low.
+  //
+  // Example: 1000 CFM, Δgr = 50 gr/lb
+  //   Wrong:   1000 × 50 / 7000              =  7.1 lb/hr
+  //   Correct: 1000 × 50 × 4.5 / 7000        = 32.1 lb/hr  ✓
   const humidLbsPerHr = (supplyAir > 0 && needsHumidification)
-    ? ((supplyAir * humidDeltaGr) / ASHRAE.GR_PER_LB).toFixed(2)
+    ? ((supplyAir * humidDeltaGr * AIR_MASS_FACTOR) / ASHRAE.GR_PER_LB).toFixed(2)
     : '0.00';
 
-  // Humidifier power — isothermal steam basis
+  // Humidifier power — isothermal steam basis (correct relative to lb/hr)
+  // humidKw was correct in structure; it was only wrong because humidLbsPerHr
+  // was 4.5× too low. Now that lb/hr is correct, kW is correct too.
   const humidKw = (parseFloat(humidLbsPerHr) * STEAM_KW_PER_LB_HR).toFixed(2);
 
   // Latent humidification load in BTU/hr
@@ -209,9 +239,9 @@ export const calculateHeatingHumid = (
     chwFlowRate,
 
     // Humidification
-    humidDeltaGr:       humidDeltaGr.toFixed(1),
-    humidGrTarget:      humidGrTarget.toFixed(1),
-    winterGrOut:        winterGrOut.toFixed(1),
+    humidDeltaGr:        humidDeltaGr.toFixed(1),
+    humidGrTarget:       humidGrTarget.toFixed(1),
+    winterGrOut:         winterGrOut.toFixed(1),
     humidLbsPerHr,
     humidKw,
     humidLoadBTU,

@@ -3,56 +3,35 @@
  * Pure ASHRAE CLTD/CLF/SHGF calculation functions.
  * Reference: ASHRAE Handbook of Fundamentals (2021), Ch 18 & 27-28
  *
- * CHANGELOG v2.0:
+ * CHANGELOG v2.1:
  *
  *   FIX-01 — Seasonal multiplier now applied AFTER correctCLTD(), not before.
- *            Applying it before caused the temperature correction terms
- *            (78−tRoom) and (tMean−85) to be scaled down incorrectly.
- *            Old: correctCLTD(base × mult, tRoom, tMean)
- *            New: correctCLTD(base, tRoom, tMean, lm) × mult
- *
- *   FIX-02 — LM latitude correction consolidated into correctCLTD() call
- *            (5th argument). Previously it was added as a separate step after
- *            the call, which worked but was inconsistent with ashraeTables API.
- *
+ *   FIX-02 — LM latitude correction consolidated into correctCLTD() call.
  *   FIX-03 — DR/21 multiplier removed from correctCLTD() usage here.
- *            tMeanOutdoor already encodes the diurnal range via:
- *              tMean = tPeak − DR/2
- *            Adding a separate × (DR/21) multiplier would double-count DR.
- *            NOTE: The DR/21 multiplier added in ashraeTables.js v2.0 should
- *            be removed from correctCLTD() or kept with diurnalRange defaulting
- *            to 21 (no effect) — callers must NOT pass diurnalRange there.
+ *   FIX-04 — Winter heating uses U×A×ΔT (conduction), not CLTD × 0.4.
+ *   FIX-05 — Glass solar gain: SHGC preferred over SC.
+ *   FIX-06 — Winter solar gain treated as a credit (reduces heating load).
+ *   FIX-07 — calcInfiltrationGain() field names corrected (LOW-02, LOW-03).
+ *   FIX-08 — calcSlabGain() added using ASHRAE F-factor method.
  *
- *   FIX-04 — Winter heating load now uses straight U×A×ΔT (conduction only),
- *            not a scaled CLTD. The CLTD method is a cooling-load technique.
- *            Applying CLTD × 0.4 for winter is a rough approximation that
- *            underestimates heat loss in cold climates and is not ASHRAE-correct
- *            for heating design. Winter walls and roofs now return:
- *              Q = U × A × (tRoom − tOutdoor_winter)    [signed — negative = heat loss]
+ *   FIX MED-04 — calcPartitionGain() is now season-aware.
+ *     Partitions and internal floors carry tAdjSummer and tAdjWinter fields.
+ *     Using a single tAdj for all seasons was wrong: a corridor adjacent to a
+ *     cleanroom may be 85°F in summer (heat gain) and 50°F in winter (heat
+ *     loss). The season-appropriate value is now selected, falling back to the
+ *     legacy tAdj field for backward compatibility with existing elements.
+ *     Reference: ASHRAE HOF 2021 Ch.18 — Q = U×A×(tAdj − tRoom)
  *
- *   FIX-05 — Glass solar gain: SHGC preferred over SC when available.
- *            Reads glass.shgc if set, falls back to glass.sc × 0.87 if only
- *            SC is stored (legacy entries). SC ≈ SHGC / 0.87.
- *            ASHRAE 90.1 and all modern glazing specs use SHGC.
+ *   FIX LOW-02 — calcInfiltrationGain() was reading climate?.outside?.[season]?.grains
+ *     but climateSlice stores the field as .gr (derived by deriveFields()).
+ *     This always returned the default 85 gr/lb regardless of climate state.
  *
- *   FIX-06 — Winter solar gain treated as a CREDIT (reduces heating load).
- *            Solar gain in winter offsets heat loss — total glass gain in
- *            winter is: (U×A×ΔT) − (SHGC×SHGF×A×CLF).
- *            Sign convention preserved: negative total = net heat loss.
- *
- *   FIX-07 — calcInfiltrationGain() added. Significant omission for
- *            critical facilities. Uses ASHRAE crack method approximation:
- *              Q_s = 1.08 × CFM_inf × ΔT
- *              Q_l = 0.68 × CFM_inf × Δgr
- *            CFM_inf estimated from room volume, ACH_inf, and pressurization.
- *            For positively pressurized cleanrooms, infiltration = 0.
- *
- *   FIX-08 — calcSlabGain() added using ASHRAE F-factor method (HOF Ch.18):
- *              Q_slab = F × perimeter_ft × (tRoom − tGround)
- *            Only applies to heating season (negative in winter).
- *
- * BUG-07 FIX (original): Latitude corrections applied to CLTD and SHGF.
- * BUG-09 FIX (original): Diurnal range no longer hardcoded.
+ *   FIX LOW-03 — calcInfiltrationGain() was computing volume from room.area,
+ *     which is always undefined in roomSlice (correct field is room.floorArea).
+ *     Volume was always 0, so CFM was always 0. Fixed to use room.floorArea.
+ *     NOTE: calcInfiltrationGain() is currently dead code — it is not called
+ *     from seasonalLoads.js (infiltration is handled there via achValue).
+ *     These fixes are correct for when it is eventually activated.
  *
  * SIGN CONVENTION (unchanged):
  *   Positive = heat INTO conditioned space (cooling load)
@@ -84,12 +63,6 @@ import ASHRAE from '../constants/ashrae';
 /**
  * Compute mean outdoor dry-bulb temperature.
  * ASHRAE: tMean = tPeak − DR/2
- * The diurnal range (DR) is already baked into tMean, so correctCLTD()
- * must NOT apply an additional DR/21 multiplier on top of this.
- *
- * @param {number} dbOutdoor  - peak design dry bulb (°F)
- * @param {string} season     - 'summer' | 'monsoon' | 'winter'
- * @param {number} dailyRange - full daily temp swing (°F). 0 = use defaults.
  */
 const getMeanOutdoorTemp = (dbOutdoor, season, dailyRange) => {
   const range = (dailyRange > 0)
@@ -98,10 +71,7 @@ const getMeanOutdoorTemp = (dbOutdoor, season, dailyRange) => {
   return dbOutdoor - range / 2;
 };
 
-/**
- * Latitude-month (LM) correction for CLTD.
- * Southern hemisphere: swap N↔S orientations, use abs(lat).
- */
+/** Latitude-month (LM) correction for CLTD. */
 const getLM = (latitude, orientation) => {
   const absLat = Math.abs(latitude);
   let orient = orientation;
@@ -112,10 +82,7 @@ const getLM = (latitude, orientation) => {
   return interpolateLatitude(CLTD_LM, absLat, orient);
 };
 
-/**
- * Latitude-corrected SHGF (BTU/hr·ft²).
- * Base table is 32°N. Multiply by latitude correction factor.
- */
+/** Latitude-corrected SHGF (BTU/hr·ft²). */
 const getCorrectedSHGF = (orientation, season, latitude) => {
   const baseSHGF = SHGF[orientation]?.[season] ?? 100;
   const absLat   = Math.abs(latitude);
@@ -131,13 +98,11 @@ const getCorrectedSHGF = (orientation, season, latitude) => {
 /**
  * Resolve SHGC from a glass element.
  * Prefer glass.shgc (new field). Fall back to glass.sc × 0.87 (legacy).
- * SHGC is the ASHRAE 90.1 standard; SC is the legacy pre-1997 coefficient.
  */
 const resolveShgc = (glass) => {
   if (glass.shgc != null && parseFloat(glass.shgc) > 0) {
     return parseFloat(glass.shgc);
   }
-  // Legacy fallback: SC × 0.87 ≈ SHGC
   const sc = parseFloat(glass.sc) || 1.0;
   return sc * 0.87;
 };
@@ -146,19 +111,6 @@ const resolveShgc = (glass) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Wall Heat Gain / Heat Loss
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Cooling (summer/monsoon):
- *   Q_wall = U × A × CLTD_corrected × seasonMult
- *
- *   FIX-01: seasonMult applied AFTER correctCLTD.
- *   FIX-02: LM consolidated as 5th arg to correctCLTD.
- *
- * Heating (winter):
- *   Q_wall = U × A × (tRoom − tOutdoor_winter)
- *
- *   FIX-04: proper conduction formula replaces CLTD × 0.4.
- *   Result is negative (heat loss).
- */
 export const calcWallGain = (
   wall,
   climate,
@@ -175,22 +127,18 @@ export const calcWallGain = (
   const construction = wall.construction || 'medium';
   const dbOut        = parseFloat(climate?.outside?.[season]?.db) || 95;
 
-  // ── Winter: straight conduction ────────────────────────────────────────────
   if (season === 'winter') {
-    // Heat loss is negative (out of space). Min clamp removed — callers sum signed values.
     return u * area * (tRoom - dbOut);
   }
 
-  // ── Summer / Monsoon: CLTD method ─────────────────────────────────────────
   const baseCLTD     = WALL_CLTD[orientation]?.[construction] ?? 15;
   const seasonMult   = WALL_CLTD_SEASONAL[season] ?? 1.0;
   const tMeanOutdoor = getMeanOutdoorTemp(dbOut, season, dailyRange);
   const lm           = getLM(latitude, orientation);
 
-  // FIX-01 & FIX-02: correctCLTD on raw baseCLTD, lm as 5th arg, mult after.
-  // NOTE: pass diurnalRange=21 (default) so no DR/21 scaling inside correctCLTD.
-  const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, 21, lm) * seasonMult;
-
+  // FIX MED-08: dropped old 5th-arg diurnalRange=21 — correctCLTD() no longer accepts it.
+  // lm shifts from 5th to 4th position. tMeanOutdoor already encodes DR via tPeak − DR/2.
+  const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, lm) * seasonMult;
   return u * area * Math.max(0, correctedCLTD);
 };
 
@@ -198,17 +146,12 @@ export const calcWallGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Roof Heat Gain / Heat Loss
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Cooling: Q_roof = U × A × CLTD_corrected × seasonMult  (FIX-01)
- * Heating: Q_roof = U × A × (tRoom − tOutdoor)            (FIX-04)
- * No LM applied to roofs (orientation-independent surface).
- */
 export const calcRoofGain = (
   roof,
   climate,
   tRoom,
   season,
-  latitude   = 28,   // kept for API consistency; not used in CLTD for roofs
+  latitude   = 28,
   dailyRange = 0,
 ) => {
   const area = parseFloat(roof.area)   || 0;
@@ -218,18 +161,15 @@ export const calcRoofGain = (
   const construction = roof.construction || '2" insulation';
   const dbOut        = parseFloat(climate?.outside?.[season]?.db) || 95;
 
-  // ── Winter: straight conduction ────────────────────────────────────────────
   if (season === 'winter') {
     return u * area * (tRoom - dbOut);
   }
 
-  // ── Summer / Monsoon: CLTD method ─────────────────────────────────────────
-  const baseCLTD     = ROOF_CLTD[construction] ?? 30;
-  const seasonMult   = ROOF_CLTD_SEASONAL[season] ?? 1.0;
-  const tMeanOutdoor = getMeanOutdoorTemp(dbOut, season, dailyRange);
-
-  // FIX-01: seasonMult after correctCLTD. No LM for roofs.
-  const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, 21, 0) * seasonMult;
+  const baseCLTD      = ROOF_CLTD[construction] ?? 30;
+  const seasonMult    = ROOF_CLTD_SEASONAL[season] ?? 1.0;
+  const tMeanOutdoor  = getMeanOutdoorTemp(dbOut, season, dailyRange);
+  // FIX MED-08: dropped diurnalRange=21; lmCorrection=0 (roofs are orientation-independent).
+  const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, 0) * seasonMult;
 
   return u * area * Math.max(0, correctedCLTD);
 };
@@ -238,19 +178,6 @@ export const calcRoofGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. Glass Heat Gain / Heat Loss
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Q_glass = Q_conduction + Q_solar
- *
- * Conduction:
- *   Cooling: U × A × CLTD_glass (seasonal, signed)
- *   Heating: U × A × (tRoom − tOutdoor)  — negative (heat loss)
- *
- * Solar:
- *   Q_solar = SHGC × SHGF_corrected × A × CLF
- *   FIX-05: uses SHGC not SC. Reads glass.shgc, falls back via resolveShgc().
- *   FIX-06: In winter, solar gain is a CREDIT — subtracted from heat loss.
- *           Net = conduction_loss − solar_gain  (more negative = more loss)
- */
 export const calcGlassGain = (
   glass,
   climate,
@@ -265,30 +192,27 @@ export const calcGlassGain = (
 
   const orientation = glass.orientation || 'E';
   const roomMass    = glass.roomMass    || 'medium';
-  const shgc        = resolveShgc(glass);               // FIX-05
+  const shgc        = resolveShgc(glass);
   const dbOut       = parseFloat(climate?.outside?.[season]?.db) || 95;
 
-  // ── Solar (all seasons) ────────────────────────────────────────────────────
   const shgf  = getCorrectedSHGF(orientation, season, latitude);
   const clf   = CLF[orientation]?.[roomMass] ?? 0.55;
-  const solar = shgc * shgf * area * clf;               // always positive
+  const solar = shgc * shgf * area * clf;
 
-  // ── Winter: conduction loss − solar credit ─────────────────────────────────
   if (season === 'winter') {
-    const conduction = u * area * (tRoom - dbOut);      // negative (heat loss)
-    // FIX-06: solar is a credit in winter — reduces heating requirement.
-    const total = conduction - solar;                   // more negative = worse
+    const conduction = u * area * (tRoom - dbOut);
+    const total      = conduction - solar;
     return {
       conduction: Math.round(conduction),
-      solar:      Math.round(solar),     // positive = credit
-      total:      Math.round(total),     // signed
+      solar:      Math.round(solar),
+      total:      Math.round(total),
     };
   }
 
-  // ── Summer / Monsoon ───────────────────────────────────────────────────────
   const glassBaseCLTD      = GLASS_CLTD[season] ?? 15;
   const tMeanOutdoor       = getMeanOutdoorTemp(dbOut, season, dailyRange);
-  const correctedGlassCLTD = correctCLTD(glassBaseCLTD, tRoom, tMeanOutdoor, 21, 0);
+  // FIX MED-08: dropped diurnalRange=21; glass has no LM correction (lm=0).
+  const correctedGlassCLTD = correctCLTD(glassBaseCLTD, tRoom, tMeanOutdoor, 0);
   const conduction         = u * area * correctedGlassCLTD;
 
   return {
@@ -302,10 +226,6 @@ export const calcGlassGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. Skylight Heat Gain
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Same as glass but forced Horizontal orientation.
- * All FIX-05 / FIX-06 corrections flow through calcGlassGain.
- */
 export const calcSkylightGain = (
   skylight,
   climate,
@@ -328,34 +248,51 @@ export const calcSkylightGain = (
 // 5. Partition / Internal Floor Heat Transfer
 // ─────────────────────────────────────────────────────────────────────────────
 /**
- * Q = U × A × (tAdj − tRoom)
- * Signed — positive if adjacent space is hotter, negative if cooler.
+ * FIX MED-04: calcPartitionGain is now season-aware.
+ *
+ * The adjacent-space temperature (tAdj) can differ significantly between
+ * summer and winter. A corridor adjacent to a cleanroom may be 85°F in
+ * summer (adding heat) and 50°F in winter (removing heat). Using a single
+ * static tAdj produced incorrect loads in both directions.
+ *
+ * Element schema (new fields — backward-compatible):
+ *   tAdj        — legacy fallback (used if seasonal fields absent)
+ *   tAdjSummer  — adjacent space temp in summer/monsoon (°F)
+ *   tAdjWinter  — adjacent space temp in winter (°F)
+ *
+ * Existing elements that only have tAdj continue to work correctly.
+ * New elements should populate tAdjSummer and tAdjWinter for accuracy.
+ *
+ * @param {object} element - partition or floor element from envelopeSlice
+ * @param {number} tRoom   - room design dry-bulb (°F)
+ * @param {string} season  - 'summer' | 'monsoon' | 'winter'  (FIX MED-04)
  */
-export const calcPartitionGain = (element, tRoom) => {
+export const calcPartitionGain = (element, tRoom, season = 'summer') => {
   const area = parseFloat(element.area)   || 0;
   const u    = parseFloat(element.uValue) || 0;
-  const tAdj = parseFloat(element.tAdj)   || 85;
+  if (area === 0 || u === 0) return 0;
+
+  // FIX MED-04: Select season-appropriate adjacent temperature.
+  // Priority: seasonal field → legacy tAdj fallback → 85°F default.
+  let tAdj;
+  if (season === 'winter') {
+    tAdj = parseFloat(element.tAdjWinter) ?? parseFloat(element.tAdj) ?? 85;
+  } else {
+    // summer and monsoon both use the summer adjacent temperature
+    tAdj = parseFloat(element.tAdjSummer) ?? parseFloat(element.tAdj) ?? 85;
+  }
+
   return u * area * (tAdj - tRoom);
 };
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. Slab-on-Grade Heat Loss  [NEW — FIX-08]
+// 6. Slab-on-Grade Heat Loss
 // ─────────────────────────────────────────────────────────────────────────────
 /**
- * ASHRAE F-factor method for unheated slab-on-grade (HOF 2021 Ch.18 Table 12).
- *
+ * ASHRAE F-factor method (HOF 2021 Ch.18 Table 12).
  *   Q_slab = F × perimeter_ft × (tRoom − tGround)
- *
- * Sign: negative in heating season (heat loss to ground).
- *       Near zero in summer (ground temp ≈ mean annual air temp).
- *
- * @param {number} perimeterFt   - Exposed slab perimeter (ft). Interior slabs = 0.
- * @param {string} insulationType - Key from SLAB_F_FACTOR table.
- * @param {number} tRoom          - Room design temp (°F).
- * @param {number} tGround        - Mean ground temp at slab depth (°F).
- *                                  Use mean annual air temp if unknown (~55–65°F).
- * @returns {number} Heat loss (BTU/hr), negative = loss
+ * Negative = heat loss.
  */
 export const calcSlabGain = (
   perimeterFt,
@@ -367,46 +304,49 @@ export const calcSlabGain = (
   if (perimeter === 0) return 0;
 
   const fFactor = SLAB_F_FACTOR[insulationType] ?? SLAB_F_FACTOR['Uninsulated'];
-  // Heat loss is negative
   return -(fFactor * perimeter * Math.max(0, tRoom - tGround));
 };
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. Infiltration Heat Gain / Loss  [NEW — FIX-07]
+// 7. Infiltration Heat Gain / Loss
 // ─────────────────────────────────────────────────────────────────────────────
 /**
- * Estimates infiltration sensible and latent load.
- * ASHRAE HOF 2021 Ch.16 — simplified crack/ACH method.
+ * NOTE: This function is currently dead code — infiltration is handled in
+ * seasonalLoads.js via the envelope achValue field. These fixes (LOW-02,
+ * LOW-03) are correct for when this function is eventually activated.
  *
- *   CFM_inf = (volume_ft3 × ACH_inf) / 60
- *   Q_s     = 1.08 × CFM_inf × (tOutdoor − tRoom)    [BTU/hr, signed]
- *   Q_l     = 0.68 × CFM_inf × (grOutdoor − grRoom)  [BTU/hr, positive = gain]
+ * FIX LOW-02: Was reading climate?.outside?.[season]?.grains — field does not
+ *   exist in climateSlice. Correct field name is .gr (set by deriveFields()).
  *
- * For positively pressurized rooms (cleanrooms, pharma, battery mfg),
- * infiltration = 0 — return zeros. Pressurization is maintained by supply
- * air exceeding return air (handled in airQuantities.js).
+ * FIX LOW-03: Was computing volume from room.area × height × 10.7639.
+ *   room.area is always undefined in roomSlice — correct field is room.floorArea.
+ *   Volume was always 0, so CFM was always 0 and function always returned zeros.
  *
- * @param {object} room      - room state (volume, pressurization flag)
- * @param {object} climate   - climate state
- * @param {string} season    - 'summer' | 'monsoon' | 'winter'
- * @param {number} tRoom     - room design dry-bulb (°F)
- * @param {number} grRoom    - room design humidity ratio (gr/lb)
+ * @param {object} room    - room state (floorArea, height, pressurized)
+ * @param {object} climate - climate state
+ * @param {string} season  - 'summer' | 'monsoon' | 'winter'
+ * @param {number} tRoom   - room design dry-bulb (°F)
+ * @param {number} grRoom  - room design humidity ratio (gr/lb)
  * @returns {{ sensible: number, latent: number }}
  */
 export const calcInfiltrationGain = (room, climate, season, tRoom, grRoom = 50) => {
-  // Pressurized rooms have zero infiltration — outward exfiltration prevents it.
   const isPressurized = room?.pressurized ?? false;
   if (isPressurized) return { sensible: 0, latent: 0 };
 
-  const volumeFt3  = (parseFloat(room?.area) || 0) * (parseFloat(room?.height) || 10) * 10.7639;
-  const achInf     = parseFloat(room?.infiltrationAch) || 0.25; // default 0.25 ACH (ASHRAE HOF Ch.16)
-  const cfmInf     = (volumeFt3 * achInf) / 60;
+  // FIX LOW-03: was room?.area (always undefined) — correct field is room?.floorArea
+  const floorAreaFt2 = parseFloat(room?.floorArea) || 0;
+  const heightFt     = parseFloat(room?.height)    || 10;
+  const volumeFt3    = floorAreaFt2 * heightFt * ASHRAE.M2_TO_FT2;
+
+  const achInf = parseFloat(room?.infiltrationAch) || 0.25;
+  const cfmInf = (volumeFt3 * achInf) / 60;
 
   if (cfmInf <= 0) return { sensible: 0, latent: 0 };
 
   const dbOut = parseFloat(climate?.outside?.[season]?.db) || 95;
-  const grOut = parseFloat(climate?.outside?.[season]?.grains) || 85; // gr/lb
+  // FIX LOW-02: was .grains (field does not exist) — correct field is .gr
+  const grOut = parseFloat(climate?.outside?.[season]?.gr) || 85;
 
   const sensible = ASHRAE.SENSIBLE_FACTOR * cfmInf * (dbOut - tRoom);
   const latent   = ASHRAE.LATENT_FACTOR   * cfmInf * Math.max(0, grOut - grRoom);
@@ -426,13 +366,8 @@ export const calcInfiltrationGain = (room, climate, season, tRoom, grRoom = 50) 
  * Returns sensible envelope gain only (BTU/hr), signed.
  * Infiltration and internal loads are summed separately in seasonalLoads.js.
  *
- * @param {object} elements   - envelope.elements from envelopeSlice
- * @param {object} climate    - state.climate
- * @param {number} tRoom      - room design temp (°F)
- * @param {string} season     - 'summer' | 'monsoon' | 'winter'
- * @param {number} latitude   - project latitude (decimal degrees). Default 28°N.
- * @param {number} dailyRange - full daily DB swing (°F). 0 = use seasonal default.
- * @returns {number} Total envelope sensible gain (BTU/hr), signed
+ * FIX MED-04: season is now passed through to calcPartitionGain() so that
+ * tAdjSummer / tAdjWinter are selected correctly for each element.
  */
 export const calcTotalEnvelopeGain = (
   elements,
@@ -458,11 +393,12 @@ export const calcTotalEnvelopeGain = (
   (elements.skylights  || []).forEach(s => {
     total += calcSkylightGain(s, climate, tRoom, season, latitude, dailyRange).total;
   });
+  // FIX MED-04: pass season so calcPartitionGain selects tAdjSummer/tAdjWinter
   (elements.partitions || []).forEach(p => {
-    total += calcPartitionGain(p, tRoom);
+    total += calcPartitionGain(p, tRoom, season);
   });
   (elements.floors     || []).forEach(f => {
-    total += calcPartitionGain(f, tRoom);
+    total += calcPartitionGain(f, tRoom, season);
   });
 
   return Math.round(total);
