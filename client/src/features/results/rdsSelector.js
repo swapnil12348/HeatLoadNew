@@ -5,6 +5,8 @@
  *
  * This file is a PURE ORCHESTRATOR — no calculation logic lives here.
  * Every calculation is delegated to a dedicated module:
+ * One open question to resolve before rdsSelector.js audit:
+The supplyAir field in rdsRow needs to be confirmed as total supply CFM (recirculation + OA), not OA-only. For ISO 3–5 rooms with FFU recirculation systems, totalSupplyCFM = OA_CFM / oaFraction. If rdsSelector is currently putting OA-only CFM there, every high-recirculation room will show catastrophically low ACPH. Flag this when we get to rdsSelector.js.
  *
  *   seasonalLoads.js      — sensible + latent loads per season
  *   airQuantities.js      — all CFM quantities (supply, fresh, exhaust, return)
