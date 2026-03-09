@@ -1,213 +1,289 @@
-// src/features/room/roomSlice.js
+/**
+ * roomSlice.js
+ * Manages the list of conditioned rooms and the active room selection.
+ *
+ * State shape:
+ *   state.room.list          →  Room[]
+ *   state.room.activeRoomId  →  string | null
+ *
+ * ── FIELD CONTRACT WITH THE LOGIC LAYER ──────────────────────────────────────
+ *
+ *   The following fields are READ by calculation modules. All must be present
+ *   in makeRoom() with a valid numeric default so parseFloat() never returns NaN.
+ *
+ *   rdsSelector.js:
+ *     room.id
+ *     room.assignedAhuIds[0]      — first AHU assigned to this room
+ *     room.floorArea  (m²)        → m2ToFt2() in rdsSelector
+ *     room.volume     (m³)        → m3ToFt3() in rdsSelector
+ *
+ *   seasonalLoads.js:
+ *     room.designTemp   (°C)      → cToF(), null-safe, fallback 72 °F
+ *     room.designRH     (%)       → != null guard — 0 is VALID (battery dry rooms)
+ *     room.ventCategory (string)  → 'pharma' triggers GMP 1.25× safety factor
+ *
+ *   airQuantities.js:
+ *     room.designTemp             (same cToF guard as above)
+ *     room.minAcph    (ACH)       — regulatory minimum ACPH floor
+ *     room.designAcph (ACH)       — ISO/GMP class design ACPH
+ *     room.exhaustAir.general (CFM)
+ *     room.exhaustAir.bibo    (CFM)   — Bag-In-Bag-Out filter change exhaust
+ *     room.exhaustAir.machine (CFM)
+ *     room.manualFreshAir     (CFM)   — 0 = use ASHRAE 62.1 VRP result
+ *     room.ventCategory               — maps to Rp + Ra via ventilation.js
+ *
+ * ── REMOVED: createSeasonData() ──────────────────────────────────────────────
+ *
+ *   The previous slice stored supplyAir_Summer / returnAir_Summer / outsideAir_Summer
+ *   etc. directly on each room object. These are NOT read by rdsSelector —
+ *   it COMPUTES them via airQuantities.js and returns them in the RDS row.
+ *   Storing them in room state:
+ *     (a) duplicates data that rdsSelector already owns
+ *     (b) goes stale when any upstream input changes
+ *     (c) created ambiguity in the RDS grid: room.supplyAir vs rds.supplyAir
+ *   Removed. The RDS grid reads all computed values from selectRdsData only.
+ *
+ * ── designRH = 0 IS VALID ─────────────────────────────────────────────────────
+ *
+ *   rdsSelector uses:
+ *     const raRH = room.designRH != null ? parseFloat(room.designRH) : 50;
+ *   NOT:
+ *     const raRH = parseFloat(room.designRH) || 50;   ← 0 → 50 (wrong)
+ *
+ *   Keep designRH default as 50 (a number). Never set it to null or undefined.
+ *
+ * ── UNIT CONVENTIONS ─────────────────────────────────────────────────────────
+ *
+ *   floorArea, volume  → SI (m², m³)     converted to ft²/ft³ in rdsSelector
+ *   designTemp         → °C              converted to °F in calc modules
+ *   designRH           → percentage (0–100), not fraction
+ *   exhaustAir.*       → CFM (imperial)
+ *   minAcph, designAcph → ACH (hr⁻¹)
+ */
+
 import { createSlice } from '@reduxjs/toolkit';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
+// ── ID generator ──────────────────────────────────────────────────────────────
 const generateRoomId = () =>
   `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
-const createSeasonData = (prefix, val = 0) => ({
-  [`${prefix}_Summer`]:  val,
-  [`${prefix}_Monsoon`]: val,
-  [`${prefix}_Winter`]:  val,
-});
-
+// ── Nested field setter ───────────────────────────────────────────────────────
+// Resolves dot-notation paths: 'exhaustAir.general', 'designTemp', etc.
 const setNestedValue = (obj, path, value) => {
   const keys = path.split('.');
-  let current = obj;
+  let cur = obj;
   for (let i = 0; i < keys.length - 1; i++) {
-    if (current[keys[i]] === undefined || current[keys[i]] === null) {
-      current[keys[i]] = {};
+    if (cur[keys[i]] == null || typeof cur[keys[i]] !== 'object') {
+      cur[keys[i]] = {};
     }
-    current = current[keys[i]];
+    cur = cur[keys[i]];
   }
-  current[keys[keys.length - 1]] = value;
+  cur[keys[keys.length - 1]] = value;
 };
 
-// ─── Room template factory ────────────────────────────────────────────────────
+// ── Room factory ──────────────────────────────────────────────────────────────
 /**
- * makeRoom()
- * Single definition of a room's default shape.
- * Accepts overrides so callers (addRoom, addNewRoom thunk) can
- * inject pre-computed values (e.g. ACPH defaults from isoCleanroom.js)
- * without duplicating the full default object.
+ * makeRoom(id, index, overrides)
  *
- * @param {string} id        - pre-generated room ID
- * @param {number} index     - room list length at time of creation (for name)
- * @param {object} overrides - any fields to override after defaults are set
+ * Single source of truth for the default room shape.
+ * addRoom and addNewRoom() thunk both call this — never duplicating defaults.
+ *
+ * @param {string} id        — pre-generated room ID
+ * @param {number} index     — list length at creation time (for default name)
+ * @param {object} overrides — any fields to override after all defaults are set
  */
 const makeRoom = (id, index = 0, overrides = {}) => ({
+  // ── Identity ──────────────────────────────────────────────────────────────
   id,
-  name: `Room ${index + 1}`,
+  name:     `Room ${index + 1}`,
+  roomNo:   '',           // room tag / drawing number (empty string, not undefined)
+  level:    '',           // floor / level label
+  function: '',           // room function description for RDS header
 
-  // BUG-13 FIX: roomNo as empty string — not undefined.
-  // Undefined causes React controlled-input warnings.
-  roomNo: '',
+  // ── Geometry (SI) ─────────────────────────────────────────────────────────
+  length:    10,           // m
+  width:     10,           // m
+  height:     3,           // m  — realistic single-storey height (was 10, wrong)
+  floorArea: 100,          // m²  auto-derived: length × width
+  volume:    300,          // m³  auto-derived: floorArea × height
 
-  // Geometry (m)
-  length:    10,
-  width:     10,
-  height:    10,
-  floorArea: 100,   // auto-calculated: length × width
-  volume:    1000,  // auto-calculated: floorArea × height
+  // ── Environmental design targets ──────────────────────────────────────────
+  designTemp: 22,          // °C
+  designRH:   50,          // %   (0 is valid for dry rooms — keep as number)
+  pressure:   15,          // Pa  (positive = supply-side pressurized room)
 
-  // Environmental design targets
-  designTemp: 22,   // °C
-  designRH:   50,   // %
-  pressure:   15,   // Pa
-
-  // ASHRAE 62.1-2022 ventilation category
-  // Drives Rp and Ra selection in airQuantities.js → calculateVbz()
-  ventCategory: 'general',
-
-  // Classification
-  // BUG-11 FIX: classInOp was missing — both In-Operation and At-Rest
-  // are independent classifications per ISO 14644 and GMP Annex 1.
+  // ── Classification ────────────────────────────────────────────────────────
+  // Used by envelopeSlice.isIsoClassified() to enforce achValue=0 on init.
+  // '' or 'Unclassified' → not ISO classified → infiltration may be non-zero.
   classInOp:   'ISO 8',
   atRestClass: 'ISO 8',
-  recOt:       'REC',
-  flpType:     'NFLP',
+  recOt:       'REC',      // Recirculating or once-through flag
+  flpType:     'NFLP',     // Non-unidirectional / unidirectional flow pattern
 
-  // Airflow parameters (ACPH)
-  // Defaults overridden by getAcphDefaults('ISO 8') via addNewRoom thunk.
-  // These are the fallback values only — addNewRoom always passes correct ones.
-  minAcph:    10,
-  designAcph: 20,
+  // ── ASHRAE 62.1-2022 ventilation category ────────────────────────────────
+  // Maps to Rp (CFM/person) + Ra (CFM/ft²) via ventilation.js calculateVbz().
+  // 'pharma' also triggers GMP Annex 1 1.25× safety factor in seasonalLoads.js.
+  ventCategory: 'general',
 
-  // Fresh air override (0 = use calculated value)
-  manualFreshAir: 0,
+  // ── Airflow constraints (ACH) ─────────────────────────────────────────────
+  // Fallback defaults — addNewRoom() thunk overrides these from
+  // isoCleanroom.getAcphDefaults(classInOp) at creation time.
+  minAcph:    10,           // ACH  regulatory minimum
+  designAcph: 20,           // ACH  design target (headroom above min)
 
-  // Exhaust air breakdown (CFM)
+  // ── Fresh air override ────────────────────────────────────────────────────
+  // 0 → use ASHRAE 62.1 VRP Vbz result (airQuantities freshAirCheck).
+  // > 0 → engineer-specified override (e.g. 100% OA pharmaceutical suites).
+  manualFreshAir: 0,        // CFM
+
+  // ── Exhaust air breakdown ─────────────────────────────────────────────────
+  // All CFM (imperial — matches ASHRAE 62.1 unit convention).
   exhaustAir: {
-    general: 0,
-    bibo:    0,
-    machine: 0,
+    general: 0,             // CFM  general area exhaust
+    bibo:    0,             // CFM  Bag-In-Bag-Out filter exchange
+    machine: 0,             // CFM  dedicated process / tool exhaust
   },
 
-  // Seasonal supply/return data
-  ...createSeasonData('supplyAir'),
-  ...createSeasonData('returnAir'),
-  ...createSeasonData('outsideAir'),
-
+  // ── AHU assignment ────────────────────────────────────────────────────────
+  // Array supports future multi-AHU rooms.
+  // Logic layer reads assignedAhuIds[0] only today.
   assignedAhuIds: [],
 
-  // Apply caller-supplied overrides last — wins over all defaults above
+  // Overrides applied last — wins over every default above.
   ...overrides,
 });
 
-// ─── Initial State ────────────────────────────────────────────────────────────
-
+// ── Initial state ─────────────────────────────────────────────────────────────
 const initialState = {
   activeRoomId: 'room_default_1',
   list: [
-    {
-      // Default production hall — pre-populated for immediate use
-      ...makeRoom('room_default_1', 0, {
-        name:          'Production Hall',
-        length:        20,
-        width:         15,
-        height:        10,
-        floorArea:     300,
-        volume:        3000,
-        designTemp:    22,
-        designRH:      50,
-        pressure:      15,
-        classInOp:     'ISO 8',
-        atRestClass:   'ISO 8',
-        ventCategory:  'general',
-        minAcph:       10,
-        designAcph:    20,
-        assignedAhuIds: ['ahu1'],
-      }),
-    },
+    makeRoom('room_default_1', 0, {
+      name:           'Production Hall',
+      length:         20,
+      width:          15,
+      height:          4,     // m — realistic fab floor height
+      floorArea:      300,    // m²
+      volume:        1200,    // m³  (300 × 4)
+      designTemp:     22,     // °C
+      designRH:       50,     // %
+      pressure:       15,     // Pa
+      classInOp:     'ISO 8',
+      atRestClass:   'ISO 8',
+      ventCategory:  'general',
+      minAcph:        10,
+      designAcph:     20,
+      assignedAhuIds: ['ahu1'],
+    }),
   ],
 };
 
-// ─── Slice ────────────────────────────────────────────────────────────────────
-
+// ── Slice ─────────────────────────────────────────────────────────────────────
 const roomSlice = createSlice({
   name: 'room',
   initialState,
-  reducers: {
 
+  reducers: {
+    /** Set which room is selected in the sidebar / detail panel. */
     setActiveRoom: (state, action) => {
       state.activeRoomId = action.payload;
     },
 
-    // ── addRoom ─────────────────────────────────────────────────────────────
-    // Receives { id, minAcph, designAcph } from addNewRoom() thunk.
-    // The thunk pre-computes ACPH from isoCleanroom.getAcphDefaults()
-    // so new rooms always have correct ISO-class ACPH floors from creation.
-    //
-    // Falls back gracefully if called with just a string ID (legacy path).
+    /**
+     * addRoom
+     * Payload: string ID (legacy) OR object { id, minAcph, designAcph, ...overrides }.
+     * The addNewRoom() thunk in roomActions.js is the preferred caller —
+     * it also dispatches envelopeSlice.initializeRoom in the same transaction.
+     */
     addRoom: (state, action) => {
-      const payload = action.payload;
-
-      // Support both legacy string payload and new object payload
-      const id       = typeof payload === 'string' ? payload : (payload.id || generateRoomId());
-      const overrides = typeof payload === 'object' && payload !== null
-        ? {
-            minAcph:    payload.minAcph    ?? 10,
-            designAcph: payload.designAcph ?? 20,
-          }
-        : {};
+      const payload   = action.payload;
+      const isLegacy  = typeof payload === 'string';
+      const id        = isLegacy ? payload : (payload.id ?? generateRoomId());
+      const overrides = isLegacy ? {} : (() => {
+        const o = { ...payload };
+        delete o.id; // id is passed separately to makeRoom — don't double it
+        return o;
+      })();
 
       const newRoom = makeRoom(id, state.list.length, overrides);
       state.list.push(newRoom);
       state.activeRoomId = id;
     },
 
-    // ── updateRoom ───────────────────────────────────────────────────────────
-    // Resolves dot-notation paths via setNestedValue.
-    // Auto-recalculates floorArea and volume when geometry changes.
+    /**
+     * updateRoom
+     * { id, field, value }  —  field supports dot-notation paths.
+     * Auto-derives floorArea and volume when geometry dimensions change.
+     */
     updateRoom: (state, action) => {
       const { id, field, value } = action.payload;
-      const room = state.list.find((r) => r.id === id);
+      const room = state.list.find(r => r.id === id);
       if (!room) return;
 
       setNestedValue(room, field, value);
 
-      // Auto-calculate derived geometry
+      // Keep derived geometry consistent
+      const l = parseFloat(room.length)    || 0;
+      const w = parseFloat(room.width)     || 0;
+      const h = parseFloat(room.height)    || 0;
+
       if (field === 'length' || field === 'width') {
-        room.floorArea = parseFloat((room.length * room.width).toFixed(1));
-        room.volume    = parseFloat((room.floorArea * room.height).toFixed(1));
+        room.floorArea = parseFloat((l * w).toFixed(1));
+        room.volume    = parseFloat((room.floorArea * h).toFixed(1));
       }
       if (field === 'height') {
-        room.volume = parseFloat((room.floorArea * parseFloat(value)).toFixed(1));
+        room.volume = parseFloat((room.floorArea * h).toFixed(1));
+      }
+      if (field === 'floorArea') {
+        // Engineer entered irregular area directly
+        room.volume = parseFloat((parseFloat(value) * h).toFixed(1));
       }
     },
 
-    // ── AHU assignment ────────────────────────────────────────────────────────
+    /**
+     * setRoomAhu
+     * Replace the entire AHU assignment: { roomId, ahuId }.
+     * Pass ahuId = null to clear the assignment.
+     */
     setRoomAhu: (state, action) => {
       const { roomId, ahuId } = action.payload;
-      const room = state.list.find((r) => r.id === roomId);
-      if (room) room.assignedAhuIds = [ahuId];
+      const room = state.list.find(r => r.id === roomId);
+      if (room) room.assignedAhuIds = ahuId ? [ahuId] : [];
     },
 
+    /**
+     * toggleRoomAhu
+     * Toggle a single AHU in the assignment list (used by AhuAssignment.jsx).
+     * { roomId, ahuId }
+     */
     toggleRoomAhu: (state, action) => {
       const { roomId, ahuId } = action.payload;
-      const room = state.list.find((r) => r.id === roomId);
+      const room = state.list.find(r => r.id === roomId);
       if (!room) return;
-      const alreadyAssigned = room.assignedAhuIds.includes(ahuId);
-      room.assignedAhuIds = alreadyAssigned ? [] : [ahuId];
+      const idx = room.assignedAhuIds.indexOf(ahuId);
+      if (idx >= 0) {
+        room.assignedAhuIds.splice(idx, 1);
+      } else {
+        room.assignedAhuIds.push(ahuId);
+      }
     },
 
-    // ── deleteRoom ────────────────────────────────────────────────────────────
-    // Never deletes the last room — always leaves at least one.
-    // Companion thunk deleteRoomWithCleanup() in roomActions.js handles
-    // envelope cleanup — always use the thunk, not this action directly.
+    /**
+     * deleteRoom
+     * Never removes the last room.
+     * IMPORTANT: Do NOT call from the UI directly.
+     * Always use deleteRoomWithCleanup() thunk from roomActions.js so that
+     * envelopeSlice.removeRoomEnvelope also fires in the same transaction.
+     */
     deleteRoom: (state, action) => {
-      const idToDelete = action.payload;
       if (state.list.length <= 1) return;
-      state.list = state.list.filter((r) => r.id !== idToDelete);
-      if (state.activeRoomId === idToDelete) {
+      const id = action.payload;
+      state.list = state.list.filter(r => r.id !== id);
+      if (state.activeRoomId === id) {
         state.activeRoomId = state.list[0].id;
       }
     },
   },
 });
-
-// ─── Exports ──────────────────────────────────────────────────────────────────
 
 export const {
   setActiveRoom,
@@ -218,10 +294,18 @@ export const {
   deleteRoom,
 } = roomSlice.actions;
 
-export const selectAllRooms     = (state) => state.room.list;
-export const selectActiveRoomId = (state) => state.room.activeRoomId;
-export const selectActiveRoom   = (state) =>
-  state.room.list.find((r) => r.id === state.room.activeRoomId) ??
-  state.room.list[0];
-
 export default roomSlice.reducer;
+
+// ── Selectors ─────────────────────────────────────────────────────────────────
+
+export const selectAllRooms = (state) => state.room.list;
+
+export const selectActiveRoomId = (state) => state.room.activeRoomId;
+
+export const selectActiveRoom = (state) =>
+  state.room.list.find(r => r.id === state.room.activeRoomId) ??
+  state.room.list[0] ??
+  null;
+
+export const selectRoomById = (state, id) =>
+  state.room.list.find(r => r.id === id) ?? null;

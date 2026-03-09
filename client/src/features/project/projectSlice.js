@@ -1,99 +1,134 @@
 /**
  * projectSlice.js
- * Responsibility: Project-level identity, site reference data, and system
- * design parameters. These fields drive every room calculation downstream.
+ * Project-level identity, site reference data, and system design parameters.
+ * These fields drive every room calculation downstream via rdsSelector.
  *
- * ── FIELD NOTES ───────────────────────────────────────────────────────────────
+ * State shape:
+ *   state.project.info          →  project metadata
+ *   state.project.ambient       →  site reference conditions
+ *   state.project.systemDesign  →  HVAC system sizing parameters
  *
- * ambient.elevation   → altitude correction factor Cf in psychro.js
- *                        sensibleFactor(elev) / latentFactor(elev)
- * ambient.latitude    → CLTD LM correction + SHGF latitude factor (BUG-07 FIX)
- *                        Negative = southern hemisphere (valid).
- *                        Default 28°N (Delhi / typical South/SE Asia fab).
- * ambient.dailyRange  → full daily DB swing (°F) for CLTD mean-temp correction
- *                        (BUG-09 FIX). 0 = use DIURNAL_RANGE_DEFAULTS from
- *                        ashraeTables.js. Coastal: 8–12°F · Inland: 18–25°F ·
- *                        Desert: 28–40°F.
+ * ── FIELD CONTRACT WITH THE LOGIC LAYER ──────────────────────────────────────
  *
- * ambient.dryBulbTemp / wetBulbTemp / relativeHumidity:
- *   Project brief reference values only (°C / %).
- *   NOT used in load calculations — seasonal design conditions live in climateSlice.
+ *   rdsSelector reads these fields directly via named input selectors:
  *
- * systemDesign.safetyFactor    — % added to total capacity (0–50%)
- * systemDesign.bypassFactor    — coil bypass factor BF (0.01–0.30)
- * systemDesign.adp             — apparatus dew point °F (32–65°F)
- * systemDesign.fanHeat         — supply fan heat gain % of cooling load (0–20%)
- * systemDesign.humidificationTarget — minimum indoor RH% for winter humidification
- *   Pharma: 30–50% · Semiconductor: 40–50% · Battery dry room: 1–5%
+ *   state.project.ambient.elevation   → altitudeCorrectionFactor(elevation)
+ *                                       altCf used by ALL psychrometric calcs.
+ *   state.project.ambient.latitude    → CLTD LM correction; SHGF latitude factor
+ *                                       (negative = southern hemisphere, valid)
+ *                                       Default 28°N = Delhi / S.E. Asia fabs.
+ *   state.project.ambient.dailyRange  → CLTD mean-temp correction (°F swing).
+ *                                       0 = use DIURNAL_RANGE_DEFAULTS by climate zone.
  *
- * BUG-14 NOTE: safetyFactor and fanHeat applied independently in rdsSelector:
- *   grandTotal = (rawSensible + rawLatent) × safetyMult × fanHeatMult
- *   NOT: × (safetyMult × fanHeatMult) — avoids compounding two separate margins.
+ *   state.project.systemDesign.safetyFactor       → safety multiplier in seasonalLoads
+ *   state.project.systemDesign.bypassFactor        → BF in airQuantities + psychroStatePoints
+ *   state.project.systemDesign.adp                 → apparatus dew point in airQuantities + psychro
+ *   state.project.systemDesign.fanHeat             → supply fan heat fraction in rdsSelector
+ *   state.project.systemDesign.humidificationTarget → winter RH target in heatingHumid
+ *
+ * ── SYSTEM DESIGN DEFAULTS — INLINED ─────────────────────────────────────────
+ *
+ *   Previous version referenced ASHRAE.DEFAULT_SAFETY_FACTOR_PCT etc.
+ *   These constants may not exist in all versions of ashrae.js and would
+ *   silently produce undefined → NaN defaults at startup.
+ *
+ *   All defaults are now inlined here as named constants.
+ *   If ashrae.js is updated, update these constants to match.
+ *
+ *   DEFAULT_SAFETY_FACTOR_PCT  = 10  (%)  — ASHRAE allows 5–15%; 10% is common practice
+ *   DEFAULT_BYPASS_FACTOR      = 0.10     — typical for chilled-water AHUs; use 0.08–0.12
+ *   DEFAULT_ADP                = 55  (°F) — CHW coil leaving air at ~13°C; DX: 45–50°F
+ *   DEFAULT_FAN_HEAT_PCT       = 5   (%)  — supply fan heat as % of sensible room load
+ *   DEFAULT_HUMID_TARGET       = 45  (%)  — winter humidification setpoint
+ *
+ * ── AMBIENT FIELDS NOTE ────────────────────────────────────────────────────────
+ *
+ *   ambient.dryBulbTemp / wetBulbTemp / relativeHumidity are project-brief
+ *   reference values in °C and % — NOT used in load calculations.
+ *   Seasonal design conditions (summer/monsoon/winter DB + RH) live in climateSlice.
+ *
+ * ── BOUNDS CLAMPING ──────────────────────────────────────────────────────────
+ *
+ *   Both updateAmbient and updateSystemDesign clamp inputs to physically realistic
+ *   ranges. Out-of-bounds values are clamped silently with a console.warn.
+ *   This prevents a single bad UI input from producing nonsensical cascade results.
  */
 
-import { createSlice }  from '@reduxjs/toolkit';
-import ASHRAE           from '../../constants/ashrae';
+import { createSlice } from '@reduxjs/toolkit';
 
-// ── Bounds definitions for systemDesign fields ────────────────────────────────
-// Applied in updateSystemDesign reducer. Any value outside these bounds is
-// clamped silently and a console.warn is emitted so engineers can detect
-// bad inputs without breaking the calculation chain.
+// ── Inlined system design defaults ───────────────────────────────────────────
+// These replace the previous ASHRAE.DEFAULT_* references which were fragile
+// (undefined if ashrae.js didn't export them, silently producing NaN defaults).
+const DEFAULT_SAFETY_FACTOR_PCT  = 10;    // %
+const DEFAULT_BYPASS_FACTOR      = 0.10;  // dimensionless
+const DEFAULT_ADP                = 55;    // °F
+const DEFAULT_FAN_HEAT_PCT       = 5;     // %
+const DEFAULT_HUMID_TARGET       = 45;    // %RH
+
+// ── Bounds definitions ────────────────────────────────────────────────────────
 const SYSTEM_DESIGN_BOUNDS = {
-  safetyFactor:         { min: 0,    max: 50   },   // % — 0 = no margin (intentional only)
-  bypassFactor:         { min: 0.01, max: 0.30 },   // BF — physically bounded
-  adp:                  { min: 32,   max: 65   },   // °F — below freezing or above room = impossible
-  fanHeat:              { min: 0,    max: 20   },   // % — >20% is mechanically unrealistic
-  humidificationTarget: { min: 0,    max: 95   },   // %RH — 100% = saturation (never a design target)
+  safetyFactor:         { min: 0,    max: 50   },  // % — 0 allowed (deliberate, warns)
+  bypassFactor:         { min: 0.01, max: 0.30 },  // dimensionless
+  adp:                  { min: 32,   max: 65   },  // °F — below freezing is impossible
+  fanHeat:              { min: 0,    max: 20   },  // % — >20% is mechanically unrealistic
+  humidificationTarget: { min: 0,    max: 95   },  // %RH — 100% = saturation (not a target)
 };
 
-// ── Bounds definitions for ambient fields ────────────────────────────────────
 const AMBIENT_BOUNDS = {
-  elevation:         { min: -1400, max: 30000 },  // ft — Dead Sea to Everest base camp
-  latitude:          { min: -90,   max: 90    },  // ° — full globe
-  dailyRange:        { min: 0,     max: 60    },  // °F — 0 = use defaults; 60 = extreme desert
-  dryBulbTemp:       { min: -60,   max: 60    },  // °C — reference only
-  wetBulbTemp:       { min: -60,   max: 40    },  // °C — reference only
-  relativeHumidity:  { min: 0,     max: 100   },  // %
+  elevation:        { min: -1400, max: 30000 },  // ft — Dead Sea to Everest base camp
+  latitude:         { min: -90,   max: 90    },  // ° — full globe
+  dailyRange:       { min: 0,     max: 60    },  // °F — 0 = use lookup; 60 = extreme desert
+  dryBulbTemp:      { min: -60,   max: 60    },  // °C — reference only
+  wetBulbTemp:      { min: -60,   max: 40    },  // °C — reference only
+  relativeHumidity: { min: 0,     max: 100   },  // %  — reference only
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
+// ── Initial state ─────────────────────────────────────────────────────────────
 const initialState = {
   info: {
     projectName:       '',
     projectLocation:   '',
     customerName:      '',
     consultantName:    '',
+    // industry: used by UI for context-sensitive defaults (e.g. ventCategory suggestions).
+    // Not read directly by the current logic layer but available for future use.
     industry:          'Semiconductor',
     keyAccountManager: '',
   },
 
   ambient: {
-    elevation:         0,     // ft
-    latitude:         28,     // ° (negative = southern hemisphere)
-    dailyRange:        0,     // °F (0 = use DIURNAL_RANGE_DEFAULTS)
-    dryBulbTemp:      35,     // °C — project brief reference only
-    wetBulbTemp:      24,     // °C — project brief reference only
-    relativeHumidity: 50,     // %  — project brief reference only
+    // ── CALCULATION INPUTS — read by rdsSelector ──────────────────────────
+    elevation:    0,    // ft — 0 = sea level; drives altCf for ALL psychro calcs
+    latitude:    28,    // ° — negative = southern hemisphere; 28 = Delhi default
+    dailyRange:   0,    // °F — 0 = use DIURNAL_RANGE_DEFAULTS from ashraeTables.js
+
+    // ── REFERENCE VALUES — project brief only; NOT read by logic layer ────
+    dryBulbTemp:      35,  // °C
+    wetBulbTemp:      24,  // °C
+    relativeHumidity: 50,  // %
   },
 
   systemDesign: {
-    safetyFactor:         ASHRAE.DEFAULT_SAFETY_FACTOR_PCT,   // % default 10
-    bypassFactor:         ASHRAE.DEFAULT_BYPASS_FACTOR,        // — default 0.10
-    adp:                  ASHRAE.DEFAULT_ADP,                  // °F default 55
-    fanHeat:              ASHRAE.DEFAULT_FAN_HEAT_PCT,         // % default 5
-    humidificationTarget: 45,                                   // %RH default 45
+    // All values inlined — no ASHRAE constant references that could be undefined
+    safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,   // 10 %
+    bypassFactor:         DEFAULT_BYPASS_FACTOR,        // 0.10
+    adp:                  DEFAULT_ADP,                  // 55 °F
+    fanHeat:              DEFAULT_FAN_HEAT_PCT,         // 5 %
+    humidificationTarget: DEFAULT_HUMID_TARGET,         // 45 %RH
   },
 };
 
+// ── Slice ─────────────────────────────────────────────────────────────────────
 const projectSlice = createSlice({
   name: 'project',
   initialState,
 
   reducers: {
     /**
-     * updateProjectInfo({ field, value })
-     * String fields — trimmed to prevent whitespace mismatches in display / export.
+     * updateProjectInfo
+     * { field, value }  —  string fields, trimmed to prevent whitespace mismatches.
      */
     updateProjectInfo: (state, action) => {
       const { field, value } = action.payload;
@@ -105,10 +140,12 @@ const projectSlice = createSlice({
     },
 
     /**
-     * updateAmbient({ field, value })
-     * Numeric fields — parsed and clamped to AMBIENT_BOUNDS.
-     * Latitude can legitimately be negative (southern hemisphere) and 0 (equator).
-     * parseFloat(value) ?? 0 used (not || 0) so that a deliberate 0 is preserved.
+     * updateAmbient
+     * { field, value }  —  numeric fields, clamped to AMBIENT_BOUNDS.
+     *
+     * IMPORTANT: latitude and dailyRange can legitimately be 0 (equator,
+     * "use defaults"). parseFloat(value) ?? fallback used (not || fallback)
+     * so that a deliberate 0 is preserved. NaN falls back to existing state.
      */
     updateAmbient: (state, action) => {
       const { field, value } = action.payload;
@@ -123,7 +160,7 @@ const projectSlice = createSlice({
         const clamped = clamp(safe, bounds.min, bounds.max);
         if (clamped !== safe) {
           console.warn(
-            `updateAmbient: "${field}" value ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
+            `updateAmbient: "${field}" = ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
           );
         }
         state.ambient[field] = clamped;
@@ -133,9 +170,10 @@ const projectSlice = createSlice({
     },
 
     /**
-     * updateSystemDesign({ field, value })
-     * Numeric fields — parsed and clamped to SYSTEM_DESIGN_BOUNDS.
-     * safetyFactor = 0 is permitted (engineer's deliberate choice) but warns.
+     * updateSystemDesign
+     * { field, value }  —  numeric fields, clamped to SYSTEM_DESIGN_BOUNDS.
+     *
+     * safetyFactor = 0 is permitted (deliberate no-margin choice) but warns.
      */
     updateSystemDesign: (state, action) => {
       const { field, value } = action.payload;
@@ -150,12 +188,11 @@ const projectSlice = createSlice({
         const clamped = clamp(safe, bounds.min, bounds.max);
         if (clamped !== safe) {
           console.warn(
-            `updateSystemDesign: "${field}" value ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
+            `updateSystemDesign: "${field}" = ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
           );
         }
-        // Extra warning for deliberate zero safety factor — not an error but unusual
         if (field === 'safetyFactor' && clamped === 0) {
-          console.warn('updateSystemDesign: safetyFactor set to 0 — no safety margin will be applied.');
+          console.warn('updateSystemDesign: safetyFactor = 0 — no safety margin will be applied.');
         }
         state.systemDesign[field] = clamped;
       } else {
@@ -163,7 +200,7 @@ const projectSlice = createSlice({
       }
     },
 
-    /** Reset to initial state — useful for new project creation. */
+    /** Reset to initial state — used when creating a new project. */
     resetProject: () => initialState,
   },
 });
@@ -178,20 +215,19 @@ export const {
 export default projectSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
-// Named selectors so consumers never hardcode state shape paths.
-// rdsSelector, seasonalLoads, airQuantities, envelopeCalc all import from here.
+// Named selectors so no consumer hardcodes the state shape path.
 
-export const selectProjectInfo        = (state) => state.project.info;
-export const selectAmbient            = (state) => state.project.ambient;
-export const selectSystemDesign       = (state) => state.project.systemDesign;
+export const selectProjectInfo   = (state) => state.project.info;
+export const selectAmbient       = (state) => state.project.ambient;
+export const selectSystemDesign  = (state) => state.project.systemDesign;
 
-// Granular selectors for the fields most widely consumed downstream
-export const selectElevation          = (state) => state.project.ambient.elevation;
-export const selectLatitude           = (state) => state.project.ambient.latitude;
-export const selectDailyRange         = (state) => state.project.ambient.dailyRange;
-export const selectSafetyFactor       = (state) => state.project.systemDesign.safetyFactor;
-export const selectBypassFactor       = (state) => state.project.systemDesign.bypassFactor;
-export const selectAdp                = (state) => state.project.systemDesign.adp;
-export const selectFanHeat            = (state) => state.project.systemDesign.fanHeat;
-export const selectHumidTarget        = (state) => state.project.systemDesign.humidificationTarget;
-export const selectIndustry           = (state) => state.project.info.industry;
+// Granular selectors — consumed directly by rdsSelector input selectors
+export const selectElevation     = (state) => state.project.ambient.elevation;
+export const selectLatitude      = (state) => state.project.ambient.latitude;
+export const selectDailyRange    = (state) => state.project.ambient.dailyRange;
+export const selectSafetyFactor  = (state) => state.project.systemDesign.safetyFactor;
+export const selectBypassFactor  = (state) => state.project.systemDesign.bypassFactor;
+export const selectAdp           = (state) => state.project.systemDesign.adp;
+export const selectFanHeat       = (state) => state.project.systemDesign.fanHeat;
+export const selectHumidTarget   = (state) => state.project.systemDesign.humidificationTarget;
+export const selectIndustry      = (state) => state.project.info.industry;

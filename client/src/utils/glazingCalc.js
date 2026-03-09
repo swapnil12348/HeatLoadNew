@@ -10,6 +10,26 @@
  *   Positive = heat INTO conditioned space  → cooling load
  *   Negative = heat OUT OF conditioned space → heating load / heat loss
  *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   LOW-TIER1-05 FIX — GLASS_CLTD lookup made safe against undefined season.
+ *
+ *     The previous pattern:
+ *       const glassBaseCLTD = GLASS_CLTD[season] ?? 15;
+ *
+ *     The `?? 15` fallback silently fires if an unrecognised season string is
+ *     passed, or if a future element type reaches this lookup in winter (the
+ *     winter key was intentionally removed from GLASS_CLTD by the HIGH-04 fix).
+ *     15°F CLTD in winter is an order-of-magnitude error — winter glass
+ *     conduction must use U×A×ΔT, not CLTD.
+ *
+ *     Fix: the lookup now calls a guard that logs a console.error and returns
+ *     a zero result object rather than silently applying a wrong CLTD value.
+ *     This turns a silent wrong-number bug into a visible developer error.
+ *
+ *     The existing winter short-circuit (before the CLTD lookup) remains in
+ *     place — this guard is a second line of defence for future code additions.
+ *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
  *   BUG-GL-02 [HIGH]: Winter solar credit used incorrect CLF for shaded glass.
@@ -71,6 +91,45 @@ import {
   getCorrectedSHGF,
   resolveShgc,
 } from './envelopeHelpers';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal guard: safe GLASS_CLTD lookup
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * getGlassCLTD(season)
+ *
+ * LOW-TIER1-05 FIX: replaces `GLASS_CLTD[season] ?? 15` pattern.
+ *
+ * The HIGH-04 fix intentionally removed the winter key from GLASS_CLTD.
+ * The previous `?? 15` fallback would silently apply 15°F CLTD to any
+ * unrecognised season — including winter if a future element type reaches
+ * this lookup without the correct short-circuit in place.
+ *
+ * 15°F CLTD in winter is an order-of-magnitude error. Winter glass
+ * conduction must use U×A×ΔT (already handled above this call in
+ * calcGlassGain). This guard is a second line of defence.
+ *
+ * Returns null if the season key is not found. Callers must check for null
+ * and return a zero result — the error is logged so developers can see it.
+ *
+ * @param {string} season
+ * @returns {number|null}
+ */
+const getGlassCLTD = (season) => {
+  const cltd = GLASS_CLTD[season];
+  if (cltd === undefined) {
+    console.error(
+      `glazingCalc.getGlassCLTD: no GLASS_CLTD entry for season="${season}". ` +
+      `Winter callers MUST return U×A×ΔT before reaching the CLTD lookup — ` +
+      `see the winter short-circuit in calcGlassGain(). ` +
+      `For any other unknown season, add an entry to GLASS_CLTD in ashraeTables.js. ` +
+      `Returning null to prevent phantom load; caller will return zero result.`
+    );
+    return null;
+  }
+  return cltd;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Glass Heat Gain / Heat Loss
@@ -169,7 +228,15 @@ export const calcGlassGain = (
   // Glass conduction via CLTD method (ASHRAE CHLCM §3).
   // No orientation LM correction for glass — CLTD is position-independent.
   // Glass conduction is driven by DB difference, not solar position.
-  const glassBaseCLTD      = GLASS_CLTD[season] ?? 15;
+
+  // LOW-TIER1-05 FIX: use getGlassCLTD() instead of GLASS_CLTD[season] ?? 15.
+  // If null is returned (should never happen here — winter is already handled
+  // above), return a zero result rather than applying a wrong CLTD value.
+  const glassBaseCLTD = getGlassCLTD(season);
+  if (glassBaseCLTD === null) {
+    return { conduction: 0, solar: Math.round(solar), total: Math.round(solar) };
+  }
+
   const tMeanOutdoor       = getMeanOutdoorTemp(dbOut, season, dailyRange);
   const correctedGlassCLTD = correctCLTD(glassBaseCLTD, tRoom, tMeanOutdoor, 0);
   const conduction          = u * area * correctedGlassCLTD;
@@ -190,7 +257,8 @@ export const calcGlassGain = (
  * calcSkylightGain(skylight, climate, tRoom, season, latitude?, dailyRange?)
  *
  * Skylights treated as horizontal glass (orientation = 'Horizontal').
- * All fixes from calcGlassGain apply — including BUG-GL-02 (winter CLF=1.0).
+ * All fixes from calcGlassGain apply — including BUG-GL-02 (winter CLF=1.0)
+ * and LOW-TIER1-05 (safe GLASS_CLTD lookup via getGlassCLTD).
  *
  * Note: horizontal skylights have the highest summer SHGF (290 BTU/hr·ft²
  * at sea level, 32°N) and the highest winter solar credit. Correct CLF

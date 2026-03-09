@@ -2,59 +2,40 @@
  * isoValidation.js
  * Responsibility: ISO 14644-1 compliance checks for room ACPH and pressure.
  *
- * Reference: ISO 14644-1:2015 — Classification of air cleanliness by particle
- *            ISO 14644-4:2022 — Design, construction, and start-up
- *            GMP Annex 1:2022 (EMA) — Manufacture of Sterile Medicinal Products
+ * CHANGELOG v2.1:
  *
- * ── WHAT THIS MODULE DOES ─────────────────────────────────────────────────────
+ *   CRITICAL-02 FIX — validateGmpCompliance(): Grade D rooms now match correctly.
  *
- *   Validates a computed room data object (from rdsSelector) against the
- *   minimum requirements for its declared ISO class.
+ *     GMP_GRADE_MAPPING['Grade D'].isoInOp = null (correct — GMP Annex 1:2022
+ *     §4.7 defines no fixed in-operation ISO class for Grade D; it is set by
+ *     a facility contamination risk assessment).
  *
- *   Returns a structured result with:
- *     pass          — true only if ALL error-severity checks pass
- *     hasWarnings   — true if any warning-severity check triggered
- *                     (room passes but engineering review recommended)
- *     flags         — array of all check results, errors first
- *     acphCheck     — ACPH compliance detail
- *     pressureCheck — pressure compliance detail
- *     gmpCheck      — GMP Annex 1 check (pharma rooms only)
+ *     The previous match logic used strict string equality:
+ *       mapping.isoInOp === inOp
+ *     where inOp comes from governingClass() → returns 'Unclassified' when
+ *     room.classInOp is absent. The comparison null === 'Unclassified' is
+ *     always false, so Grade D rooms NEVER matched — they always received the
+ *     warning "ISO combination does not map to a standard GMP Annex 1 grade."
  *
- * ── rdsRow FIELD CONTRACT ─────────────────────────────────────────────────────
+ *     This was a false compliance failure for the most common room type in
+ *     pharma facilities (gowning, inspection, packaging support areas).
  *
- *   This module expects rdsRow (from rdsSelector) to contain:
+ *     Fix: the match function now handles null isoInOp explicitly — a null
+ *     in the mapping means "any value or absent" for the in-operation class,
+ *     so the match succeeds when room.classInOp is 'Unclassified', null, or
+ *     undefined. The at-rest condition still must match exactly.
  *
- *   supplyAir     (CFM) — TOTAL supply air (recirculation + OA combined).
- *                         ⚠️  If rdsSelector provides OA-only CFM here, ACPH
- *                         checks for ISO 3–6 (high-recirculation) rooms will
- *                         fail with enormous deficits. Confirm with rdsSelector.
+ *   MEDIUM-05 FIX — validateRoom() pass logic made explicit and readable.
  *
- *   volume        (ft³) — room volume in CUBIC FEET.
- *                         ⚠️  rdsSelector must output ft³, NOT m³.
- *                         Using m³ here would apply the 35.3147 conversion
- *                         and inflate volume by 35×, making every room fail.
- *                         FIX HIGH-01: removed the × 35.3147 multiplier.
- *                         Volume is computed once in computeVolumeFt3() below.
+ *     Previous:  allChecks.every(c => c.pass || c.severity !== 'error')
+ *     New:       !allChecks.some(c => c.severity === 'error' && c.pass === false)
  *
- *   pressure      (Pa)  — room static pressure differential vs adjacent space
- *   atRestClass   (str) — ISO class at rest (e.g. 'ISO 5')
- *   classInOp     (str) — ISO class in operation
- *   ventCategory  (str) — room ventilation category ('pharma', 'semicon', ...)
- *   id, name            — room identifiers
+ *     These are logically equivalent, but the new form directly expresses the
+ *     intent: "fail only when a check has BOTH severity='error' AND pass=false."
+ *     The previous double-negative form was a trap for future severity levels —
+ *     adding a 'critical' severity would have silently been treated as 'info'.
  *
- * ── SEVERITY LEVELS ───────────────────────────────────────────────────────────
- *
- *   'error'   — hard non-compliance; room will fail qualification
- *   'warning' — borderline; engineering review required; room still passes
- *   'info'    — advisory only; not a compliance failure
- *
- * ── pass vs hasWarnings SEMANTICS ─────────────────────────────────────────────
- *
- *   pass = true  means no error-severity checks failed.
- *   A room can have pass = true AND hasWarnings = true simultaneously —
- *   meaning it meets minimum requirements but is operating below design target
- *   or has marginal pressure. This is intentional and documented here to
- *   prevent future refactors from accidentally treating warnings as failures.
+ * Reference: ISO 14644-1:2015, ISO 14644-4:2022, GMP Annex 1:2022
  */
 
 import {
@@ -67,7 +48,6 @@ import {
 /**
  * governingClass(room)
  * In-operation class governs during production — the stricter requirement.
- * Falls back to atRestClass if classInOp is unset or 'Unclassified'.
  */
 const governingClass = (room) =>
   room.classInOp && room.classInOp !== 'Unclassified'
@@ -76,70 +56,38 @@ const governingClass = (room) =>
 
 /**
  * computeVolumeFt3(rdsRow)
- *
- * FIX HIGH-01: rdsRow.volume is expected in ft³ (rdsSelector computes
- * volume as floorArea[ft²] × height[ft]). The previous × 35.3147 multiplier
- * assumed m³ input, which inflated volume by 35× and made every room's
- * ACPH appear 35× lower than reality.
- *
- * If rdsSelector changes to output m³, apply the conversion here and
- * update the rdsRow field contract above.
+ * FIX HIGH-01: rdsRow.volume is in ft³ (rdsSelector computes floorArea[ft²] × height[ft]).
  */
 const computeVolumeFt3 = (rdsRow) => parseFloat(rdsRow.volume) || 0;
 
 /**
  * computeActualAcph(rdsRow)
  * Actual ACPH = supplyAir[CFM] × 60 / volume[ft³]
- * See rdsRow field contract above for supplyAir unit assumptions.
  */
 const computeActualAcph = (rdsRow) => {
-  const volumeFt3  = computeVolumeFt3(rdsRow);
-  const supplyAir  = parseFloat(rdsRow.supplyAir) || 0;
+  const volumeFt3 = computeVolumeFt3(rdsRow);
+  const supplyAir = parseFloat(rdsRow.supplyAir) || 0;
   if (volumeFt3 <= 0) return 0;
   return parseFloat((supplyAir * 60 / volumeFt3).toFixed(1));
 };
 
 // ── Minimum pressure requirements by ISO class ────────────────────────────────
-// Source: ISO 14644-4:2022, Table D.1 / industry practice.
-// FIX HIGH-02: Added ISO 1–4 and ISO 9 entries.
-// ISO 1–4 require higher differentials due to tighter particle control.
-// ISO 9 is ambient reference — no pressure requirement.
 const ISO_MIN_PRESSURE_PA = {
-  'ISO 1':       25,   // FIX HIGH-02: was missing → fell back to 0
-  'ISO 2':       25,   // FIX HIGH-02: was missing
-  'ISO 3':       20,   // FIX HIGH-02: was missing
-  'ISO 4':       17.5, // FIX HIGH-02: was missing
+  'ISO 1':       25,
+  'ISO 2':       25,
+  'ISO 3':       20,
+  'ISO 4':       17.5,
   'ISO 5':       15,
   'ISO 6':       12.5,
   'ISO 7':       10,
   'ISO 8':       5,
-  'ISO 9':       0,    // FIX HIGH-02: ambient reference — no pressure requirement
+  'ISO 9':       0,
   'CNC':          2,
   'Unclassified': 0,
 };
 
 // ── ACPH check ────────────────────────────────────────────────────────────────
 
-/**
- * validateAcph(rdsRow)
- *
- * Checks whether the room's computed supply air ACPH meets the minimum
- * for its ISO classification.
- *
- * ⚠️  See rdsRow field contract at top of file for supplyAir / volume units.
- *     Ensure rdsSelector is providing total supply CFM and volume in ft³.
- *
- * @param {object} rdsRow - computed row from rdsSelector
- * @returns {{
- *   pass:        boolean,
- *   severity:    'error' | 'warning' | 'info',
- *   actualAcph:  number,
- *   minAcph:     number,
- *   designAcph:  number,
- *   isoClass:    string,
- *   message:     string,
- * }}
- */
 export const validateAcph = (rdsRow) => {
   const isoClass   = governingClass(rdsRow);
   const range      = ACPH_RANGES[isoClass] ?? ACPH_RANGES['Unclassified'];
@@ -163,7 +111,6 @@ export const validateAcph = (rdsRow) => {
 
   if (actualAcph < designAcph) {
     return {
-      // Meets minimum — not an error. Warning signals below-design operation.
       pass:        true,
       severity:    'warning',
       actualAcph,
@@ -188,24 +135,9 @@ export const validateAcph = (rdsRow) => {
 
 // ── Pressure check ────────────────────────────────────────────────────────────
 
-/**
- * validatePressure(rdsRow)
- *
- * Checks room differential pressure meets the minimum for its ISO class.
- * FIX HIGH-02: Full ISO 1–9 coverage added to ISO_MIN_PRESSURE_PA above.
- *
- * @param {object} rdsRow
- * @returns {{
- *   pass:     boolean,
- *   severity: 'error' | 'warning' | 'info',
- *   pressure: number,
- *   minPa:    number,
- *   message:  string,
- * }}
- */
 export const validatePressure = (rdsRow) => {
-  const isoClass   = governingClass(rdsRow);
-  const pressure   = parseFloat(rdsRow.pressure) || 0;
+  const isoClass    = governingClass(rdsRow);
+  const pressure    = parseFloat(rdsRow.pressure) || 0;
   const minPressure = ISO_MIN_PRESSURE_PA[isoClass] ?? 0;
 
   if (isoClass === 'Unclassified' || isoClass === 'ISO 9') {
@@ -229,10 +161,9 @@ export const validatePressure = (rdsRow) => {
     };
   }
 
-  // Marginal: within 5 Pa of minimum
   if (pressure < minPressure + 5) {
     return {
-      pass:     true,   // Meets minimum but with little margin
+      pass:     true,
       severity: 'warning',
       pressure,
       minPa:    minPressure,
@@ -256,23 +187,16 @@ export const validatePressure = (rdsRow) => {
 /**
  * validateGmpCompliance(rdsRow)
  *
- * Cross-checks a room's at-rest and in-operation ISO classes against
- * GMP Annex 1:2022 requirements for pharma manufacturing.
+ * CRITICAL-02 FIX: Grade D rooms now match correctly.
  *
- * Depends on isoCleanroom.js FIX MED-01: GMP Grade B minAcph was null,
- * now correctly set to 20. Grade B rooms are now properly checked.
+ * The match function handles null isoInOp in GMP_GRADE_MAPPING:
+ *   null means "in-operation class is defined by risk assessment" (Grade D).
+ *   The match succeeds when room.classInOp is absent, 'Unclassified', or null.
  *
- * Only meaningful for ventCategory = 'pharma'.
- *
- * @param {object} rdsRow
- * @returns {{
- *   pass:     boolean,
- *   severity: 'error' | 'warning' | 'info',
- *   gmpGrade: string | null,
- *   message:  string,
- *   atRestOk: boolean,
- *   inOpOk:   boolean,
- * }}
+ * Match logic:
+ *   atRestMatch:  mapping.isoAtRest === room.atRestClass        (exact)
+ *   inOpMatch:    if mapping.isoInOp is null → any absent/unclassified inOp
+ *                 if mapping.isoInOp is string → exact match required
  */
 export const validateGmpCompliance = (rdsRow) => {
   if (rdsRow.ventCategory !== 'pharma') {
@@ -289,9 +213,27 @@ export const validateGmpCompliance = (rdsRow) => {
   const atRest = rdsRow.atRestClass || 'Unclassified';
   const inOp   = rdsRow.classInOp   || 'Unclassified';
 
-  const matchedGrade = Object.entries(GMP_GRADE_MAPPING).find(([, mapping]) =>
-    mapping.isoAtRest === atRest && mapping.isoInOp === inOp
-  );
+  // CRITICAL-02 FIX: Handle null isoInOp (Grade D) correctly.
+  //
+  // GMP_GRADE_MAPPING['Grade D'].isoInOp = null because GMP Annex 1:2022 §4.7
+  // does not fix an in-operation ISO class for Grade D — it is set by facility
+  // risk assessment. null is the semantically correct data value.
+  //
+  // The previous code used: mapping.isoInOp === inOp
+  //   → null === 'Unclassified' is ALWAYS false
+  //   → Grade D rooms NEVER matched, producing a false "unknown grade" warning
+  //
+  // Fixed: when mapping.isoInOp is null, match succeeds if room.classInOp
+  // is absent ('Unclassified') or explicitly null — both indicate the room
+  // does not have a fixed in-operation class, consistent with Grade D intent.
+  const matchedGrade = Object.entries(GMP_GRADE_MAPPING).find(([, mapping]) => {
+    const atRestMatch = mapping.isoAtRest === atRest;
+    const inOpMatch =
+      mapping.isoInOp === null
+        ? (inOp === 'Unclassified' || !inOp)   // null = risk-assessment basis; any absent/unclassified matches
+        : mapping.isoInOp === inOp;              // defined grades require exact match
+    return atRestMatch && inOpMatch;
+  });
 
   if (!matchedGrade) {
     return {
@@ -306,8 +248,6 @@ export const validateGmpCompliance = (rdsRow) => {
   }
 
   const [gradeName, gradeData] = matchedGrade;
-
-  // FIX HIGH-01: removed × 35.3147 — volume in ft³
   const actualAcph = computeActualAcph(rdsRow);
 
   if (gradeData.minAcph && actualAcph < gradeData.minAcph) {
@@ -337,29 +277,21 @@ export const validateGmpCompliance = (rdsRow) => {
 /**
  * validateRoom(rdsRow)
  *
- * Runs all validation checks for one room and returns a unified result.
+ * MEDIUM-05 FIX: pass logic made explicit and readable.
  *
- * pass semantics (FIX LOW-01: now explicitly documented):
- *   pass = true  → no error-severity checks failed
- *                  (warnings may still be present — check hasWarnings)
- *   pass = false → at least one error-severity check failed
+ * pass = false ONLY when a check has BOTH:
+ *   severity === 'error'  AND  pass === false
  *
- * A check with { pass: false, severity: 'warning' } contributes true to the
- * overall pass because severity !== 'error'. This is intentional — warnings
- * mean "meets minimum, review recommended" not "hard failure".
+ * A check with pass=false but severity='warning' does NOT fail the room —
+ * it means "meets minimum, engineering review recommended."
  *
- * @param {object} rdsRow - computed row from rdsSelector
- * @returns {{
- *   pass:          boolean,
- *   hasWarnings:   boolean,
- *   flags:         Array,
- *   acphCheck:     object,
- *   pressureCheck: object,
- *   gmpCheck:      object,
- *   isoClass:      string,
- *   roomId:        string,
- *   roomName:      string,
- * }}
+ * A check with severity='error' but pass=true is logically contradictory
+ * (should not occur) but is handled safely by the new form.
+ *
+ * If a new severity level (e.g. 'critical') is added in future:
+ *   - Old form: c.severity !== 'error' would treat 'critical' like 'info' (silent bug)
+ *   - New form: c.severity === 'error' would ignore 'critical' (visible omission)
+ *   Update the condition explicitly when adding new severities.
  */
 export const validateRoom = (rdsRow) => {
   const acphCheck     = validateAcph(rdsRow);
@@ -368,12 +300,12 @@ export const validateRoom = (rdsRow) => {
 
   const allChecks = [acphCheck, pressureCheck, gmpCheck];
 
-  // pass: true only when no check has severity='error' AND pass=false
-  // A check can have pass=false, severity='warning' — that is NOT a hard failure
-  const pass        = allChecks.every(c => c.pass || c.severity !== 'error');
+  // MEDIUM-05 FIX: explicit readable form — was: allChecks.every(c => c.pass || c.severity !== 'error')
+  // pass = false only when a check has severity='error' AND pass=false.
+  // Equivalent boolean logic but directly expresses the intent.
+  const pass        = !allChecks.some(c => c.severity === 'error' && c.pass === false);
   const hasWarnings = allChecks.some(c => c.severity === 'warning');
 
-  // Flags ordered: errors first, warnings second, info last
   const flags = [...allChecks].sort((a, b) => {
     const order = { error: 0, warning: 1, info: 2 };
     return (order[a.severity] ?? 3) - (order[b.severity] ?? 3);
@@ -394,28 +326,10 @@ export const validateRoom = (rdsRow) => {
 
 /**
  * validateAllRooms(rdsRows)
- *
- * Runs validateRoom() across the full rdsSelector output.
- * Returns a project-level summary plus per-room results.
- *
- * @param {Array} rdsRows - full selectRdsData output
- * @returns {{
- *   allPass:         boolean,
- *   totalErrors:     number,
- *   totalWarnings:   number,
- *   rooms:           Array,
- *   nonCompliantIds: string[],
- * }}
  */
 export const validateAllRooms = (rdsRows) => {
   if (!rdsRows?.length) {
-    return {
-      allPass:         true,
-      totalErrors:     0,
-      totalWarnings:   0,
-      rooms:           [],
-      nonCompliantIds: [],
-    };
+    return { allPass: true, totalErrors: 0, totalWarnings: 0, rooms: [], nonCompliantIds: [] };
   }
 
   const rooms         = rdsRows.map(validateRoom);
