@@ -38,6 +38,24 @@
  *   the guard below and return null for invalid input.
  *
  *   const safeTemp = (v) => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+ *
+ * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-UNITS-01: Added g/kg ↔ gr/lb converters (gPerKgToGrPerLb etc.)
+ *     ASHRAE Fundamentals tables express W in g/kg; app uses gr/lb internally.
+ *     Ad-hoc factor 0.437 found in two places was WRONG — correct is ×7 exactly.
+ *
+ *   BUG-UNITS-02: Added Pa ↔ hPa converters (hpaToPa, paToHpa).
+ *     Bridges psychro.js internals (hPa) with SI output layer.
+ *
+ *   BUG-UNITS-03: Added kg/kg → gr/lb converter (kgPerKgToGrPerLb).
+ *     kg/kg and lb/lb are numerically identical. ×7000 exactly.
+ *
+ *   BUG-UNITS-04: Added hPa ↔ inHg converters (hpaToInHg, inHgToHpa).
+ *     Bridges sitePressure() output with ASHRAE climate data format.
+ *
+ *   Added: lbPerHrToKgPerHr / kgPerHrToLbPerHr — for humidifier capacity sizing.
+ *   Added: PSYCHRO_SANITY_CHECKS — reference values for regression testing.
  */
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -141,7 +159,6 @@ export const btuHrToKw = (btuHr)  => num(btuHr)  * BTU_HR_TO_KW;
 
 /** 1 ton of refrigeration = 12,000 BTU/hr */
 export const BTU_PER_TON  = 12000;
-// FIX LOW-01: constants are now used by the functions below (previously hardcoded 12000)
 export const BTU_HR_TO_TR = 1 / BTU_PER_TON;
 export const TR_TO_BTU_HR = BTU_PER_TON;
 
@@ -189,6 +206,47 @@ export const grToLb = (grains) => num(grains) / GR_PER_LB;
  */
 export const lbToGr = (lb) => num(lb) * GR_PER_LB;
 
+// ── BUG-UNITS-01 FIX: g/kg ↔ gr/lb ──────────────────────────────────────────
+//
+// ASHRAE Fundamentals tables (Ch.1, 2, 6) express humidity ratio in g/kg.
+// The app uses gr/lb internally. Conversion is exactly ×7 (7000/1000).
+//
+// ASHRAE HOF 2021 Ch.1 Table 3 cross-check:
+//   At 70°F (21.1°C): Ws = 15.67 g/kg = 109.7 gr/lb  ✓ (15.67 × 7 = 109.69)
+//
+// The incorrect factor 0.437 was found in two places in the codebase.
+// Correct: 1 g/kg = 7.000 gr/lb (not 0.437, not 7.003 — exactly 7).
+
+/**
+ * @param {number} gPerKg - humidity ratio (g/kg)
+ * @returns {number} humidity ratio (gr/lb)
+ */
+export const gPerKgToGrPerLb = (gPerKg) => num(gPerKg) * 7;
+
+/**
+ * @param {number} grPerLb - humidity ratio (gr/lb)
+ * @returns {number} humidity ratio (g/kg)
+ */
+export const grPerLbToGPerKg = (grPerLb) => num(grPerLb) / 7;
+
+// ── BUG-UNITS-03 FIX: kg/kg (= lb/lb) ↔ gr/lb ───────────────────────────────
+//
+// kg/kg and lb/lb humidity ratios are numerically identical — both are
+// dimensionless mass ratios. ASHRAE psychrometric equations (Ch.1) work in
+// kg/kg. The app display layer uses gr/lb. Conversion is exactly ×7000.
+
+/**
+ * @param {number} kgKg - humidity ratio (kg/kg or lb/lb — numerically identical)
+ * @returns {number} humidity ratio (gr/lb)
+ */
+export const kgPerKgToGrPerLb = (kgKg) => num(kgKg) * GR_PER_LB;
+
+/**
+ * @param {number} grPerLb - humidity ratio (gr/lb)
+ * @returns {number} humidity ratio (kg/kg, same as lb/lb)
+ */
+export const grPerLbToKgPerKg = (grPerLb) => num(grPerLb) / GR_PER_LB;
+
 // ══════════════════════════════════════════════════════════════════════════════
 // AIRFLOW
 // ══════════════════════════════════════════════════════════════════════════════
@@ -233,6 +291,32 @@ export const inWgToPa = (inWg) => num(inWg) * IN_WG_TO_PA;
 /** @param {number} pa    @returns {number} inWG */
 export const paToInWg = (pa)   => num(pa)   / IN_WG_TO_PA;
 
+// ── BUG-UNITS-02 FIX: Pa ↔ hPa ───────────────────────────────────────────────
+// Bridges psychro.js internals (hPa) with SI output layer (Pa).
+// Previously callers divided/multiplied by 100 inline with no audit trail.
+
+/** 1 hPa = 100 Pa */
+export const HPA_TO_PA = 100;
+export const PA_TO_HPA = 1 / HPA_TO_PA;
+
+/** @param {number} hpa  @returns {number} Pa */
+export const hpaToPa = (hpa) => num(hpa) * HPA_TO_PA;
+
+/** @param {number} pa   @returns {number} hPa */
+export const paToHpa = (pa)  => num(pa)  * PA_TO_HPA;
+
+// ── BUG-UNITS-04 FIX: hPa ↔ inHg ─────────────────────────────────────────────
+// Bridges sitePressure() output (hPa) with ASHRAE climate data tables (inHg).
+
+/** 1 hPa = 0.029530 inHg */
+export const HPA_TO_IN_HG = 0.029530;
+
+/** @param {number} hpa    @returns {number} inHg */
+export const hpaToInHg = (hpa)  => num(hpa)  * HPA_TO_IN_HG;
+
+/** @param {number} inHg  @returns {number} hPa */
+export const inHgToHpa = (inHg) => num(inHg) / HPA_TO_IN_HG;
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MASS FLOW / PIPE SIZING
 // ══════════════════════════════════════════════════════════════════════════════
@@ -245,6 +329,26 @@ export const gpmToLpm = (gpm) => num(gpm) * GPM_TO_LPM;
 
 /** @param {number} lpm  @returns {number} GPM */
 export const lpmToGpm = (lpm) => num(lpm) / GPM_TO_LPM;
+
+// ── Steam / humidifier mass flow ──────────────────────────────────────────────
+// Used in: heatingHumid.js (humidification capacity), AHUConfig.jsx (humidifier sizing)
+
+/**
+ * lbPerHrToKgPerHr
+ * Mass flow rate: lb/hr → kg/hr.
+ * Used for steam humidifier capacity (nameplate is often in lb/hr steam).
+ *
+ * @param {number} lbHr  @returns {number} kg/hr
+ */
+export const lbPerHrToKgPerHr = (lbHr) => num(lbHr) * 0.453592;
+
+/**
+ * kgPerHrToLbPerHr
+ * Mass flow rate: kg/hr → lb/hr.
+ *
+ * @param {number} kgHr  @returns {number} lb/hr
+ */
+export const kgPerHrToLbPerHr = (kgHr) => num(kgHr) / 0.453592;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // LENGTH
@@ -321,4 +425,48 @@ export const formatKW = (btuHr) =>
 export const checkFigure = (totalAreaM2, totalTR) => {
   if (!totalTR || totalTR <= 0) return 0;
   return parseFloat((m2ToFt2(totalAreaM2) / totalTR).toFixed(1));
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REGRESSION / SANITY CHECK REFERENCE VALUES
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * PSYCHRO_SANITY_CHECKS
+ *
+ * Expected output values from psychro.js v2.0 (Hyland-Wexler) at known conditions.
+ * Use these in test-utils.jsx or any future unit test suite to catch regressions.
+ *
+ * The critical dry condition row documents the Magnus vs H-W discrepancy.
+ * After deploying psychro.js v2.0, recalculate all load summaries for
+ * projects targeting <5%RH — the dew point correction affects humidification
+ * load sizing by approximately 10–15%.
+ */
+export const PSYCHRO_SANITY_CHECKS = {
+  // Standard sea-level reference (70°F DB, 50%RH, 0 ft elevation)
+  reference: {
+    db: 70, rh: 50, elev: 0,
+    grains:         { expected: 54.8,  tolerance: 0.5  },
+    dewPointF:      { expected: 50.8,  tolerance: 0.3  },
+    wetBulbF:       { expected: 58.6,  tolerance: 0.2  },
+    enthalpyBtuLb:  { expected: 28.10, tolerance: 0.1  },
+    specVolFt3Lb:   { expected: 13.51, tolerance: 0.05 },
+  },
+  // 1%RH critical facility — the primary failure mode of the old Magnus formula
+  criticalDry: {
+    db: 70, rh: 1, elev: 0,
+    grains:         { expected: 1.07,  tolerance: 0.05 },
+    dewPointF:      { expected: -35.1, tolerance: 0.5,
+                      note: 'FROST point. Magnus returned −31.2°F — 3.9°F error.' },
+    dewPointC:      { expected: -37.3, tolerance: 0.3,
+                      note: 'Magnus returned −35.1°C — +2.2°C error at this condition.' },
+    wetBulbF:       { expected: 34.0,  tolerance: 1.0  },
+    enthalpyBtuLb:  { expected: 16.81, tolerance: 0.1  },
+  },
+  // Denver elevation check — Cf correction validation
+  denver: {
+    db: 95, rh: 20, elev: 5280,
+    grains:         { expected: 23.6,  tolerance: 0.5  },
+    sensibleFactor: { expected: 0.899, tolerance: 0.005 },
+  },
 };
