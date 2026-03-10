@@ -235,12 +235,13 @@ export const calculateAirQuantities = (
   // ── 7. AHU air balance ────────────────────────────────────────────────────
   const coilAir   = Math.round(supplyAir * (1 - bf));
   const bypassAir = Math.round(supplyAir * bf);
-  const returnAir = Math.max(0, supplyAir - freshAirCheck - totalExhaust);
+  const returnAir = Math.max(0, supplyAir - freshAirCheck); // FIX: Removed double-dip of 
 
   // ── 8. ACES nomenclature aliases ─────────────────────────────────────────
   const dehumidifiedAir = coilAir;
   const freshAirAces    = freshAirCheck;
-  const bleedAir        = Math.max(0, supplyAir - returnAir - freshAirCheck);
+  // FIX: Bleed air (exfiltration) is the surplus fresh air not mechanically exhausted
+  const bleedAir        = Math.max(0, freshAirCheck - totalExhaust);
 
   return {
     // Supply air

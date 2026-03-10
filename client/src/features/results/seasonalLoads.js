@@ -220,9 +220,8 @@ export const calculateSeasonLoad = (
   // New: room.designRH != null preserves 0 (0 != null is true in JS).
   //   Only null or undefined falls back to the 50%RH default.
   //   This is identical to the guard already used in rdsSelector.js (raRH).
-  const rhIn = room.designRH != null
-    ? parseFloat(room.designRH)
-    : 50;                         // CRIT-SL-01 FIX: was: parseFloat(room.designRH) || 50
+  const parsedRhIn = parseFloat(room.designRH);
+  const rhIn = !isNaN(parsedRhIn) ? parsedRhIn : 50;                         // CRIT-SL-01 FIX: was: parseFloat(room.designRH) || 50
 
   const grIn = calculateGrains(dbInF, rhIn, elevation);
 
@@ -251,13 +250,20 @@ export const calculateSeasonLoad = (
   const pplLat   = pplCount * (int.people?.latentPerPerson   ?? ASHRAE.PEOPLE_LATENT_SEATED);
 
   // ── 3. Lighting ─────────────────────────────────────────────────────────────
+  
+  // Helper to safely parse numbers and apply a fallback if the value is missing or an empty string
+  
+  const parseDef = (val, fallback) => {
+    const parsed = parseFloat(val);
+    return !isNaN(parsed) ? parsed : fallback;
+  };
   // FIX HIGH-04: schedFactor applies useSchedule (0–100%) as operating fraction.
-  const schedFactor = (parseFloat(int.lights?.useSchedule) ?? 100) / 100;
+   const schedFactor = parseDef(int.lights?.useSchedule, 100) / 100;
 
   // FIX HIGH-05: ballastFactor per ASHRAE HOF 2021 Ch.18 Table 2.
-  const ballastFactor = parseFloat(int.lights?.ballastFactor) || ASHRAE.LIGHTING_BALLAST_FACTOR;
+   const ballastFactor = parseDef(int.lights?.ballastFactor, ASHRAE.LIGHTING_BALLAST_FACTOR);
 
-  const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0)
+ const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0)
     * floorAreaFt2
     * ASHRAE.BTU_PER_WATT
     * schedFactor
@@ -266,11 +272,10 @@ export const calculateSeasonLoad = (
   // ── 4. Equipment ───────────────────────────────────────────────────────────
   // FIX HIGH-07: ?? ensures EITHER per-type diversityFactor OR global fallback —
   // never both. See ashrae.js EQUIPMENT_LOAD_DENSITY note.
-  const equipKW         = parseFloat(int.equipment?.kw)           || 0;
-  const equipSensPct    = (parseFloat(int.equipment?.sensiblePct) ?? 100) / 100;
-  const equipLatPct     = (parseFloat(int.equipment?.latentPct)   ?? 0)   / 100;
-  const diversityFactor = parseFloat(int.equipment?.diversityFactor)
-    ?? ASHRAE.PROCESS_DIVERSITY_FACTOR;
+  const equipKW         = parseFloat(int.equipment?.kw) || 0;
+  const equipSensPct    = parseDef(int.equipment?.sensiblePct, 100) / 100;
+  const equipLatPct     = parseDef(int.equipment?.latentPct, 0) / 100;
+  const diversityFactor = parseDef(int.equipment?.diversityFactor, ASHRAE.PROCESS_DIVERSITY_FACTOR);
 
   const equipSens   = equipKW * KW_TO_BTU_HR * equipSensPct * diversityFactor;  // BUG-SL-02 FIX
   const equipLatent = equipKW * KW_TO_BTU_HR * equipLatPct  * diversityFactor;  // BUG-SL-02 FIX

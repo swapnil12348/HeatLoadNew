@@ -58,6 +58,32 @@
  *
  *   The project ambient fields (dryBulbTemp, wetBulbTemp) in projectSlice
  *   are stored in °C — those are reference/brief fields, not calculation inputs.
+ *
+ * -- CHANGELOG v2.1 -----------------------------------------------------------
+ *
+ *   BUG-SLICE-03 FIX — deriveFields(): || 0 replaced with explicit NaN guard.
+ *
+ *     Previous:
+ *       const safeDb = parseFloat(db) || 0;
+ *       const safeRh = parseFloat(rh) || 0;
+ *
+ *     The || 0 pattern treats NaN (from null/undefined input) the same as a
+ *     deliberate 0 entry. This produces two problems:
+ *
+ *       1. A blank / missing DB defaults silently to 0°F (−17.8°C) and
+ *          derives gr/dp/wb from that temperature, showing wrong values in
+ *          ClimateConfig rather than showing that the field is empty.
+ *
+ *       2. calculateDewPoint(0, 0) returns null (BUG-TIER1-01 fix) so dp
+ *          would be null even with the old code — but gr and wb would be
+ *          computed from 0°F, misleading the engineer.
+ *
+ *     These are display-only fields (the logic layer never reads gr/dp/wb
+ *     from climate state — it recalculates with real site elevation).
+ *     The fix returns null for all three derived fields when inputs are
+ *     blank/invalid, so the UI can render "—" rather than wrong numbers.
+ *
+ *     No calculation correctness impact — only ClimateConfig display quality.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
@@ -72,13 +98,25 @@ import {
 // Elevation = 0 (sea-level) is the meteorological convention for weather data.
 // Actual load calculations always call calculateGrains(db, rh, elevation)
 // with the real site elevation from projectSlice.
+//
+// BUG-SLICE-03 FIX: explicit NaN guard replaces || 0.
+// Returns { gr: null, dp: null, wb: null } when inputs are missing/invalid
+// so the UI can show "—" rather than values computed from 0°F.
 const deriveFields = (db, rh) => {
-  const safeDb = parseFloat(db) || 0;
-  const safeRh = parseFloat(rh) || 0;
+  const safeDb = parseFloat(db);
+  const safeRh = parseFloat(rh);
+
+  // BUG-SLICE-03 FIX: return nulls on invalid input.
+  // The logic layer never reads these fields — safe to return null for display.
+  // UI components should render null as "—" or an empty cell.
+  if (isNaN(safeDb) || isNaN(safeRh)) {
+    return { gr: null, dp: null, wb: null };
+  }
+
   return {
     gr: Math.round(calculateGrains(safeDb, safeRh, 0) * 10) / 10,
-    dp: calculateDewPoint(safeDb, safeRh),
-    wb: Math.round(calculateWetBulb(safeDb, safeRh, 0) * 10) / 10,  // FIX INFO-02
+    dp: calculateDewPoint(safeDb, safeRh),   // may return null for rh ≤ 0 (correct)
+    wb: Math.round(calculateWetBulb(safeDb, safeRh, 0) * 10) / 10,
   };
 };
 
@@ -128,6 +166,10 @@ const climateSlice = createSlice({
      *
      * The calc layer does NOT read gr/dp/wb from this state — it recomputes
      * them with the actual site elevation. These derived fields are display-only.
+     *
+     * BUG-SLICE-03 FIX: deriveFields() now returns null for invalid inputs.
+     * If db or rh is cleared in the UI (empty string → NaN), derived fields
+     * are set to null rather than being computed from 0°F.
      */
     updateOutsideCondition: (state, action) => {
       const { season, field, value } = action.payload;
@@ -135,14 +177,16 @@ const climateSlice = createSlice({
 
       state.outside[season][field] = value;
 
-      // Re-derive display fields when db or rh changes
+      // Re-derive display fields when db or rh changes.
+      // deriveFields returns { gr: null, dp: null, wb: null } when inputs are
+      // blank/NaN — the UI should render null as "—".
       if (field === 'db' || field === 'rh') {
-        const db = parseFloat(state.outside[season].db) || 0;
-        const rh = parseFloat(state.outside[season].rh) || 0;
-        const derived = deriveFields(db, rh);
+        const db = state.outside[season].db;
+        const rh = state.outside[season].rh;
+        const derived = deriveFields(db, rh);   // BUG-SLICE-03 FIX: uses NaN-safe version
         state.outside[season].gr = derived.gr;
         state.outside[season].dp = derived.dp;
-        state.outside[season].wb = derived.wb;  // FIX INFO-02
+        state.outside[season].wb = derived.wb;
       }
     },
   },

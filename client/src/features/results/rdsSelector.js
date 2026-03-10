@@ -162,9 +162,9 @@ export const selectRdsData = createSelector(
 
       // Null-coalescing guard: preserves 0%RH for battery dry rooms.
       // 0 != null is true in JS → 0 passes through correctly.
-      const raRH = room.designRH != null
-        ? parseFloat(room.designRH)
-        : 50;
+      // Safe guard: preserves 0%RH for battery dry rooms but catches empty strings
+      const parsedRaRh = parseFloat(room.designRH);
+      const raRH = !isNaN(parsedRaRh) ? parsedRaRh : 50;
 
       // ════════════════════════════════════════════════════════════════════════
       // STEP 1 — Seasonal loads
@@ -291,7 +291,8 @@ export const selectRdsData = createSelector(
       // coilLoadBTU: room + OA before fan heat. Used for CHW pipe sizing.
       // CRIT-RDS-02 FIX: oaTotal here too — CHW plant must not be undersized.
       const coilLoadBTU = (peakErsh + peakErlh)
-        + oaSummer.oaTotal;       // CRIT-RDS-02 FIX: was (oaSensible + oaLatent)
+        + oaSummer.oaTotal
+        + supplyFanHeatBTU;       // CRIT-RDS-02 FIX: was (oaSensible + oaLatent)
 
       const supplyFanHeatBlow = supplyFanHeatBTU;
       const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);

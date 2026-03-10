@@ -53,6 +53,11 @@
  *   system heat balance; it does NOT flow through the chilled water coil.
  *   Sizing CHW pipes on grandTotal (which includes fan heat) would oversize
  *   the CHW plant by the fan heat fraction (~5%). See BUG-PIPE-01.
+ *   /newer change
+ * 
+ *    calculatePipeSizing() (per-room) receives coilLoadBTU.
+//   coilLoadBTU now correctly includes supply fan heat, as the cooling coil 
+//   must offset the sensible heat added to the air stream by the fan motor/impeller.
  *
  *   calculateProjectPipeSizing() (plant-level) must sum coilLoadBTU values,
  *   not grandTotal values, for the same reason. Fixed in this version.
