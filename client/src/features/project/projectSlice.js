@@ -52,13 +52,37 @@
  *   Both updateAmbient and updateSystemDesign clamp inputs to physically realistic
  *   ranges. Out-of-bounds values are clamped silently with a console.warn.
  *   This prevents a single bad UI input from producing nonsensical cascade results.
+ *
+ * -- CHANGELOG v2.1 -----------------------------------------------------------
+ *
+ *   BUG-SLICE-05 FIX — updateSystemDesign: adp < 38°F now triggers a warning.
+ *
+ *     The hard lower bound for adp is 32°F (freezing) — physically correct as
+ *     a hard limit (ADP cannot be below the freezing point of water on a
+ *     standard coil without icing). However, 32°F is not achievable by a
+ *     standard chilled-water coil: typical CHW supply 6–8°C (43–46°F) yields
+ *     ADP in the 44–50°F range. Values below 38°F require DX refrigerant or
+ *     glycol coils.
+ *
+ *     Engineers setting adp = 32–37°F are either:
+ *       (a) making a data-entry error (intended 52°F or 47°F), or
+ *       (b) designing a DX/glycol system intentionally.
+ *
+ *     A warning (not a clamp) allows both cases. Case (b) is legitimate —
+ *     the calculation proceeds correctly; the engineer is informed.
+ *
+ *     Impact of an accidentally low ADP:
+ *       supplyDT = (1 - BF) × (dbRoom - ADP) → larger ΔT → lower thermalCFM
+ *       Lower supply CFM → smaller AHU selected → undersized for the room.
+ *       For a 1000 BTU/hr room at ADP=32°F vs ADP=52°F:
+ *         thermalCFM(32°F): 1000 / (1.08 × 0.90 × (72-32)) = 25.7 CFM
+ *         thermalCFM(52°F): 1000 / (1.08 × 0.90 × (72-52)) = 51.4 CFM
+ *       50% undersizing of supply air — non-conservative for critical facilities.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
 
 // ── Inlined system design defaults ───────────────────────────────────────────
-// These replace the previous ASHRAE.DEFAULT_* references which were fragile
-// (undefined if ashrae.js didn't export them, silently producing NaN defaults).
 const DEFAULT_SAFETY_FACTOR_PCT  = 10;    // %
 const DEFAULT_BYPASS_FACTOR      = 0.10;  // dimensionless
 const DEFAULT_ADP                = 55;    // °F
@@ -67,20 +91,20 @@ const DEFAULT_HUMID_TARGET       = 45;    // %RH
 
 // ── Bounds definitions ────────────────────────────────────────────────────────
 const SYSTEM_DESIGN_BOUNDS = {
-  safetyFactor:         { min: 0,    max: 50   },  // % — 0 allowed (deliberate, warns)
-  bypassFactor:         { min: 0.01, max: 0.30 },  // dimensionless
-  adp:                  { min: 32,   max: 65   },  // °F — below freezing is impossible
-  fanHeat:              { min: 0,    max: 20   },  // % — >20% is mechanically unrealistic
-  humidificationTarget: { min: 0,    max: 95   },  // %RH — 100% = saturation (not a target)
+  safetyFactor:         { min: 0,    max: 50   },
+  bypassFactor:         { min: 0.01, max: 0.30 },
+  adp:                  { min: 32,   max: 65   },  // °F — hard lower = freezing point
+  fanHeat:              { min: 0,    max: 20   },
+  humidificationTarget: { min: 0,    max: 95   },
 };
 
 const AMBIENT_BOUNDS = {
-  elevation:        { min: -1400, max: 30000 },  // ft — Dead Sea to Everest base camp
-  latitude:         { min: -90,   max: 90    },  // ° — full globe
-  dailyRange:       { min: 0,     max: 60    },  // °F — 0 = use lookup; 60 = extreme desert
-  dryBulbTemp:      { min: -60,   max: 60    },  // °C — reference only
-  wetBulbTemp:      { min: -60,   max: 40    },  // °C — reference only
-  relativeHumidity: { min: 0,     max: 100   },  // %  — reference only
+  elevation:        { min: -1400, max: 30000 },
+  latitude:         { min: -90,   max: 90    },
+  dailyRange:       { min: 0,     max: 60    },
+  dryBulbTemp:      { min: -60,   max: 60    },
+  wetBulbTemp:      { min: -60,   max: 40    },
+  relativeHumidity: { min: 0,     max: 100   },
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -92,31 +116,25 @@ const initialState = {
     projectLocation:   '',
     customerName:      '',
     consultantName:    '',
-    // industry: used by UI for context-sensitive defaults (e.g. ventCategory suggestions).
-    // Not read directly by the current logic layer but available for future use.
     industry:          'Semiconductor',
     keyAccountManager: '',
   },
 
   ambient: {
-    // ── CALCULATION INPUTS — read by rdsSelector ──────────────────────────
-    elevation:    0,    // ft — 0 = sea level; drives altCf for ALL psychro calcs
-    latitude:    28,    // ° — negative = southern hemisphere; 28 = Delhi default
-    dailyRange:   0,    // °F — 0 = use DIURNAL_RANGE_DEFAULTS from ashraeTables.js
-
-    // ── REFERENCE VALUES — project brief only; NOT read by logic layer ────
-    dryBulbTemp:      35,  // °C
-    wetBulbTemp:      24,  // °C
-    relativeHumidity: 50,  // %
+    elevation:    0,
+    latitude:    28,
+    dailyRange:   0,
+    dryBulbTemp:      35,
+    wetBulbTemp:      24,
+    relativeHumidity: 50,
   },
 
   systemDesign: {
-    // All values inlined — no ASHRAE constant references that could be undefined
-    safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,   // 10 %
-    bypassFactor:         DEFAULT_BYPASS_FACTOR,        // 0.10
-    adp:                  DEFAULT_ADP,                  // 55 °F
-    fanHeat:              DEFAULT_FAN_HEAT_PCT,         // 5 %
-    humidificationTarget: DEFAULT_HUMID_TARGET,         // 45 %RH
+    safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,
+    bypassFactor:         DEFAULT_BYPASS_FACTOR,
+    adp:                  DEFAULT_ADP,
+    fanHeat:              DEFAULT_FAN_HEAT_PCT,
+    humidificationTarget: DEFAULT_HUMID_TARGET,
   },
 };
 
@@ -126,10 +144,6 @@ const projectSlice = createSlice({
   initialState,
 
   reducers: {
-    /**
-     * updateProjectInfo
-     * { field, value }  —  string fields, trimmed to prevent whitespace mismatches.
-     */
     updateProjectInfo: (state, action) => {
       const { field, value } = action.payload;
       if (!(field in state.info)) {
@@ -139,14 +153,6 @@ const projectSlice = createSlice({
       state.info[field] = typeof value === 'string' ? value.trim() : value;
     },
 
-    /**
-     * updateAmbient
-     * { field, value }  —  numeric fields, clamped to AMBIENT_BOUNDS.
-     *
-     * IMPORTANT: latitude and dailyRange can legitimately be 0 (equator,
-     * "use defaults"). parseFloat(value) ?? fallback used (not || fallback)
-     * so that a deliberate 0 is preserved. NaN falls back to existing state.
-     */
     updateAmbient: (state, action) => {
       const { field, value } = action.payload;
       if (!(field in state.ambient)) {
@@ -173,7 +179,10 @@ const projectSlice = createSlice({
      * updateSystemDesign
      * { field, value }  —  numeric fields, clamped to SYSTEM_DESIGN_BOUNDS.
      *
-     * safetyFactor = 0 is permitted (deliberate no-margin choice) but warns.
+     * BUG-SLICE-05 FIX: adp < 38°F now triggers a warning (not a clamp).
+     *   Standard CHW coils achieve ADP 44–55°F. Below 38°F requires DX or glycol.
+     *   A data-entry error (e.g. 32 instead of 52) halves thermalCFM → 50%
+     *   undersized AHU. The warning makes the engineer's intent explicit.
      */
     updateSystemDesign: (state, action) => {
       const { field, value } = action.payload;
@@ -191,16 +200,38 @@ const projectSlice = createSlice({
             `updateSystemDesign: "${field}" = ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
           );
         }
+
+        // ── Field-specific warnings ──────────────────────────────────────────
+
         if (field === 'safetyFactor' && clamped === 0) {
-          console.warn('updateSystemDesign: safetyFactor = 0 — no safety margin will be applied.');
+          console.warn(
+            'updateSystemDesign: safetyFactor = 0 — no safety margin will be applied. ' +
+            'ASHRAE recommends 5–15% for cooling load calculations.'
+          );
         }
+
+        // BUG-SLICE-05 FIX: warn when ADP is below typical CHW coil range.
+        // Hard lower bound (32°F) is retained — ADP physically cannot be below
+        // the freezing point on a standard coil without icing the coil surface.
+        // The warning fires for 32–37°F, which requires DX refrigerant or glycol.
+        if (field === 'adp' && clamped < 38) {
+          console.warn(
+            `updateSystemDesign: adp = ${clamped}°F is below the typical chilled-water ` +
+            `coil range (38–55°F). Standard CHW supply at 6–8°C (43–46°F) achieves ` +
+            `ADP ≈ 44–50°F. Values below 38°F require DX refrigerant or glycol coils. ` +
+            `If this is intentional (DX/glycol system), this warning can be disregarded. ` +
+            `If this is a data-entry error (e.g. intended 52°F), correct the value — ` +
+            `an ADP that is too low understates thermalCFM and undersizes the AHU ` +
+            `by up to 50% for typical room conditions.`
+          );
+        }
+
         state.systemDesign[field] = clamped;
       } else {
         state.systemDesign[field] = safe;
       }
     },
 
-    /** Reset to initial state — used when creating a new project. */
     resetProject: () => initialState,
   },
 });
@@ -215,13 +246,11 @@ export const {
 export default projectSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
-// Named selectors so no consumer hardcodes the state shape path.
 
 export const selectProjectInfo   = (state) => state.project.info;
 export const selectAmbient       = (state) => state.project.ambient;
 export const selectSystemDesign  = (state) => state.project.systemDesign;
 
-// Granular selectors — consumed directly by rdsSelector input selectors
 export const selectElevation     = (state) => state.project.ambient.elevation;
 export const selectLatitude      = (state) => state.project.ambient.latitude;
 export const selectDailyRange    = (state) => state.project.ambient.dailyRange;

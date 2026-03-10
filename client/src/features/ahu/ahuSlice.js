@@ -45,6 +45,23 @@
  *
  *   Logic layer only distinguishes DOAS vs non-DOAS. The other type values
  *   are for equipment scheduling and spec documentation.
+ *
+ * -- CHANGELOG v2.1 -----------------------------------------------------------
+ *
+ *   BUG-SLICE-04 FIX — deleteAHU: guidance updated to require deleteAhuWithCleanup.
+ *
+ *     deleteAHU() (this reducer) only removes the AHU from ahuSlice.list.
+ *     It does NOT clear room.assignedAhuIds references. After deletion,
+ *     rdsSelector returns ahuId: '' and typeOfUnit: '-' for every affected
+ *     room with no warning — silently reverting all those rooms to
+ *     Recirculating type regardless of what the engineer configured.
+ *
+ *     Fix: deleteAhuWithCleanup(ahuId) thunk in roomActions.js clears all
+ *     room assignments BEFORE removing the AHU. All UI components that
+ *     delete AHUs MUST call deleteAhuWithCleanup, never deleteAHU directly.
+ *
+ *     deleteAHU is retained as the underlying reducer (the thunk dispatches
+ *     it as the final step). Do not call it from UI code.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
@@ -124,9 +141,20 @@ const ahuSlice = createSlice({
 
     /**
      * deleteAHU
-     * Removes an AHU by ID.
-     * NOTE: does NOT currently clean up room.assignedAhuIds references.
-     * The AHUConfig page should warn the engineer if rooms are still assigned.
+     * ⚠️  DO NOT CALL FROM UI CODE DIRECTLY.
+     *
+     * BUG-SLICE-04 FIX: Use deleteAhuWithCleanup(ahuId) from roomActions.js instead.
+     *
+     * This reducer only removes the AHU from ahuSlice.list. It does NOT clear
+     * room.assignedAhuIds references in roomSlice. Calling this directly leaves
+     * every assigned room with a stale AHU ID, causing rdsSelector to silently
+     * revert those rooms to Recirculating type with ahuId: '' and typeOfUnit: '-'.
+     *
+     * deleteAhuWithCleanup() thunk in roomActions.js:
+     *   1. Clears all room.assignedAhuIds references via setRoomAhu({ ahuId: null })
+     *   2. Then dispatches this reducer as the final step
+     *
+     * This reducer is exported for the thunk to dispatch. Not for direct UI use.
      */
     deleteAHU: (state, action) => {
       state.list = state.list.filter(a => a.id !== action.payload);
