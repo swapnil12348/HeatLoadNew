@@ -309,7 +309,7 @@ export const calculateSeasonLoad = (
     erlh,
 
     // Psychrometric state
-    grains: grIn.toFixed(1),
+    grains: grIn,
     dbInF,
     grIn,
     grOut,
