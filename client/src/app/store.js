@@ -14,3 +14,4 @@ export const store = configureStore({
 });
 
 export default store;
+if (import.meta.env.DEV) window.__store = store;
