@@ -2,6 +2,38 @@
  * RDSPage.jsx
  * Responsibility: Master project overview — rooms grouped by AHU system,
  *                 with click-to-edit side panel.
+ *
+ * -- CHANGELOG v2.1 -----------------------------------------------------------
+ *
+ *   BUG-UI-03 [CRITICAL — UNIT LABEL] — SummaryRow floorArea label corrected.
+ *
+ *     Previous: roomData.floorArea displayed with hardcoded 'm²' label.
+ *
+ *     roomData is an rdsRow from selectRdsData. Per CRIT-RDS-01 (rdsSelector
+ *     v2.1), rdsRow.floorArea is ft² — the selector converts room.floorArea
+ *     (m², roomSlice) to ft² for ACPH calculations. The column definition
+ *     subLabel 'm²' is correct only in the RDSRow/panel context where
+ *     getFieldValue reads from the raw room object (SI). SummaryRow reads
+ *     the rdsRow directly, bypassing getFieldValue.
+ *
+ *     Impact: For a 100 m² room:
+ *       rdsRow.floorArea ≈ 1,076 ft²
+ *       Display was: '1,076.0 m²' — 10.76× error shown to engineer.
+ *
+ *     Fix: label changed to 'ft²'. Value is already ft² (correct).
+ *
+ *   BUG-UI-04 [MEDIUM — MISSING CRITICAL SURFACE] — highHumidRooms and
+ *     regulatoryAcphRooms banners added.
+ *
+ *     useProjectTotals FIX-H02 added highHumidRooms (Δgr > 40 gr/lb,
+ *     sub-5%RH warning) and FIX-H03 added regulatoryAcphRooms (NFPA 855 /
+ *     GMP statutory ACH floor). Neither was consumed by RDSPage. The hook's
+ *     own JSDoc states these MUST be surfaced in UI.
+ *
+ *     For Exide Li-ion battery rooms, TSMC dry-rooms, and Cipla pharma
+ *     dry-powder suites: a missing humidification banner is a production-
+ *     stopping engineering oversight. Both banners are now rendered above
+ *     the AHU grouping table where the engineer will see them immediately.
  */
 
 import { useState }                    from 'react';
@@ -62,12 +94,15 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
         </span>
       </td>
 
-      {/* Area — m² (stored unit) */}
+      {/* Area — BUG-UI-03 FIX: roomData is an rdsRow; rdsRow.floorArea is ft²
+           (CRIT-RDS-01). Previous label 'm²' was wrong — 10.76× unit error.
+           getFieldValue is NOT used here; the value is read directly from the
+           rdsRow. The raw room.floorArea (m², roomSlice) is a different object. */}
       <td className="px-6 py-3 text-sm text-slate-600 font-mono">
         {roomData.floorArea
-          ? parseFloat(roomData.floorArea).toLocaleString(undefined, { maximumFractionDigits: 1 })
+          ? parseFloat(roomData.floorArea).toLocaleString(undefined, { maximumFractionDigits: 0 })
           : '—'}
-        <span className="text-[10px] text-slate-400 ml-1">m²</span>
+        <span className="text-[10px] text-slate-400 ml-1">ft²</span> {/* BUG-UI-03 FIX */}
       </td>
 
       {/* Supply airflow */}
@@ -115,8 +150,21 @@ export default function RDSPage() {
     (state) => state.envelope.byRoomId?.[selectedRoomId] ?? null
   );
 
-  // Project totals + byAhu grouping
-  const { byAhu, totalTR, totalCFM, roomCount, hasData } = useProjectTotals();
+  // BUG-UI-04 FIX: destructure highHumidRooms and regulatoryAcphRooms.
+  //
+  // FIX-H02 added highHumidRooms (Δgr > 40 gr/lb, sub-5%RH) and
+  // FIX-H03 added regulatoryAcphRooms (NFPA 855 / GMP statutory ACH) to the
+  // hook return value specifically so UI components would surface them.
+  // Neither was being consumed. Banners rendered below.
+  const {
+    byAhu,
+    totalTR,
+    totalCFM,
+    roomCount,
+    hasData,
+    highHumidRooms,       // BUG-UI-04 FIX: FIX-H02 — dry-room humidification warnings
+    regulatoryAcphRooms,  // BUG-UI-04 FIX: FIX-H03 — NFPA 855 / GMP statutory ACH rooms
+  } = useProjectTotals();
 
   // Raw room for the panel — NOT the rdsSelector row
   const selectedRawRoom = rawRooms.find((r) => r.id === selectedRoomId) ?? null;
@@ -189,7 +237,85 @@ export default function RDSPage() {
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-auto p-8">
-          <div className="max-w-6xl mx-auto space-y-8">
+          <div className="max-w-6xl mx-auto space-y-6">
+
+            {/* ── BUG-UI-04 FIX: High humidification warning banner ──────────
+                FIX-H02 (useProjectTotals) — Δgr > 40 gr/lb, sub-5%RH.
+                This is the single most critical mechanical sizing condition
+                for Exide Li-ion battery, TSMC dry-rooms, Cipla dry-powder.
+                A missing humidifier in these rooms is a production-stopping
+                failure — must be surfaced immediately. */}
+            {highHumidRooms.length > 0 && (
+              <div className="bg-red-50 border border-red-300 rounded-xl p-4 flex items-start gap-3">
+                <div className="text-xl mt-0.5 shrink-0">⚠️</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-red-900">
+                    {highHumidRooms.length} room{highHumidRooms.length !== 1 ? 's' : ''} require humidifier sizing review
+                  </p>
+                  <p className="text-xs text-red-700 mt-1 leading-relaxed">
+                    Δgr &gt; 40 gr/lb — sub-5% RH winter condition. Verify steam supply capacity,
+                    manifold sizing, and AHU humidifier section length before finalising equipment schedule.
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {highHumidRooms.map((r) => (
+                      <div
+                        key={r.id}
+                        className="text-xs font-mono text-red-800 bg-red-100 rounded px-2 py-1"
+                      >
+                        <span className="font-bold">{r.name}</span>
+                        {' — '}
+                        Δ{r.humidDeltaGr} gr/lb
+                        {' · '}
+                        {r.humidLbsPerHr} lb/hr
+                        {' · '}
+                        {r.humidKw} kW
+                        {r.humidWarning && (
+                          <span className="text-red-600 ml-2">({r.humidWarning})</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── BUG-UI-04 FIX: Regulatory ACH statutory floor banner ───────
+                FIX-H03 (useProjectTotals) — NFPA 855, OSHA, GMP Annex 1.
+                These rooms have supply air set by statute, not by engineering
+                thermal load. The compliance auditor must see this distinction
+                clearly — statutory ACH governs even if thermal CFM is higher. */}
+            {regulatoryAcphRooms.length > 0 && (
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-start gap-3">
+                <div className="text-xl mt-0.5 shrink-0">📋</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-amber-900">
+                    {regulatoryAcphRooms.length} room{regulatoryAcphRooms.length !== 1 ? 's' : ''} governed by statutory ACH floor
+                  </p>
+                  <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                    NFPA 855 (battery safety), OSHA ventilation, or GMP Annex 1 statutory minimum
+                    exceeds the thermal CFM. Supply air is code-driven, not engineering-driven.
+                    Confirm code basis with project AHJ before final issue.
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {regulatoryAcphRooms.map((r) => (
+                      <div
+                        key={r.id}
+                        className="text-xs font-mono text-amber-800 bg-amber-100 rounded px-2 py-1"
+                      >
+                        <span className="font-bold">{r.name}</span>
+                        {' — '}
+                        Reg. {Math.round(r.regulatoryAcphCFM).toLocaleString()} CFM
+                        {' vs '}
+                        {Math.round(r.thermalCFM).toLocaleString()} CFM thermal
+                        {' ('}
+                        {(((r.regulatoryAcphCFM - r.thermalCFM) / r.thermalCFM) * 100).toFixed(0)}% above thermal
+                        {')'}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* AHU groups — byAhu from useProjectTotals */}
             {Object.entries(byAhu).map(([ahuId, group]) => {
@@ -238,7 +364,8 @@ export default function RDSPage() {
                       <tr>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Room</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Class</th>
-                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Area</th>
+                        {/* BUG-UI-03 FIX: header updated to ft² to match cell label */}
+                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Area (ft²)</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Airflow</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Load</th>
                         <th className="px-6 py-3" />

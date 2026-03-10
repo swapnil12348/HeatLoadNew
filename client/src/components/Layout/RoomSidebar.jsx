@@ -13,15 +13,17 @@
  * Fixes vs old version:
  *   - h-[calc(100vh-64px)] → h-full (BUG-16 FIX: fills AppLayout flex-1 correctly)
  *   - Raw SVG plus icon → lucide-react Plus
- *   - Dead import React removed (React 17+ JSX transform)
+ *   - BUG-UI-21: Dead import React removed (React 17+ JSX transform — was documented
+ *     as removed in changelog but the import was never actually deleted)
  *   - Footer shows total area m² in addition to zone count
  *   - aria-label on add button
  */
 
-import React               from 'react';
-import { Plus }            from 'lucide-react';
-import useRoomSidebar      from '../../hooks/useRoomSidebar';
-import RoomSidebarItem     from './RoomSidebarItem';
+// BUG-UI-21 FIX: React import removed. Was listed in the changelog as already
+// removed but was still present on the import line.
+import { Plus }        from 'lucide-react';
+import useRoomSidebar  from '../../hooks/useRoomSidebar';
+import RoomSidebarItem from './RoomSidebarItem';
 
 export default function RoomSidebar() {
   const {
@@ -93,6 +95,7 @@ export default function RoomSidebar() {
           </span>
         </div>
       </div>
+
     </div>
   );
 }

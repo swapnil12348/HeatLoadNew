@@ -2,7 +2,13 @@
  * BuildingShell.jsx
  * Full ASHRAE CLTD/CLF envelope element editor.
  *
- * Fixes vs previous version:
+ * -- CHANGELOG v2.2 -----------------------------------------------------------
+ *
+ *   BUG-UI-20 [LOW] — unused React import removed.
+ *     Vite with React 17+ automatic JSX transform does not require explicit import.
+ *     useState and useCallback are still imported directly from 'react'.
+ *
+ * -- Previous fixes (retained) ------------------------------------------------
  *
  *   FIX MED-04: PartitionRow and FloorRow now show per-season heat gain.
  *     calcPartitionGain(element, tRoom, season) now accepts a season arg and
@@ -21,8 +27,8 @@
  *     input is now the shgc field. SC is shown as a read-only reference.
  */
 
-import React, { useState, useCallback } from 'react';
-import { useDispatch } from 'react-redux';
+import { useState, useCallback } from 'react'; // BUG-UI-20 FIX: React removed
+import { useDispatch }           from 'react-redux';
 import {
   addEnvelopeElement,
   updateEnvelopeElement,
@@ -39,10 +45,14 @@ import {
 import {
   calcWallGain,
   calcRoofGain,
-  calcGlassGain,
-  calcSkylightGain,
   calcPartitionGain,
 } from '../../utils/envelopeCalc';
+
+// calcGlassGain and calcSkylightGain live in glazingCalc.js (transparent envelope module)
+import {
+  calcGlassGain,
+  calcSkylightGain,
+} from '../../utils/glazingCalc';
 
 // ── Seasons ──────────────────────────────────────────────────────────────────
 const SEASONS = ['summer', 'monsoon', 'winter'];
@@ -203,7 +213,6 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
   const calcFn = isSkylights ? calcSkylightGain : calcGlassGain;
   const gains  = SEASONS.map(s => calcFn(element, climate, tRoom, s));
 
-  // Derive displayed SC from shgc when available (for reference column)
   const displayShgc = parseFloat(element.shgc) || parseFloat(element.sc) * 0.87 || 0;
   const displaySc   = (displayShgc / 0.87).toFixed(2);
 
@@ -235,7 +244,6 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
       <td className="px-2 py-2 w-16">
         <CellInput value={element.uValue} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
       </td>
-      {/* FIX FIX-05: GLAZING_OPTIONS preset — writes both shgc and sc */}
       <td className="px-2 py-2 w-32">
         <CellSelect
           value={element.scPreset}
@@ -243,8 +251,8 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
             const opt = GLAZING_OPTIONS.find(o => o.label === e.target.value);
             onUpdate('scPreset', e.target.value);
             if (opt) {
-              onUpdate('shgc', opt.shgc); // FIX FIX-05: write shgc (primary)
-              onUpdate('sc',   opt.sc);   // keep sc for legacy compat
+              onUpdate('shgc', opt.shgc);
+              onUpdate('sc',   opt.sc);
             }
           }}
           options={GLAZING_OPTIONS.map(o => ({
@@ -253,7 +261,6 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
           }))}
         />
       </td>
-      {/* FIX FIX-05: manual SHGC override (was SC) */}
       <td className="px-2 py-2 w-16">
         <CellInput
           value={displayShgc}
@@ -261,11 +268,10 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
           onChange={e => {
             const shgc = parseFloat(e.target.value) || 0;
             onUpdate('shgc', shgc);
-            onUpdate('sc', parseFloat((shgc / 0.87).toFixed(3))); // keep sc in sync
+            onUpdate('sc', parseFloat((shgc / 0.87).toFixed(3)));
           }}
         />
       </td>
-      {/* SC shown as read-only reference */}
       <td className="px-2 py-2 w-14 text-center">
         <span className="text-[10px] text-gray-400 font-mono">{displaySc}</span>
       </td>
@@ -292,14 +298,10 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
 /**
  * PartitionRow / FloorRow
  * FIX MED-04: now shows per-season heat gain using tAdjSummer / tAdjWinter.
- * Two separate temperature inputs replace the single tAdj field.
- * calcPartitionGain(element, tRoom, season) selects the correct tAdj internally.
  */
 const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
-  // FIX MED-04: compute per-season gain (was single gain repeated for all seasons)
   const gains = SEASONS.map(s => calcPartitionGain(element, tRoom, s));
 
-  // Read seasonal tAdj values — fall back to legacy tAdj for backward compat
   const tAdjSummer = element.tAdjSummer ?? element.tAdj ?? 85;
   const tAdjWinter = element.tAdjWinter ?? element.tAdj ?? 65;
 
@@ -325,7 +327,6 @@ const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
       <td className="px-2 py-2 w-20">
         <CellInput value={element.area} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
       </td>
-      {/* FIX MED-04: two seasonal tAdj inputs replace single tAdj */}
       <td className="px-2 py-2 w-20">
         <div className="flex items-center gap-1">
           <CellInput
@@ -346,7 +347,6 @@ const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
           <span className="text-[9px] text-blue-500 font-bold shrink-0">W</span>
         </div>
       </td>
-      {/* FIX MED-04: per-season gains (was same value × 3) */}
       {gains.map((g, i) => (
         <td key={i} className="px-2 py-2 text-center w-24">
           <BtuBadge value={g} />
@@ -363,25 +363,22 @@ const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
 const HEADERS = {
   walls:      ['Label', 'Orient.', 'Mass', 'Construction Preset', 'U-Value', 'Area (ft²)'],
   roofs:      ['Label', 'Construction', '', 'Insulation Preset', 'U-Value', 'Area (ft²)'],
-  // FIX FIX-05: SC column replaced by SHGC (editable) + SC (ref)
   glass:      ['Label', 'Orient.', 'Glazing Preset', 'U-Value', 'SHGC Preset', 'SHGC', 'SC ref', 'Area (ft²)'],
   skylights:  ['Label', 'Glazing Preset', '', 'U-Value', 'SHGC Preset', 'SHGC', 'SC ref', 'Area (ft²)'],
-  // FIX MED-04: two seasonal tAdj columns replace single Adj Temp
   partitions: ['Label', 'Construction Preset', '', 'U-Value', 'Area (ft²)', 'tAdj S/M °F', 'tAdj W °F'],
   floors:     ['Label', 'Construction Preset', '', 'U-Value', 'Area (ft²)', 'tAdj S/M °F', 'tAdj W °F'],
 };
 
 // ── Section totals row ───────────────────────────────────────────────────────
 const SectionTotals = ({ elements, category, climate, tRoom }) => {
-  // FIX MED-04: partitions/floors now pass season to calcPartitionGain
   const totals = SEASONS.map(season =>
     elements.reduce((sum, el) => {
       if (category === 'walls')      return sum + calcWallGain(el, climate, tRoom, season);
       if (category === 'roofs')      return sum + calcRoofGain(el, climate, tRoom, season);
       if (category === 'glass')      return sum + calcGlassGain(el, climate, tRoom, season).total;
       if (category === 'skylights')  return sum + calcSkylightGain(el, climate, tRoom, season).total;
-      if (category === 'partitions') return sum + calcPartitionGain(el, tRoom, season); // FIX MED-04
-      if (category === 'floors')     return sum + calcPartitionGain(el, tRoom, season); // FIX MED-04
+      if (category === 'partitions') return sum + calcPartitionGain(el, tRoom, season);
+      if (category === 'floors')     return sum + calcPartitionGain(el, tRoom, season);
       return sum;
     }, 0)
   );
@@ -466,7 +463,6 @@ export default function BuildingShell({ roomId, elements, climate, tRoom }) {
             {s}
           </span>
         ))}
-        {/* FIX MED-04: note that partition gain now varies by season */}
         <span className="text-[9px] text-gray-400 ml-2 italic">
           ASHRAE CLTD/CLF · +red = heat gain · −blue = heat loss · partition gain is now season-dependent
         </span>

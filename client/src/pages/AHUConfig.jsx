@@ -1,27 +1,68 @@
-import React, { useState } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
+/**
+ * AHUConfig.jsx
+ * Responsibility: AHU system configuration and per-system load summary.
+ *
+ * -- CHANGELOG v2.1 -----------------------------------------------------------
+ *
+ *   BUG-UI-13 [CRITICAL — UNIT DOUBLE-CONVERSION] — floorArea × M2_TO_FT2 removed.
+ *
+ *     The previous "BUG-04 FIX" comment and M2_TO_FT2 multiplication was written
+ *     before CRIT-RDS-01 changed rdsRow.floorArea from m² to ft². After that fix,
+ *     rdsRow.floorArea is already ft². The M2_TO_FT2 multiplication was a 10.76×
+ *     error introduced by an outdated fix.
+ *
+ *     Previous (wrong post CRIT-RDS-01):
+ *       ((parseFloat(room.floorArea) || 0) * M2_TO_FT2).toFixed(0)
+ *       → 1076 ft² × 10.7639 = 11,590 ft² for a 100 m² room
+ *
+ *     Fix: use rdsRow.floorArea directly — it is already ft².
+ *       parseFloat(room.floorArea || 0).toFixed(0)
+ *
+ *     M2_TO_FT2 constant removed — no longer needed in this file.
+ *
+ *   BUG-UI-14 [MEDIUM — MISSING GOVERNED TYPE] — 'regulatoryAcph' added.
+ *
+ *     GovernedBadge had no style/label entry for 'regulatoryAcph' (added in
+ *     HIGH-AQ-01). NFPA 855 battery rooms and GMP Annex 1 pharma suites rendered
+ *     a gray fallback badge showing the raw key string as visible text.
+ *
+ *     acphCount also excluded 'regulatoryAcph' rooms — the count shown in the
+ *     header ("N zones ACPH-governed") was wrong for battery / pharma facilities.
+ *
+ *     Fix: 'regulatoryAcph' entry added to GovernedBadge styles + labels.
+ *     acphCount filter updated to include all 3 ACPH governed types.
+ *     Matches the fix already applied in ResultsPage v2.1 (BUG-UI-08).
+ *
+ *   BUG-UI-15 [LOW] — unused React import removed.
+ *     Vite with React 17+ automatic JSX transform does not require explicit import.
+ */
+
+import { useState }                                    from 'react'; // BUG-UI-15 FIX
+import { useSelector, useDispatch }                    from 'react-redux';
 import { selectAllAHUs, addAHU, updateAHU, deleteAHU } from '../features/ahu/ahuSlice';
-import { selectRdsData } from '../features/results/rdsSelector';
+import { selectRdsData }                               from '../features/results/rdsSelector';
 
-// BUG-04 FIX: floorArea is stored in m². Column header previously said "sqft"
-// but rendered m² values. Convert for display.
-const M2_TO_FT2 = 10.7639;
-
-// Supply air governance badge — matches ResultsPage
+// Supply air governance badge — matches ResultsPage v2.1
 const GovernedBadge = ({ governed }) => {
   if (!governed) return null;
+
   const styles = {
-    thermal:    'bg-orange-100 text-orange-700 border-orange-200',
-    designAcph: 'bg-purple-100 text-purple-700 border-purple-200',
-    minAcph:    'bg-blue-100   text-blue-700   border-blue-200',
+    thermal:        'bg-orange-100 text-orange-700 border-orange-200',
+    designAcph:     'bg-purple-100 text-purple-700 border-purple-200',
+    minAcph:        'bg-blue-100   text-blue-700   border-blue-200',
+    // BUG-UI-14 FIX: 'regulatoryAcph' — NFPA 855 battery / GMP Annex 1 pharma.
+    // Previous: no entry → gray fallback badge with raw key 'regulatoryAcph' as text.
+    regulatoryAcph: 'bg-red-100    text-red-700    border-red-200',
   };
   const labels = {
-    thermal:    'Heat load',
-    designAcph: 'Design ACPH',
-    minAcph:    'Min ACPH',
+    thermal:        'Heat load',
+    designAcph:     'Design ACPH',
+    minAcph:        'Min ACPH',
+    regulatoryAcph: 'Regulatory ACH', // BUG-UI-14 FIX
   };
+
   return (
-    <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${styles[governed] ?? 'bg-gray-100 text-gray-500'}`}>
+    <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${styles[governed] ?? 'bg-gray-100 text-gray-500 border-gray-200'}`}>
       {labels[governed] ?? governed}
     </span>
   );
@@ -35,15 +76,17 @@ export default function AHUConfig() {
 
   const [selectedAhuId, setSelectedAhuId] = useState(ahus[0]?.id || null);
 
-  const selectedAhu    = ahus.find((a) => a.id === selectedAhuId);
-  const assignedRooms  = rdsRows.filter((row) => row.ahuId === selectedAhuId);
+  const selectedAhu   = ahus.find((a) => a.id === selectedAhuId);
+  const assignedRooms = rdsRows.filter((row) => row.ahuId === selectedAhuId);
 
   const totalCFM = assignedRooms.reduce((sum, r) => sum + (r.supplyAir || 0), 0);
   const totalTR  = assignedRooms.reduce((sum, r) => sum + (parseFloat(r.coolingCapTR) || 0), 0);
 
-  // How many of this AHU's rooms are ACPH-governed
+  // BUG-UI-14 FIX: include 'regulatoryAcph' in ACPH-governed count.
+  // Previous filter only counted 'designAcph' and 'minAcph' — excluded
+  // NFPA 855 battery rooms and GMP Annex 1 pharma suites.
   const acphCount = assignedRooms.filter(
-    (r) => r.supplyAirGoverned === 'designAcph' || r.supplyAirGoverned === 'minAcph'
+    (r) => ['designAcph', 'minAcph', 'regulatoryAcph'].includes(r.supplyAirGoverned)
   ).length;
 
   const handleUpdate = (field, value) => {
@@ -198,7 +241,7 @@ export default function AHUConfig() {
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase">
                           Room
                         </th>
-                        {/* BUG-04 FIX: header now correctly says m² and shows ft² conversion */}
+                        {/* rdsRow.floorArea is ft² (post CRIT-RDS-01) — no conversion needed */}
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase text-right">
                           Area (ft²)
                         </th>
@@ -224,14 +267,18 @@ export default function AHUConfig() {
                               </div>
                             )}
                           </td>
-                          {/* BUG-04 FIX: convert m² → ft² for display */}
+                          {/* BUG-UI-13 FIX: rdsRow.floorArea is already ft² (CRIT-RDS-01).
+                              Previous code multiplied by M2_TO_FT2 (10.7639) again → 10.76× error.
+                              The "BUG-04 FIX" comment + M2_TO_FT2 multiplication was written before
+                              CRIT-RDS-01 changed rdsRow.floorArea unit from m² to ft². */}
                           <td className="px-6 py-3 text-right font-mono text-slate-500">
-                            {((parseFloat(room.floorArea) || 0) * M2_TO_FT2).toFixed(0)}
+                            {parseFloat(room.floorArea || 0).toFixed(0)}
                           </td>
                           <td className="px-6 py-3 text-right font-mono font-bold text-slate-700">
                             {(room.supplyAir || 0).toLocaleString()}
                           </td>
                           <td className="px-6 py-3 text-right">
+                            {/* BUG-UI-14 FIX: GovernedBadge now handles 'regulatoryAcph' */}
                             <GovernedBadge governed={room.supplyAirGoverned} />
                           </td>
                           <td className="px-6 py-3 text-right font-mono text-blue-600">
@@ -240,16 +287,18 @@ export default function AHUConfig() {
                         </tr>
                       ))}
                     </tbody>
+
                     {/* Footer totals row */}
                     <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                       <tr>
                         <td className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">
                           System Total
                         </td>
+                        {/* BUG-UI-13 FIX: sum rdsRow.floorArea directly — already ft². */}
                         <td className="px-6 py-3 text-right font-mono text-xs text-slate-500">
-                          {(assignedRooms.reduce((s, r) =>
-                            s + (parseFloat(r.floorArea) || 0), 0) * M2_TO_FT2
-                          ).toFixed(0)} ft²
+                          {assignedRooms
+                            .reduce((s, r) => s + (parseFloat(r.floorArea) || 0), 0)
+                            .toFixed(0)} ft²
                         </td>
                         <td className="px-6 py-3 text-right font-mono font-bold text-slate-800">
                           {totalCFM.toLocaleString()}

@@ -3,7 +3,49 @@
  * Responsibility: Fixed side-panel editor for a single room.
  *                 Renders all RDS_SECTIONS fields in a tabbed form layout.
  *
- * Fixes vs previous version:
+ * -- CHANGELOG v2.2 -----------------------------------------------------------
+ *
+ *   BUG-UI-01 [MEDIUM — ISO CORRECTNESS] — useRdsRow called with room object.
+ *
+ *     Previous: useRdsRow(room?.id)
+ *     Fixed:    useRdsRow(room?.id, room)
+ *
+ *     useRdsRow(roomId, room = null) uses room?.classInOp inside handleEnvUpdate
+ *     to dispatch initializeRoom({ id, room: { classInOp } }). This is the
+ *     FIX-H05 fix — ensures isIsoClassified() fires correctly when a room is
+ *     first edited through the panel before its envelope entry is initialized.
+ *
+ *     Without the room argument: classInOp is always undefined → '' → false,
+ *     meaning isIsoClassified() never fires for any room opened in this panel.
+ *     A pressurized ISO-classified room (e.g. ISO 6 semiconductor anteroom)
+ *     whose envelope is first touched via this panel could receive a non-zero
+ *     achValue default — a silent, uncatchable ASHRAE compliance error.
+ *
+ *     The panel is the most likely first-edit path for envelope fields (it is
+ *     the dedicated room editor), making this the highest-risk entry point.
+ *
+ *   BUG-UI-02 [LOW — MODULE CORRECTNESS] — dynamic require() removed.
+ *
+ *     Previous:
+ *       dispatch(
+ *         require('../../features/room/roomActions').deleteRoomWithCleanup(room.id)
+ *       );
+ *
+ *     This was a CommonJS require() inside a useCallback body in a Vite/ESM
+ *     project. It bypasses Vite's module graph (no tree-shaking, no HMR
+ *     tracking) and used room.id from props directly instead of the hook-
+ *     managed roomId.
+ *
+ *     Fix: deleteRoomWithCleanup imported at module level (top-level ESM).
+ *     handleDelete owns its own window.confirm + onClose() because:
+ *       - useRdsRow.handleDeleteRoom also calls window.confirm internally.
+ *       - onClose() must NOT fire if the user cancels the confirm dialog.
+ *       - Therefore the panel cannot delegate to handleDeleteRoom — it must
+ *         own the confirm guard so onClose() is conditional.
+ *     The direct dispatch(deleteRoomWithCleanup(room.id)) is the correct
+ *     pattern for this specific case.
+ *
+ * -- Previous changelog (v2.1) ------------------------------------------------
  *   - Dead React import removed
  *   - handleRoomUpdate + handleEnvUpdate replaced by useRdsRow hook
  *   - delete uses useRdsRow.handleDeleteRoom + calls onClose after
@@ -16,16 +58,16 @@
  *   - renderField extracted as PanelField sub-component
  */
 
-import { useState, useCallback }   from 'react';
-import { useDispatch }              from 'react-redux';
-import { setRoomAhu }               from '../../features/room/roomSlice';
-import { X }                        from 'lucide-react';
+import { useState, useCallback }        from 'react';
+import { useDispatch }                  from 'react-redux';
+import { X }                            from 'lucide-react';
 import { FormInput, FormSelect,
-         SeasonBadge }              from './RDSCellComponents';
+         SeasonBadge }                  from './RDSCellComponents';
 import { RDS_SECTIONS,
          RDS_CATEGORIES,
-         getFieldValue }            from './RDSConfig';
-import useRdsRow                    from '../../hooks/useRdsRow';
+         getFieldValue }                from './RDSConfig';
+import useRdsRow                        from '../../hooks/useRdsRow';
+import { deleteRoomWithCleanup }        from '../../features/room/roomActions'; // BUG-UI-02 FIX: top-level ESM import
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -133,22 +175,34 @@ export default function RoomDetailPanel({ room, envelope, ahus, onClose }) {
   const dispatch   = useDispatch();
   const [activeTab, setActiveTab] = useState('setup');
 
-  // useRdsRow owns all dispatch logic — single source of truth shared with RDSRow
+  // BUG-UI-01 FIX: pass room as second argument so handleEnvUpdate dispatches
+  // initializeRoom({ id, room: { classInOp } }) correctly.
+  //
+  // Previously: useRdsRow(room?.id)
+  //   → room?.classInOp always undefined → '' → isIsoClassified('') = false
+  //   → ISO pressurization achValue guard silently bypassed on first envelope edit.
+  //
+  // Now: useRdsRow(room?.id, room)
+  //   → room?.classInOp correctly forwarded to initializeRoom payload
+  //   → isIsoClassified() fires correctly for pressurized ISO rooms
   const {
     handleRoomUpdate,
     handleEnvUpdate,
     handleAhuChange,
-    handleDeleteRoom: deleteAndClose,
-  } = useRdsRow(room?.id);
+  } = useRdsRow(room?.id, room); // BUG-UI-01 FIX: room passed as second arg
 
-  // Wrap delete so panel closes after the room is removed
+  // Panel owns its own delete confirm because:
+  //   1. useRdsRow.handleDeleteRoom also calls window.confirm internally — would double-prompt.
+  //   2. onClose() must be conditional on confirmation — must not fire on cancel.
+  //   Therefore: direct dispatch after panel-owned confirm is the correct pattern.
+  //
+  // BUG-UI-02 FIX: deleteRoomWithCleanup is now a top-level ESM import (see top of file).
+  //   Previous: require('../../features/room/roomActions').deleteRoomWithCleanup(room.id)
+  //   — CommonJS require() inside useCallback in a Vite/ESM project. Bypassed module
+  //   graph, disabled tree-shaking, broke HMR for this module.
   const handleDelete = useCallback(() => {
     if (window.confirm('Permanently delete this room and all its data?')) {
-      // deleteRoomWithCleanup is called inside useRdsRow — removes from
-      // both roomSlice AND envelopeSlice atomically (FLOW-05 FIX)
-      dispatch(
-        require('../../features/room/roomActions').deleteRoomWithCleanup(room.id)
-      );
+      dispatch(deleteRoomWithCleanup(room.id)); // BUG-UI-02 FIX: ESM import, not require()
       onClose();
     }
   }, [dispatch, room?.id, onClose]);
@@ -214,7 +268,7 @@ export default function RoomDetailPanel({ room, envelope, ahus, onClose }) {
           )}
         </div>
 
-        {/* Close button — lucide-react X replaces raw SVG */}
+        {/* Close button — lucide-react X */}
         <button
           onClick={onClose}
           aria-label="Close panel"

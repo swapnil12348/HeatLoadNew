@@ -8,6 +8,44 @@
  *            GMP Annex 1:2022 (pharma humidity control requirements)
  *            SEMI S2 (semiconductor fab humidity requirements)
  *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-HH-07 [CRITICAL — ReferenceError]: roomDesignRH → humidificationTarget.
+ *
+ *     In the BUG-HH-04 mixed-air correction block, grReturn was computed as:
+ *       const grReturn = calculateGrains(dbInF, roomDesignRH, elevation);
+ *
+ *     'roomDesignRH' is not a parameter of calculateHeatingHumid and was never
+ *     assigned anywhere in the function body. At runtime this throws:
+ *       ReferenceError: roomDesignRH is not defined
+ *
+ *     The ReferenceError propagates through the rdsSelector createSelector call
+ *     and crashes the entire selectRdsData output for any room on any
+ *     recirculation AHU (recirculationFraction > 0). For 100% OA systems
+ *     (rcFrac = 0) the mixed-air branch still executes but grReturn × 0 = 0
+ *     so the NaN from roomDesignRH is multiplied by 0 — masking the bug
+ *     in purely 100% OA projects like pharma/semiconductor fabs.
+ *
+ *     Fix: roomDesignRH → humidificationTarget.
+ *
+ *     Basis: BUG-HH-04 comment documents "Return air grains ≈ room target
+ *     grains (steady state assumption)." In steady state, the return air
+ *     leaving the room is at the room's operating RH — which is the
+ *     humidification target for winter sizing. humidificationTarget is
+ *     already a parameter of this function.
+ *
+ *   BUG-HH-08 [LOW — dead field]: chwFlowRate now computed and returned.
+ *
+ *     The return object referenced chwFlowRate but the assignment line was
+ *     missing from the function body (blank line where the computation
+ *     should have been). rdsSelector.js doesn't destructure chwFlowRate from
+ *     heatHumid (it uses pipes.chw.flowGPM from calculatePipeSizing instead),
+ *     so this didn't crash — but the return contract was broken and the field
+ *     was silently undefined for any consumer that did read it.
+ *
+ *     Fix: chwFlowRate computed from grandTotal using the same hydronic
+ *     constant and CHW_DELTA_T_F already defined in this module.
+ *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
  *   BUG-HH-01 [CRITICAL]: altCf now applied to humidLbsPerHr.
@@ -199,19 +237,15 @@ export const calculateHeatingHumid = (
   recirculationFraction  = 0,
 ) => {
   // BUG-HH-02 FIX: Use psychro.js exported functions directly.
-  // sensibleFactor(elevation) = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL × altCf
-  // latentFactor(elevation)   = ASHRAE.LATENT_FACTOR_SEA_LEVEL   × altCf
-  // This eliminates any ambiguity about which constant name ashrae.js uses.
   const Cs = sensibleFactor(elevation);
   const Cl = latentFactor(elevation);
 
   // ── 1. Room heating load ──────────────────────────────────────────────────
-  // ERSH_winter < 0 = net heat loss. Magnitude = heating required.
   const winterSensLoss = Math.min(0, ershWinter || 0);
   const heatingCapBTU  = Math.abs(winterSensLoss);
   const needsHeating   = heatingCapBTU > 0;
 
-  // BUG-HH-03 FIX: KW_TO_BTU_HR imported from units.js (was ASHRAE.KW_TO_BTU)
+  // BUG-HH-03 FIX: KW_TO_BTU_HR from units.js
   const heatingCap    = (heatingCapBTU / KW_TO_BTU_HR).toFixed(2);
   const heatingCapMBH = (heatingCapBTU / 1000).toFixed(2);
 
@@ -226,11 +260,18 @@ export const calculateHeatingHumid = (
   const preheatCap    = (preheatCapBTU / KW_TO_BTU_HR).toFixed(2);
 
   // ── 3. Hydronic flow rates ────────────────────────────────────────────────
-  const hwFlowRate  = heatingCapBTU > 0
+  const hwFlowRate = heatingCapBTU > 0
     ? (heatingCapBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)).toFixed(1)
     : '0.0';
 
-  
+  // BUG-HH-08 FIX: chwFlowRate was referenced in the return object but the
+  // assignment line was missing from the function body (blank line in v2.0).
+  // rdsSelector.js uses pipes.chw.flowGPM from calculatePipeSizing for the
+  // authoritative CHW flow, but this field must still be defined in the return
+  // contract for any direct consumer of calculateHeatingHumid.
+  const chwFlowRate = grandTotal > 0
+    ? (grandTotal / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)).toFixed(1)
+    : '0.0';
 
   // ── 4. Humidification load ────────────────────────────────────────────────
 
@@ -249,19 +290,19 @@ export const calculateHeatingHumid = (
   // For a recirculation system (recirculationFraction > 0):
   //   gr_mixed = gr_OA × (1 − recircFraction) + gr_return × recircFraction
   //
-  // Return air grains ≈ room target grains (steady state assumption).
-  // The return air is at room conditions (dbInF, humidificationTarget).
+  // BUG-HH-07 FIX: grReturn now uses humidificationTarget (was: roomDesignRH,
+  // an undefined variable that caused ReferenceError at runtime for all
+  // recirculation systems).
   //
-  // This is important for office/general buildings where recirculation is
-  // 70–85% of supply. For pharma/semiconductor 100% OA systems it has no
-  // effect (recirculationFraction = 0 → gr_mixed = gr_outdoor).
-  const rcFrac     = Math.min(1, Math.max(0, recirculationFraction || 0));
-  // grReturn must be at the room's ACTUAL operating condition, not the project target
-const grReturn = calculateGrains(dbInF, roomDesignRH, elevation);
+  // Basis: return air is at steady-state room conditions — the room's winter
+  // humidity target IS humidificationTarget. The BUG-HH-04 changelog comment
+  // documents this: "Return air grains ≈ room target grains (steady state)."
+  const rcFrac   = Math.min(1, Math.max(0, recirculationFraction || 0));
+  const grReturn = calculateGrains(dbInF, humidificationTarget, elevation); // BUG-HH-07 FIX
   const mixedAirGr = winterGrOut * (1 - rcFrac) + grReturn * rcFrac;
 
   // Δgr: how many gr/lb the humidifier must add to the mixed-air stream
-  const humidDeltaGr    = Math.max(0, humidGrTarget - mixedAirGr);
+  const humidDeltaGr        = Math.max(0, humidGrTarget - mixedAirGr);
   const needsHumidification = humidDeltaGr > 0;
 
   // BUG-HH-05: Flag high humidification load (sub-5%RH territory)
@@ -281,16 +322,11 @@ const grReturn = calculateGrains(dbInF, roomDesignRH, elevation);
   //
   // ṁ_water (lb/hr) = CFM × 60 min/hr × ρ_site × Δgr / 7000
   //                 = CFM × AIR_MASS_FACTOR × altCf × Δgr / GR_PER_LB
-  //
-  // altCf = site air density / sea-level air density
-  // Without altCf the formula used sea-level density regardless of elevation,
-  // overstating the humidifier requirement at all sites above sea level.
   const humidLbsPerHr = (supplyAir > 0 && needsHumidification)
     ? ((supplyAir * humidDeltaGr * AIR_MASS_FACTOR * altCf) / GR_PER_LB).toFixed(2)
     : '0.00';
 
   // Humidifier power — isothermal steam basis.
-  // Now correct because humidLbsPerHr is correct (BUG-HH-01 fix).
   const humidKw = (parseFloat(humidLbsPerHr) * STEAM_KW_PER_LB_HR).toFixed(2);
 
   // Latent humidification load in BTU/hr
@@ -312,7 +348,7 @@ const grReturn = calculateGrains(dbInF, roomDesignRH, elevation);
 
     // Hydronic flows
     hwFlowRate,
-    chwFlowRate,
+    chwFlowRate, // BUG-HH-08 FIX: was undefined (assignment was missing)
 
     // Humidification
     humidDeltaGr:          humidDeltaGr.toFixed(1),

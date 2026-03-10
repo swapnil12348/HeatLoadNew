@@ -1,15 +1,56 @@
-import React from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { selectActiveRoom } from '../features/room/roomSlice';
+/**
+ * EnvelopeConfig.jsx
+ * Responsibility: Envelope layers and internal heat gains editor.
+ *
+ * -- CHANGELOG v2.1 -----------------------------------------------------------
+ *
+ *   BUG-UI-16 [LOW] — unused React import removed.
+ *     Vite with React 17+ automatic JSX transform does not require explicit import.
+ *
+ *   BUG-UI-17 [MEDIUM — UNIT BUG] — infiltration CFM preview uses correct m³→ft³ factor.
+ *
+ *     Previous:
+ *       (parseFloat(activeRoom.volume) || 0) * ASHRAE.M2_TO_FT2   ← 10.7639 ft²/m²
+ *
+ *     activeRoom.volume is m³ (roomSlice stores SI units).
+ *     m³ → ft³ requires × 35.3147, NOT × 10.7639 (which is ft²/m² — an area factor).
+ *
+ *     Impact: For a 300 m³ room:
+ *       Correct:  300 × 35.3147 = 10,594 ft³ → displayed CFM is correct
+ *       Previous: 300 × 10.7639 =  3,229 ft³ → displayed CFM was 3.28× too low
+ *
+ *     The actual infiltration calculation in envelopeCalc.js is unaffected —
+ *     it uses its own unit conversion internally. This was a display-only
+ *     preview bug, but an engineer reading "42 CFM" instead of "138 CFM" on the
+ *     infiltration input would have wrong context when entering ACPH values.
+ *
+ *     Fix: M3_TO_FT3 = 35.3147 defined at module level.
+ *     ASHRAE.M2_TO_FT2 usage in infiltration section replaced throughout.
+ *
+ * -- Previous fixes (retained) ------------------------------------------------
+ *   FIX CRIT-03 follow-up: initializeRoom dispatched with { id, room } payload.
+ *   FIX HIGH-04: useSchedule input added.
+ *   FIX HIGH-05: ballastFactor input added.
+ *   FIX HIGH-02: diversityFactor input added.
+ *   FIX LOW-01: preview uses ASHRAE.KW_TO_BTU (3412.14).
+ */
+
+import { useSelector, useDispatch }      from 'react-redux';
+import { selectActiveRoom }              from '../features/room/roomSlice';
 import {
   selectActiveEnvelope,
   updateInternalLoad,
   initializeRoom,
   updateInfiltration,
-} from '../features/envelope/envelopeSlice';
-import RoomSidebar from '../components/Layout/RoomSidebar';
-import BuildingShell from '../features/envelope/BuildingShell';
-import ASHRAE from '../constants/ashrae';
+}                                        from '../features/envelope/envelopeSlice';
+import RoomSidebar                       from '../components/Layout/RoomSidebar';
+import BuildingShell                     from '../features/envelope/BuildingShell';
+import ASHRAE                            from '../constants/ashrae';
+
+// BUG-UI-17 FIX: m³ → ft³ conversion. Standard: 1 m³ = 35.3147 ft³.
+// ASHRAE.M2_TO_FT2 (10.7639) is ft²/m² — an AREA factor. Using it for
+// volume (m³ → ft³) produced a 3.28× error in the infiltration CFM preview.
+const M3_TO_FT3 = 35.3147;
 
 // ── Unit conversion ──────────────────────────────────────────────────────────
 const celsiusToFahrenheit = (c) => (parseFloat(c) * 9) / 5 + 32;
@@ -26,13 +67,12 @@ const ACTIVITY_LEVELS = [
 ];
 
 // ── Ballast factor presets — ASHRAE HOF 2021 Ch.18 Table 2 ───────────────────
-// FIX HIGH-05: surface in UI so users can override per lamp type.
 const BALLAST_PRESETS = [
-  { label: 'LED (1.0)',          value: 1.0  },
+  { label: 'LED (1.0)',             value: 1.0  },
   { label: 'T5 fluorescent (1.15)', value: 1.15 },
   { label: 'T8 fluorescent (1.2)',  value: 1.2  },
-  { label: 'Metal halide (1.1)', value: 1.1  },
-  { label: 'Custom',             value: null },
+  { label: 'Metal halide (1.1)',    value: 1.1  },
+  { label: 'Custom',                value: null },
 ];
 
 // ── Simple number input ──────────────────────────────────────────────────────
@@ -84,7 +124,6 @@ export default function EnvelopeConfig() {
     }));
   };
 
-  // Activity level selector — writes both sensiblePerPerson and latentPerPerson
   const handleActivityChange = (idx) => {
     const activity = ACTIVITY_LEVELS[parseInt(idx)];
     if (!activity) return;
@@ -127,22 +166,18 @@ export default function EnvelopeConfig() {
   const equipSensPct = envelope.internalLoads?.equipment?.sensiblePct ?? 100;
   const equipLatPct  = envelope.internalLoads?.equipment?.latentPct   ?? 0;
 
-  // FIX HIGH-04: read useSchedule from slice (default 100 = always on)
   const useSchedule   = envelope.internalLoads?.lights?.useSchedule ?? 100;
   const schedFactor   = useSchedule / 100;
 
-  // FIX HIGH-05: read ballastFactor from slice (default 1.0 = LED)
   const ballastFactor = envelope.internalLoads?.lights?.ballastFactor
     ?? ASHRAE.LIGHTING_BALLAST_FACTOR;
   const isCustomBallast = !BALLAST_PRESETS.some(
     p => p.value !== null && p.value === ballastFactor
   );
 
-  // FIX HIGH-02: read diversityFactor from slice (default 0.75)
   const diversityFactor = envelope.internalLoads?.equipment?.diversityFactor
     ?? ASHRAE.PROCESS_DIVERSITY_FACTOR;
 
-  // FIX LOW-01: use ASHRAE.KW_TO_BTU (3412.14) not hardcoded 3412
   const equipKW          = envelope.internalLoads?.equipment?.kw || 0;
   const equipSensPreview = Math.round(
     equipKW * ASHRAE.KW_TO_BTU * (equipSensPct / 100) * diversityFactor
@@ -154,11 +189,21 @@ export default function EnvelopeConfig() {
     equipKW * ASHRAE.KW_TO_BTU * (1 - equipSensPct / 100 - equipLatPct / 100) * diversityFactor
   ));
 
-  // Lighting preview — FIX HIGH-04/05: includes schedFactor and ballastFactor
+  // Lighting preview — activeRoom.floorArea is m² (roomSlice SI).
+  // W/ft² × ft² × BTU/W × schedule × ballast = BTU/hr (correct).
   const lightsWpFt2       = parseFloat(envelope.internalLoads?.lights?.wattsPerSqFt) || 0;
   const lightsSensPreview = Math.round(
     lightsWpFt2 * (activeRoom.floorArea || 0) * ASHRAE.M2_TO_FT2
     * ASHRAE.BTU_PER_WATT * schedFactor * ballastFactor
+  );
+
+  // BUG-UI-17 FIX: activeRoom.volume is m³ (roomSlice SI).
+  // Infiltration CFM = Volume(ft³) × ACPH / 60.
+  // Volume(ft³) = Volume(m³) × M3_TO_FT3 (35.3147), NOT × M2_TO_FT2 (10.7639).
+  // Using M2_TO_FT2 for a volume produced a 3.28× underestimate in the preview.
+  const volumeFt3 = (parseFloat(activeRoom.volume) || 0) * M3_TO_FT3;
+  const infiltrationCFMPreview = Math.round(
+    volumeFt3 * parseFloat(envelope.infiltration?.achValue || 0) / 60
   );
 
   // ISO pressurization warning
@@ -253,8 +298,6 @@ export default function EnvelopeConfig() {
 
         {/* ═══════════════════════════════════════════════════════════════════
             SECTION 2 — LIGHTING
-            FIX HIGH-04: useSchedule input added
-            FIX HIGH-05: ballastFactor input added
         ═══════════════════════════════════════════════════════════════════ */}
         <section className="mb-10">
           <SectionHeader
@@ -266,7 +309,6 @@ export default function EnvelopeConfig() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
-              {/* Lighting density */}
               <LoadInput
                 label="Lighting Density"
                 value={lightsWpFt2}
@@ -276,7 +318,6 @@ export default function EnvelopeConfig() {
                 note="Typical: 1.0–2.0 office · 1.5–3.0 cleanroom · 0.5 warehouse"
               />
 
-              {/* FIX HIGH-04: useSchedule input */}
               <LoadInput
                 label="Operating Schedule"
                 value={useSchedule}
@@ -286,7 +327,6 @@ export default function EnvelopeConfig() {
                 note="% of occupied hours lights are ON. 100% = always on (24/7 cleanroom default)"
               />
 
-              {/* FIX HIGH-05: ballastFactor */}
               <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-2">
                   Ballast Factor
@@ -324,7 +364,6 @@ export default function EnvelopeConfig() {
               </div>
             </div>
 
-            {/* Live lighting preview */}
             {lightsWpFt2 > 0 && (
               <div className="flex gap-4 flex-wrap items-center">
                 <div className="bg-yellow-50 border border-yellow-100 rounded-lg px-4 py-2 flex items-center gap-2">
@@ -346,8 +385,6 @@ export default function EnvelopeConfig() {
 
         {/* ═══════════════════════════════════════════════════════════════════
             SECTION 3 — EQUIPMENT
-            FIX HIGH-02: diversityFactor input added
-            FIX LOW-01:  preview uses ASHRAE.KW_TO_BTU (3412.14)
         ═══════════════════════════════════════════════════════════════════ */}
         <section className="mb-10">
           <SectionHeader
@@ -359,7 +396,6 @@ export default function EnvelopeConfig() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
-              {/* Total kW */}
               <LoadInput
                 label="Total Equipment Load"
                 value={equipKW}
@@ -369,7 +405,6 @@ export default function EnvelopeConfig() {
                 note="Sum of all electrical input power in this room"
               />
 
-              {/* Sensible % */}
               <LoadInput
                 label="Sensible Fraction"
                 value={equipSensPct}
@@ -379,7 +414,6 @@ export default function EnvelopeConfig() {
                 note="Motors, drives, lighting ballasts → 100%"
               />
 
-              {/* Latent % */}
               <LoadInput
                 label="Latent Fraction"
                 value={equipLatPct}
@@ -389,7 +423,6 @@ export default function EnvelopeConfig() {
                 note="Autoclaves, wash stations, open baths → 20–60%"
               />
 
-              {/* FIX HIGH-02: diversity factor */}
               <LoadInput
                 label="Diversity Factor"
                 value={diversityFactor}
@@ -400,7 +433,6 @@ export default function EnvelopeConfig() {
               />
             </div>
 
-            {/* Fraction validation warning */}
             {(equipSensPct + equipLatPct) > 100 && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 font-medium">
                 ⚠ Sensible + Latent fractions exceed 100%.
@@ -409,7 +441,6 @@ export default function EnvelopeConfig() {
               </div>
             )}
 
-            {/* Diversity factor note */}
             <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-[11px] text-indigo-700">
               <strong>Diversity factor</strong> — only the fraction shown of installed kW is assumed
               simultaneously active. ASHRAE PROCESS_DIVERSITY_FACTOR default is 0.75 (75%).
@@ -417,7 +448,6 @@ export default function EnvelopeConfig() {
               Source: ASHRAE HOF 2021 Ch.18; ASHRAE TC 9.9.
             </div>
 
-            {/* Reference guide */}
             <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">
                 ASHRAE Reference — Typical Equipment Fractions
@@ -434,7 +464,6 @@ export default function EnvelopeConfig() {
               </div>
             </div>
 
-            {/* Live computed preview — FIX LOW-01 + HIGH-02 */}
             {equipKW > 0 && (
               <div className="flex gap-4 flex-wrap items-center">
                 <div className="bg-orange-50 border border-orange-100 rounded-lg px-4 py-2 flex items-center gap-2">
@@ -465,12 +494,10 @@ export default function EnvelopeConfig() {
 
         {/* ═══════════════════════════════════════════════════════════════════
             SECTION 4 — INFILTRATION
-            FIX CRIT-03 follow-up: pressurized room warning + corrected note
         ═══════════════════════════════════════════════════════════════════ */}
         <section className="mb-10">
           <SectionHeader color="bg-orange-500" title="Infiltration" />
 
-          {/* FIX CRIT-03: warn when user sets non-zero ACH on ISO-classified room */}
           {isIsoRoom && (envelope.infiltration?.achValue || 0) > 0 && (
             <div className="mb-4 bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-800">
               ⚠ <strong>{activeRoom.classInOp}</strong> is a positively pressurized cleanroom.
@@ -495,21 +522,20 @@ export default function EnvelopeConfig() {
               />
               <span className="text-gray-500 text-sm font-medium">ACPH</span>
             </div>
+
+            {/* BUG-UI-17 FIX: preview uses M3_TO_FT3 (35.3147) not M2_TO_FT2 (10.7639).
+                activeRoom.volume is m³ (roomSlice SI). Converting m³ to ft³ requires ×35.3147.
+                Using ×10.7639 (an area factor) gave a 3.28× underestimate. */}
             <div className="mt-3 text-[10px] text-gray-400 space-y-1">
               <p>
                 CFM = Volume(ft³) × ACPH / 60
-                = {((parseFloat(activeRoom.volume) || 0) * ASHRAE.M2_TO_FT2).toFixed(0)} ft³
+                = {volumeFt3.toFixed(0)} ft³
                 × {envelope.infiltration?.achValue ?? 0} / 60
-                = <strong>{
-                  Math.round(
-                    (parseFloat(activeRoom.volume) || 0)
-                    * ASHRAE.M2_TO_FT2
-                    * parseFloat(envelope.infiltration?.achValue || 0)
-                    / 60
-                  )
-                } CFM</strong>
+                = <strong>{infiltrationCFMPreview} CFM</strong>
               </p>
-              {/* FIX CRIT-03: corrected infiltration guidance */}
+              <p className="text-[9px] text-gray-300">
+                Volume(ft³) = {(parseFloat(activeRoom.volume) || 0).toFixed(1)} m³ × 35.3147 = {volumeFt3.toFixed(0)} ft³
+              </p>
               <p>
                 <strong>Pressurized rooms (any ISO class):</strong> 0 ACPH — positive pressure blocks ingress. &nbsp;
                 <strong>Sealed unpressurized:</strong> 0.1–0.25 ACPH. &nbsp;

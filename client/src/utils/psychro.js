@@ -40,9 +40,8 @@
  *
  * The function now returns null for out-of-range conditions. All callers must
  * check:  const dp = calculateDewPoint(db, rh);
- *         if (dp === null) { /* handle out-of-range */ }
- *
- * Affected callers to update:
+ //* if (dp === null) { /* handle out-of-range */ 
+ /* Affected callers to update:
  *   psychroValidation.js — validateStatePoint, validateRoomHumidity
  *   psychroStatePoints.js — any state point that displays dew point
  *   rdsSelector.js — RDS row dew point display field
