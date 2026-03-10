@@ -5,83 +5,95 @@
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 1 (Psychrometrics)
  *            ASHRAE Handbook — Fundamentals (2021), Chapter 18 (Load Calc)
  *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   MED-PSP-01 FIX — contactFactor = 1.0 in winter (was: 1 − bf).
+ *
+ *     Bypass Factor (BF) is a COOLING COIL concept — it represents the fraction
+ *     of supply air that bypasses the cooling coil surface without making full
+ *     contact (ASHRAE HOF 2021 Ch.18). It is defined only when the cooling
+ *     coil is operating.
+ *
+ *     In winter heating mode, the cooling coil is OFF. No bypass occurs. The
+ *     Contact Factor (1 − BF) has no physical meaning in this mode.
+ *
+ *     Previous code:
+ *       if (season === 'winter') {
+ *         contactFactor = 1 - bf;   ← cooling-coil concept, coil is off
+ *       }
+ *
+ *     This value did not corrupt any current output because coil_contactFactor
+ *     is only exported for summer (the final assignment happens inside the
+ *     'summer' branch of calculateAllSeasonStatePoints). However, if future
+ *     code reads coilLeave_*_winter fields or calculates winter coil performance
+ *     from the returned contactFactor, it will receive (1 - bf) instead of 1.0
+ *     and silently apply a bypass reduction to a coil that is not running.
+ *
+ *     Fix: contactFactor = 1.0 in winter.
+ *     Meaning: all supply air makes full "contact" with the heating coil
+ *     (or more precisely: the bypass concept does not apply to the heating mode).
+ *
+ * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
+ *
+ *   FIX PSP-01: calculateRH(dbF, grains, elevFt) from psychro.js replaces
+ *     local rhFromGrains — uses Hyland-Wexler equation, correct for sub-zero DP.
+ *
+ *   FIX PSP-02: Winter uses heating mode — ADP-bypass model does not apply.
+ *     CL = RA, SA = RA for winter (coil off).
+ *
+ *   FIX PSP-03: Moist-air Cp = 0.240 + 0.444×W used for SHR calculation.
+ *     Was: dry-air Cp = 0.240 only (~1.8% error at typical HVAC conditions).
+ *
  * ── AIR STREAMS MODELLED ─────────────────────────────────────────────────────
  *
  *   1. Ambient (OA)     — outdoor design conditions from climateSlice
  *   2. Fresh Air (FA)   — same as ambient (no pre-treatment assumed)
  *   3. Return Air (RA)  — room design setpoint (DB + RH)
  *   4. Mixed Air (MA)   — blend of RA + FA by CFM fraction
- *                         MA_DB = (RA_CFM × RA_DB + FA_CFM × FA_DB) / total
- *                         MA_gr = (RA_CFM × RA_gr + FA_CFM × FA_gr) / total
- *   5. Coil Leaving (CL)— saturated air leaving cooling coil at ADP
- *                         DB = WB = ADP, RH = 100%, gr = f(ADP, 100%)
- *   6. Supply Air (SA)  — ADP-bypass blend
- *                         SA_DB = CL_DB × (1−BF) + RA_DB × BF
- *                         SA_gr = CL_gr × (1−BF) + RA_gr × BF
+ *   5. Coil Leaving (CL)— saturated air at ADP (cooling only; = RA in winter)
+ *   6. Supply Air (SA)  — ADP-bypass blend (cooling); = RA in winter
  *
  * ── WINTER MODEL BOUNDARY ────────────────────────────────────────────────────
  *
  *   The ADP-bypass model applies to COOLING MODE ONLY.
- *   In winter, the cooling coil is OFF; the ADP concept is meaningless.
- *
- *   Winter state points are therefore set as follows:
- *     CL (coil leaving) = RA (return air) — no cooling, no dehumidification
- *     SA (supply air)   = RA              — supply is room setpoint
- *   This reflects steady-state winter operation where the AHU is in heating/
- *   humidification mode. Actual winter supply air temperature (post-heat coil)
- *   and humidity ratio (post-humidifier) are computed in heatingHumid.js.
- *
- *   CONSEQUENCE: coil_shr and coil_contactFactor are derived from summer only.
- *
- * ── PSYCHROMETRIC PROPERTIES COMPUTED PER POINT ──────────────────────────────
- *
- *   DB    — dry-bulb temperature (°F)
- *   WB    — wet-bulb temperature (°F) — ASHRAE iterative bisection method
- *   gr    — humidity ratio (grains/lb dry air)
- *   enth  — specific enthalpy (BTU/lb dry air)
- *            h = 0.240 × DB + gr/7000 × (1061 + 0.444 × DB)
- *
- * ── ALTITUDE CORRECTION ──────────────────────────────────────────────────────
- *
- *   All gr calculations use site Patm via elevation parameter.
- *   WB iterative method also uses site Patm (psychro.js handles this internally).
+ *   In winter, the cooling coil is OFF:
+ *     CL = RA (coil off, no dehumidification)
+ *     SA = RA (supply = room setpoint, maintained by heating coil)
+ *     shr = 1.0 (sensible-only heating mode)
+ *     contactFactor = 1.0 (MED-PSP-01 FIX: was 1−bf, conceptually wrong)
  */
 
 import {
   calculateGrains,
   calculateEnthalpy,
   calculateWetBulb,
-  calculateRH,          // FIX PSP-01: imported from psychro.js (replaces local rhFromGrains)
+  calculateRH,
 } from '../../utils/psychro';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
  * Compute the full psychrometric state for one air point.
- * Returns both display strings and numeric values.
  *
- * FIX PSP-01: The previous local rhFromGrains(grains, dbF, elevation) function
- * is removed. calculateRH(dbF, grains, elevFt) from psychro.js is the single
- * source of truth — it uses the Hyland-Wexler saturation pressure equation,
- * which is correct for sub-zero dew point conditions (1%RH critical facilities).
+ * FIX PSP-01: calculateRH(dbF, grains, elevFt) from psychro.js replaces
+ * the previous local rhFromGrains(). Uses Hyland-Wexler saturation pressure
+ * equation — correct for sub-zero dew point conditions (1%RH critical facilities).
  *
  * @param {number} dbF       - dry-bulb temperature (°F)
  * @param {number} grains    - humidity ratio (gr/lb)
  * @param {number} elevation - site elevation (ft)
  */
 const computeStatePoint = (dbF, grains, elevation = 0) => {
-  const rh   = calculateRH(dbF, grains, elevation); // FIX PSP-01: was local rhFromGrains
+  const rh   = calculateRH(dbF, grains, elevation);
   const wb   = calculateWetBulb(dbF, rh, elevation);
   const enth = calculateEnthalpy(dbF, grains);
 
   return {
-    // Display strings
     db:   dbF.toFixed(1),
     wb:   wb.toFixed(1),
     gr:   grains.toFixed(1),
     enth: enth.toFixed(2),
     rh:   rh.toFixed(1),
-    // Numeric for downstream calcs
     db_num:   dbF,
     wb_num:   wb,
     gr_num:   grains,
@@ -94,9 +106,6 @@ const computeStatePoint = (dbF, grains, elevation = 0) => {
 
 /**
  * calculatePsychroStatePoints()
- *
- * Computes psychrometric state points for all six AHU air streams
- * for one room and one season.
  *
  * @param {object} climate        - full climate state (state.climate)
  * @param {string} season         - 'summer' | 'monsoon' | 'winter'
@@ -127,8 +136,6 @@ export const calculatePsychroStatePoints = (
   const amb     = computeStatePoint(ambDB, ambGr, elevation);
 
   // ── 2. Fresh air ───────────────────────────────────────────────────────────
-  // No pre-treatment assumed — FA state = ambient state.
-  // If pre-cooling/pre-heating is modelled in future, modify here.
   const fa = { ...amb };
 
   // ── 3. Return air (room setpoint) ──────────────────────────────────────────
@@ -145,25 +152,38 @@ export const calculatePsychroStatePoints = (
   const ma   = computeStatePoint(maDB, maGr, elevation);
 
   // ── 5 + 6: Season-aware coil leaving and supply air ───────────────────────
-  // FIX PSP-02: Winter uses heating mode — ADP-bypass model does not apply.
-  //
-  // COOLING (summer, monsoon):
-  //   CL = saturated air at ADP, DB = WB = ADP, RH = 100%.
-  //   SA = ADP-bypass blend: SA_DB = CL_DB(1-BF) + RA_DB×BF
-  //
-  // HEATING (winter):
-  //   The cooling coil is OFF. No dehumidification occurs.
-  //   CL = RA (return air — coil passes air through unchanged).
-  //   SA = RA (steady-state: supply = room conditions before heating coil).
-  //   Actual post-heat-coil and post-humidifier conditions are in heatingHumid.js.
   let cl, sa, shr, contactFactor;
 
   if (season === 'winter') {
-    // FIX PSP-02: Winter heating mode — no ADP, no bypass, no dehumidification
-    cl = { ...ra };     // coil leaving = return air (coil off)
-    sa = { ...ra };     // supply air   = return air (setpoint maintained by heating)
-    shr           = 1.0;  // sensible-only in heating mode (no latent exchange at coil)
-    contactFactor = 1 - bf;
+    // FIX PSP-02: Winter heating mode — cooling coil is OFF.
+    // CL = RA: coil passes air through unchanged (no dehumidification).
+    // SA = RA: supply air = room setpoint (heating coil maintains setpoint).
+    cl = { ...ra };
+    sa = { ...ra };
+
+    // shr = 1.0: sensible-only in heating mode (no latent exchange at coil).
+    shr = 1.0;
+
+    // MED-PSP-01 FIX: contactFactor = 1.0, NOT (1 - bf).
+    //
+    // Bypass Factor (bf) is a COOLING coil concept — it represents the
+    // fraction of air that bypasses the chilled water coil surface without
+    // full heat/mass transfer contact (ASHRAE HOF 2021 Ch.18).
+    //
+    // In winter, the cooling coil is off. There is no coil surface to bypass.
+    // contactFactor = (1 - bf) implies 10% of air "bypasses" a coil that
+    // is not operating — physically meaningless.
+    //
+    // Setting contactFactor = 1.0 means all supply air is fully conditioned
+    // by the active heating coil (or: the bypass concept simply does not
+    // apply in this mode, which is the correct interpretation).
+    //
+    // This does not affect current output (coil_contactFactor is only
+    // exported for summer in calculateAllSeasonStatePoints). This fix
+    // prevents future code that reads winter contactFactor from silently
+    // applying a bypass correction to a non-operating coil.
+    contactFactor = 1.0;  // MED-PSP-01 FIX: was (1 - bf)
+
   } else {
     // Cooling mode: summer and monsoon
     const grADP  = calculateGrains(adpF, 100, elevation);
@@ -188,13 +208,11 @@ export const calculatePsychroStatePoints = (
     const saGr = clGr * (1 - bf) + raGr  * bf;
     sa = computeStatePoint(saDB, saGr, elevation);
 
-    // ── 7. Coil SHR ──────────────────────────────────────────────────────────
-    // FIX PSP-03: Use moist-air Cp = 0.240 + 0.444×W [BTU/lb·°F]
-    //   (was 0.240 — dry air only, ~1.8% error at typical HVAC conditions)
-    // W = raGr / 7000 [lb moisture / lb dry air]
-    const cpMoist  = 0.240 + 0.444 * (raGr / 7000); // FIX PSP-03
+    // ── Coil SHR ──────────────────────────────────────────────────────────────
+    // FIX PSP-03: Use moist-air Cp = 0.240 + 0.444×W
+    const cpMoist  = 0.240 + 0.444 * (raGr / 7000);
     const enthDiff = ra.enth_num - sa.enth_num;
-    const sensDiff = cpMoist * (dbInF - saDB);        // FIX PSP-03
+    const sensDiff = cpMoist * (dbInF - saDB);
     shr = enthDiff > 0
       ? Math.min(1, Math.max(0, sensDiff / enthDiff))
       : 1.0;
@@ -220,10 +238,7 @@ export const calculatePsychroStatePoints = (
  * calculateAllSeasonStatePoints()
  *
  * Runs calculatePsychroStatePoints() for all three seasons.
- * Returns a flat keyed object for spread into rdsSelector return.
- *
  * coil_shr and coil_contactFactor are derived from SUMMER ONLY.
- * Winter psychro state points use the heating-mode model (see above).
  */
 export const calculateAllSeasonStatePoints = (
   climate,
@@ -244,42 +259,39 @@ export const calculateAllSeasonStatePoints = (
       freshAirCFM, supplyAir, elevation,
     );
 
-    // Ambient
     fields[`amb_db_${season}`]   = pts.amb.db;
     fields[`amb_wb_${season}`]   = pts.amb.wb;
     fields[`amb_gr_${season}`]   = pts.amb.gr;
     fields[`amb_enth_${season}`] = pts.amb.enth;
 
-    // Fresh air
     fields[`fa_db_${season}`]    = pts.fa.db;
     fields[`fa_wb_${season}`]    = pts.fa.wb;
     fields[`fa_gr_${season}`]    = pts.fa.gr;
     fields[`fa_enth_${season}`]  = pts.fa.enth;
 
-    // Return air
     fields[`ra_db_${season}`]    = pts.ra.db;
     fields[`ra_wb_${season}`]    = pts.ra.wb;
     fields[`ra_gr_${season}`]    = pts.ra.gr;
 
-    // Mixed air
     fields[`ma_db_${season}`]    = pts.ma.db;
     fields[`ma_wb_${season}`]    = pts.ma.wb;
     fields[`ma_gr_${season}`]    = pts.ma.gr;
     fields[`ma_enth_${season}`]  = pts.ma.enth;
 
-    // Coil leaving
     fields[`coilLeave_db_${season}`]   = pts.cl.db;
     fields[`coilLeave_wb_${season}`]   = pts.cl.wb;
     fields[`coilLeave_gr_${season}`]   = pts.cl.gr;
     fields[`coilLeave_enth_${season}`] = pts.cl.enth;
 
-    // Supply air
     fields[`sa_db_${season}`]    = pts.sa.db;
     fields[`sa_wb_${season}`]    = pts.sa.wb;
     fields[`sa_gr_${season}`]    = pts.sa.gr;
     fields[`sa_enth_${season}`]  = pts.sa.enth;
 
-    // Coil performance — summer only (cooling mode metric)
+    // Coil performance metrics — summer (cooling mode) only.
+    // Winter contactFactor = 1.0 after MED-PSP-01 fix but is not exported
+    // here — this is intentional. coil_* fields represent cooling coil
+    // design parameters, not winter heating performance.
     if (season === 'summer') {
       fields['coil_shr']           = pts.sensibleHeatRatio;
       fields['coil_contactFactor'] = pts.contactFactor;

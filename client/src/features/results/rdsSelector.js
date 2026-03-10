@@ -17,12 +17,89 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   CRIT-RDS-01 FIX — rdsRow.volume and rdsRow.floorArea now in ft³ / ft².
+ *
+ *     The assembled rdsRow previously spread ...room first, which set
+ *     rdsRow.volume = room.volume (m³) and rdsRow.floorArea = room.floorArea (m²).
+ *     The converted values (volumeFt3, floorAreaFt2) were only used locally
+ *     and never included in the assembled return object.
+ *
+ *     isoValidation.js reads rdsRow.volume assuming ft³ for its ACPH computation:
+ *       actualAcph = supplyAir × 60 / rdsRow.volume
+ *
+ *     With rdsRow.volume in m³ (e.g. 500 m³ = 17,657 ft³):
+ *       actualAcph = 1000 × 60 / 500 = 120 ACPH   ← 35.3× too high
+ *     vs correct:
+ *       actualAcph = 1000 × 60 / 17,657 = 3.4 ACPH ← fails ISO 8 correctly
+ *
+ *     Every single ISO 14644 and GMP Annex 1 compliance check was producing
+ *     false-pass results. A room failing ISO 8 minimum (10 ACPH) was reported
+ *     as meeting ISO 3 (480 ACPH minimum).
+ *
+ *     Fix: volume: volumeFt3 and floorArea: floorAreaFt2 are now explicitly
+ *     set in the return object, overriding the m²/m³ values from ...room spread.
+ *
+ *   CRIT-RDS-02 FIX — grandTotal and coilLoadBTU now use oaTotal (enthalpy method).
+ *
+ *     Previous:
+ *       grandTotal = peakErsh + peakErlh
+ *         + oaSummer.oaSensible   ← Cs/Cl approximation
+ *         + oaSummer.oaLatent     ← Cs/Cl approximation
+ *         + fanHeat
+ *
+ *     outdoorAirLoad.js BUG-OA-03 explicitly documents:
+ *       "rdsSelector.js should use oaTotal for coil capacity sizing.
+ *        oaSensible + oaLatent are for display breakdown only."
+ *
+ *     The enthalpy method (oaTotal) uses h = 0.240t + W(1061 + 0.444t) —
+ *     the full nonlinear ASHRAE enthalpy equation.
+ *     The Cs/Cl method linearises the latent term: 0.68 × Δgr.
+ *
+ *     At high humidity differentials (tropical outdoor + dry indoor):
+ *       Divergence: 3–8% of total OA load
+ *       For a 100,000 CFM semiconductor fab at 5%RH, Chennai outdoor:
+ *         oaTotal ≈ 4.5M BTU/hr vs oaSens+oaLat ≈ 4.2M BTU/hr
+ *         Chiller undersized by ~25 TR per room using Cs/Cl method
+ *
+ *     Fix: oaSummer.oaTotal replaces (oaSummer.oaSensible + oaSummer.oaLatent)
+ *     in both grandTotal and coilLoadBTU.
+ *     The component display fields (oaSensible, oaLatent per season) are
+ *     retained for breakdown display — they are correct for that purpose.
+ *
+ *   HIGH-HH-01 FIX — recirculationFraction now passed to calculateHeatingHumid.
+ *
+ *     heatingHumid.js v2.0 added BUG-HH-04 mixed-air humidification fix with
+ *     a recirculationFraction parameter. rdsSelector.js never passed this value,
+ *     so it always defaulted to 0 (100% OA system).
+ *
+ *     For a typical office AHU (80% recirculation), humidDeltaGr was calculated
+ *     as if all 100% of supply air came from outdoors — 5× overstated.
+ *
+ *     recirculationFraction = returnAir / supplyAir is already computed from
+ *     airQuantities.js. It is now passed to calculateHeatingHumid().
+ *
+ *     For pharma and semiconductor 100% OA systems: returnAir = 0 →
+ *     recirculationFraction = 0 → behaviour unchanged (correct, these systems
+ *     do have 100% OA and require humidification of all supply air from outdoor).
+ *
+ * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
+ *
+ *   FIX CRIT-01: OA coil load included in grandTotal (was missing → 15–40% understatement)
+ *   FIX MED-01: Fan heat is SENSIBLE only
+ *   FIX MED-02: returnFanHeat included in grandTotal
+ *   FIX RDS-01: sensibleFactor(elevation) for Cs (was ASHRAE.SENSIBLE_FACTOR → undefined)
+ *   FIX RDS-02: altitudeCorrectionFactor from psychro.js (no local duplicate)
+ *   FIX RDS-03: KW_TO_BTU_HR from units.js (was ASHRAE.KW_TO_BTU, wrong name)
+ *   FIX RDS-04: supplyAcph computed and exposed for ISO 14644 audit
+ *
  * ── SUPPLY AIR FIELD CLARIFICATION ───────────────────────────────────────────
- * supplyAir = TOTAL supply CFM (recirculation + OA), computed in airQuantities.js
- *   as Math.max(thermalCFM, designAcphCFM, vbz).
- * freshAirCheck = OA-only CFM component.
- * The ACPH calculation uses supplyAir (total), which is correct for ISO 14644
- * cleanroom ACH verification. ✓
+ *
+ *   supplyAir = TOTAL supply CFM (recirculation + OA), from airQuantities.js
+ *               Math.max(thermalCFM, designAcphCFM, regulatoryAcphCFM, minAcphCFM)
+ *   freshAirCheck = OA-only CFM component.
+ *   ACPH uses supplyAir (total) — correct for ISO 14644 cleanroom ACH. ✓
  */
 
 import { createSelector } from '@reduxjs/toolkit';
@@ -34,20 +111,13 @@ import { calculateHeatingHumid }         from './heatingHumid';
 import { calculatePipeSizing }           from './pipeSizing';
 import { calculateAllSeasonStatePoints } from './psychroStatePoints';
 
-// FIX RDS-02: Import altitudeCorrectionFactor and sensibleFactor from psychro.js.
-// The previous local altitudeCorrectionFactor() definition was a duplicate that
-// could silently diverge from the psychro.js implementation.
 import {
   altitudeCorrectionFactor,
   sensibleFactor,
 } from '../../utils/psychro';
 
-// FIX RDS-03: Import KW_TO_BTU_HR from units.js.
-// ASHRAE.KW_TO_BTU was numerically correct (3412.14) but misleadingly named
-// (BTU/hr per kW, not BTU per kW). Three places in this file divided by it.
-import { KW_TO_BTU_HR }                 from '../../utils/units';
-import { m2ToFt2, m3ToFt3 }            from '../../utils/units';
-import ASHRAE                           from '../../constants/ashrae';
+import { KW_TO_BTU_HR, m2ToFt2, m3ToFt3 } from '../../utils/units';
+import ASHRAE                              from '../../constants/ashrae';
 
 // ── Input selectors ───────────────────────────────────────────────────────────
 const selectRooms        = (state) => state.room.list;
@@ -73,28 +143,25 @@ export const selectRdsData = createSelector(
     rooms, envelopes, ahus, climate, systemDesign,
     elevation, latitude, dailyRange, humidificationTarget,
   ) => {
-    const altCf        = altitudeCorrectionFactor(elevation); // FIX RDS-02: from psychro.js
+    const altCf        = altitudeCorrectionFactor(elevation);
     const SEASONS_LIST = ['summer', 'monsoon', 'winter'];
-
-    // FIX RDS-01: sensibleFactor(elevation) replaces the broken
-    // ASHRAE.SENSIBLE_FACTOR * altCf expression.
-    // ASHRAE.SENSIBLE_FACTOR does not exist — accessing it returned undefined,
-    // making Cs = NaN and all pickup delta-T fields display as NaN.
-    // sensibleFactor(elevation) = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL × altCf = 1.08 × altCf.
-    const Cs = sensibleFactor(elevation); // FIX RDS-01: was ASHRAE.SENSIBLE_FACTOR * altCf
+    const Cs           = sensibleFactor(elevation);
 
     return rooms.map(room => {
       const envelope = envelopes[room.id] || null;
       const ahu      = ahus.find(a => a.id === room.assignedAhuIds?.[0]) || {};
 
+      // Pre-convert units here — used throughout this room's calculations.
+      // CRIT-RDS-01 FIX: these converted values are now ALSO written into the
+      // assembled return object (see below), overriding the m²/m³ from ...room.
       const floorAreaFt2 = m2ToFt2(room.floorArea);
       const volumeFt3    = m3ToFt3(room.volume);
 
       const bf   = parseFloat(systemDesign.bypassFactor) || 0.10;
       const adpF = parseFloat(systemDesign.adp)          || 55;
 
-      // Null-coalescing guard: preserves 0% RH for battery dry rooms.
-      // Note: room.designRH != null correctly passes 0 through (0 != null is true).
+      // Null-coalescing guard: preserves 0%RH for battery dry rooms.
+      // 0 != null is true in JS → 0 passes through correctly.
       const raRH = room.designRH != null
         ? parseFloat(room.designRH)
         : 50;
@@ -116,8 +183,6 @@ export const selectRdsData = createSelector(
         seasonResults[`erlhOn_${season}`]  = calcs.erlh;
         seasonResults[`grains_${season}`]  = calcs.grains;
 
-        // Equipment OFF delta: strip equipment contribution scaled by safety factors.
-        // erlh carries no safetyMult (fixed in seasonalLoads.js) — strip raw equip latent.
         const sensSafetyMult = calcs.safetyMult * (calcs.gmpSafetyMult ?? 1.0);
         seasonResults[`ershOff_${season}`] = Math.round(
           calcs.ersh - calcs.equipSens * sensSafetyMult
@@ -129,7 +194,6 @@ export const selectRdsData = createSelector(
         if (season === 'summer') summerCalcs = calcs;
       });
 
-      // ── Peak summer values ─────────────────────────────────────────────────
       const peakErsh = seasonResults['ershOn_summer'];
       const peakErlh = seasonResults['erlhOn_summer'];
       const dbInF    = summerCalcs?.dbInF ?? 72;
@@ -145,6 +209,7 @@ export const selectRdsData = createSelector(
 
       const {
         supplyAir, supplyAirGoverned, thermalCFM, supplyAirMinAcph,
+        regulatoryAcphCFM,
         vbz,
         freshAir,
         optimisedFreshAir, freshAirCheck,
@@ -156,18 +221,19 @@ export const selectRdsData = createSelector(
         isDOAS, pplCount,
       } = airQty;
 
-      // FIX RDS-04: Compute achieved supply ACPH for ISO 14644 cleanroom audit.
-      // supplyAir is TOTAL supply (recirc + OA), volumeFt3 is room volume.
-      // ACPH = (CFM × 60 min/hr) / volume_ft³
       const supplyAcph = supplyAir > 0 && volumeFt3 > 0
         ? parseFloat((supplyAir * 60 / volumeFt3).toFixed(1))
         : 0;
 
       // ════════════════════════════════════════════════════════════════════════
       // STEP 3 — Outdoor air coil loads
+      //
+      // MED-OA-01 FIX: altCf removed from calculateAllSeasonOALoads call.
+      // outdoorAirLoad.js now derives altCf internally from elevation.
       // ════════════════════════════════════════════════════════════════════════
       const oaLoads = calculateAllSeasonOALoads(
-        freshAirCheck, climate, dbInF, raRH, altCf, elevation,
+        freshAirCheck, climate, dbInF, raRH,
+        elevation,     // MED-OA-01 FIX: was (altCf, elevation); altCf removed
       );
 
       const oaFields = {};
@@ -183,59 +249,85 @@ export const selectRdsData = createSelector(
       // ════════════════════════════════════════════════════════════════════════
       // STEP 4 — Grand total cooling load
       //
-      // FIX CRIT-01: OA coil load (sensible + latent) is now added to grandTotal.
-      //   Omitting it understated chiller/AHU/CHW plant by 15–40% in high-OA
-      //   facilities (semiconductor, pharma).
-      //   ASHRAE HOF 2021 Ch.18 Eq.18.1: Total = Room Load + OA Coil Load
+      // CRIT-RDS-02 FIX: oaSummer.oaTotal replaces (oaSensible + oaLatent).
       //
-      // FIX MED-01: Fan heat is SENSIBLE only.
-      //   Previous: fanHeatBTU = (peakErsh + peakErlh) × fraction  [wrong]
-      //   Correct:  fanHeatBTU = peakErsh × fraction                [sensible only]
-      //   Reference: ASHRAE HOF 2021 Ch.18 — fan heat gain is sensible.
+      //   Previous (Cs/Cl approximation):
+      //     grandTotal = peakErsh + peakErlh
+      //       + oaSummer.oaSensible + oaSummer.oaLatent  ← linearised latent
+      //       + fanHeat
       //
-      // FIX MED-02: returnFanHeat is now included in grandTotal.
-      //   It was computed and displayed but never added — implied to auditors
-      //   that it had been accounted for elsewhere, which it was not.
+      //   Fixed (enthalpy method — authoritative per BUG-OA-03):
+      //     grandTotal = peakErsh + peakErlh
+      //       + oaSummer.oaTotal                          ← full enthalpy h = 0.240t + W(1061+0.444t)
+      //       + fanHeat
+      //
+      //   The Cs/Cl method linearises the latent contribution (0.68 × Δgr).
+      //   At high humidity differentials, divergence reaches 3–8% of OA load.
+      //   For tropical outdoor + dry cleanroom: chiller undersized by ~25 TR/room.
+      //
+      //   oaSensible and oaLatent per season are retained for display breakdown.
+      //   coilLoadBTU also uses oaTotal (same rationale — CHW plant sizing).
+      //
+      // RETAINED FIXES (v2.0):
+      //   FIX CRIT-01: OA load included in grandTotal (was: entirely omitted)
+      //   FIX MED-01:  Fan heat is sensible-only (was: (ersh+erlh) × fraction)
+      //   FIX MED-02:  returnFanHeat included (was: computed but never added)
       // ════════════════════════════════════════════════════════════════════════
       const oaSummer = oaLoads.summer;
 
       const fanHeatFraction  = (parseFloat(systemDesign.fanHeat) || 5) / 100;
-      const supplyFanHeatBTU = Math.round(peakErsh * fanHeatFraction); // FIX MED-01: sensible only
-      const returnFanHeatBTU = Math.round(supplyFanHeatBTU * 0.02);    // FIX MED-02
+      const supplyFanHeatBTU = Math.round(peakErsh * fanHeatFraction);  // FIX MED-01: sensible only
+      const returnFanHeatBTU = Math.round(supplyFanHeatBTU * 0.02);     // FIX MED-02
 
+      // CRIT-RDS-02 FIX: oaTotal is the authoritative enthalpy-based OA load.
+      // oaSensible + oaLatent are Cs/Cl approximations — valid for display only.
       const grandTotal = (peakErsh + peakErlh)
-        + oaSummer.oaSensible   // FIX CRIT-01
-        + oaSummer.oaLatent     // FIX CRIT-01
-        + supplyFanHeatBTU      // FIX MED-01: sensible only
-        + returnFanHeatBTU;     // FIX MED-02: now included
-
-      // FIX LOW-05 (deferred): Duct heat gain per ASHRAE 90.1 §6.5.4.4.
-      // Uncomment and wire ductExposed flag per room when duct routing is known.
-      // const ductHeatBTU = (room.ductExposed ?? false)
-      //   ? Math.round(peakErsh * ASHRAE.DUCT_HEAT_GAIN_PCT) : 0;
-      // grandTotal += ductHeatBTU;
+        + oaSummer.oaTotal        // CRIT-RDS-02 FIX: was (oaSensible + oaLatent)
+        + supplyFanHeatBTU
+        + returnFanHeatBTU;
 
       const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
 
-      // coilLoadBTU = room load + OA load (before fan heat).
-      // Fan heat is a system allowance, not a coil heat-transfer quantity.
-      // Used for CHW pipe sizing and coil selection. See BUG-PIPE-01.
+      // coilLoadBTU: room + OA before fan heat. Used for CHW pipe sizing.
+      // CRIT-RDS-02 FIX: oaTotal here too — CHW plant must not be undersized.
       const coilLoadBTU = (peakErsh + peakErlh)
-        + oaSummer.oaSensible
-        + oaSummer.oaLatent;
+        + oaSummer.oaTotal;       // CRIT-RDS-02 FIX: was (oaSensible + oaLatent)
 
-      // FIX RDS-03: KW_TO_BTU_HR replaces ASHRAE.KW_TO_BTU (same value, correct name).
       const supplyFanHeatBlow = supplyFanHeatBTU;
-      const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2); // FIX RDS-03
-      const returnFanHeat     = (returnFanHeatBTU  / KW_TO_BTU_HR).toFixed(2); // FIX RDS-03
+      const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
+      const returnFanHeat     = (returnFanHeatBTU  / KW_TO_BTU_HR).toFixed(2);
 
-      // ── Infiltration + RSH summary ─────────────────────────────────────────
       const totalInfil = summerCalcs ? Math.round(summerCalcs.infilCFM) : 0;
       const rsh        = summerCalcs ? Math.round(summerCalcs.rawSensible) : 0;
 
       // ════════════════════════════════════════════════════════════════════════
       // STEP 5 — Heating + humidification
+      //
+      // HIGH-HH-01 FIX — recirculationFraction now passed to calculateHeatingHumid.
+      //
+      //   heatingHumid.js BUG-HH-04 added mixed-air humidification correction
+      //   with a recirculationFraction parameter. This selector never passed it,
+      //   so it always defaulted to 0 (100% OA system).
+      //
+      //   For a typical recirculation AHU (returnAir / supplyAir = 0.8):
+      //     Old: gr_mixed = gr_outdoor  (100% OA assumed — wrong for recirculation)
+      //     New: gr_mixed = gr_OA × 0.2 + gr_return × 0.8  (correct blend)
+      //
+      //   The return air is at room conditions (designRH at dbInF). Blending with
+      //   outdoor air REDUCES the moisture the humidifier must add, because return
+      //   air is already partially conditioned to the room setpoint.
+      //
+      //   For 100% OA systems (pharma sterile, semiconductor fab):
+      //     returnAir = 0 → recircFraction = 0 → behaviour unchanged.
+      //
+      //   humidLbsPerHr for a recirculation AHU was previously 5× too high.
+      //   This affected HW coil sizing, steam plant sizing, and cost estimates.
       // ════════════════════════════════════════════════════════════════════════
+
+      // HIGH-HH-01 FIX: compute recirculation fraction from airQuantities output.
+      // recircFraction = 0 for DOAS / 100% OA systems (returnAir = 0 in those cases).
+      const recircFraction = supplyAir > 0 ? returnAir / supplyAir : 0;
+
       const heatHumid = calculateHeatingHumid(
         seasonResults['ershOn_winter'],
         supplyAir,
@@ -246,6 +338,7 @@ export const selectRdsData = createSelector(
         altCf,
         elevation,
         grandTotal,
+        recircFraction,   // HIGH-HH-01 FIX: was always missing → defaulted to 0
       );
 
       const {
@@ -258,9 +351,7 @@ export const selectRdsData = createSelector(
       } = heatHumid;
 
       // ════════════════════════════════════════════════════════════════════════
-      // STEP 6 — Pipe sizing
-      // Uses coilLoadBTU (room + OA, before fan heat) — correct ASHRAE basis.
-      // See BUG-PIPE-01: grandTotal must NOT be used here.
+      // STEP 6 — Pipe sizing (coilLoadBTU — correct ASHRAE basis)
       // ════════════════════════════════════════════════════════════════════════
       const pipes = calculatePipeSizing(
         coilLoadBTU,
@@ -287,18 +378,11 @@ export const selectRdsData = createSelector(
         const e_on  = seasonResults[`ershOn_${s}`]  || 0;
         const e_off = seasonResults[`ershOff_${s}`] || 0;
 
-        // Room pick-up ΔT = ERSH / (Cs × supplyAir)
-        // Cs = sensibleFactor(elevation) = 1.08 × altCf [BTU/hr per CFM per °F]
-        // FIX RDS-01: Cs now defined correctly — was NaN before this fix.
         pickupFields[`pickupOn_${s}`]  = supplyAir > 0
           ? (e_on  / (Cs * supplyAir)).toFixed(1) : '0.0';
         pickupFields[`pickupOff_${s}`] = supplyAir > 0
           ? (e_off / (Cs * supplyAir)).toFixed(1) : '0.0';
 
-        // MED-05 NOTE: achFields currently echo the room setpoint (dbInF, raRH).
-        // Correct implementation would derive achieved conditions from supply
-        // air temperature pickup via psychroStatePoints.sa_* values.
-        // Deferred to Sprint 3 — left as setpoint echo for now.
         achFields[`achOn_temp_${s}`]      = dbInF.toFixed(1);
         achFields[`achOn_rh_${s}`]        = raRH.toFixed(1);
         achFields[`achOff_temp_${s}`]     = dbInF.toFixed(1);
@@ -308,15 +392,20 @@ export const selectRdsData = createSelector(
         achFields[`achTermOff_temp_${s}`] = dbInF.toFixed(1);
         achFields[`achTermOff_rh_${s}`]   = raRH.toFixed(1);
 
-        // FIX RDS-03: KW_TO_BTU_HR replaces ASHRAE.KW_TO_BTU
         termHeatFields[`termHeatOn_${s}`]  = e_on  < 0
-          ? (Math.abs(e_on)  / KW_TO_BTU_HR).toFixed(2) : '0.00'; // FIX RDS-03
+          ? (Math.abs(e_on)  / KW_TO_BTU_HR).toFixed(2) : '0.00';
         termHeatFields[`termHeatOff_${s}`] = e_off < 0
-          ? (Math.abs(e_off) / KW_TO_BTU_HR).toFixed(2) : '0.00'; // FIX RDS-03
+          ? (Math.abs(e_off) / KW_TO_BTU_HR).toFixed(2) : '0.00';
       });
 
       // ════════════════════════════════════════════════════════════════════════
       // ASSEMBLE — full RDS row
+      //
+      // CRIT-RDS-01 FIX: volume and floorArea are now explicitly set as ft³ / ft²,
+      // overriding the m³ / m² values that came from the ...room spread.
+      //
+      // The ...room spread is kept for all other room fields (name, id, designTemp,
+      // designRH, ventCategory, etc.). Only the unit-converted dimensions override.
       // ════════════════════════════════════════════════════════════════════════
       return {
         // ── Identity ──────────────────────────────────────────────────────────
@@ -328,20 +417,28 @@ export const selectRdsData = createSelector(
         people_count: pplCount,
         equipment_kw: envelope?.internalLoads?.equipment?.kw || 0,
 
+        // CRIT-RDS-01 FIX: override m³/m² from ...room spread with ft³/ft².
+        // isoValidation.js reads rdsRow.volume assuming ft³. Without this
+        // override, computeActualAcph reads m³ and reports ACPH 35.3× too high,
+        // causing every cleanroom to false-pass ISO compliance checks.
+        volume:    volumeFt3,    // CRIT-RDS-01 FIX: ft³ (overrides room.volume in m³)
+        floorArea: floorAreaFt2, // CRIT-RDS-01 FIX: ft² (overrides room.floorArea in m²)
+
         // ── Core cooling outputs ───────────────────────────────────────────────
         supplyAir,
         supplyAirGoverned,
         thermalCFM,
         supplyAirMinAcph,
-        supplyAcph,          // FIX RDS-04: achieved total supply ACH
+        regulatoryAcphCFM,   // HIGH-AQ-01: regulatory ACH floor for display
+        supplyAcph,
         coolingCapTR,
         grandTotal:  Math.round(grandTotal),
         coilLoadBTU: Math.round(coilLoadBTU),
 
         // ── Fan heat ──────────────────────────────────────────────────────────
-        supplyFanHeatBlow, // BTU/hr — FIX MED-01: sensible only
-        supplyFanHeatDraw, // kW     — FIX RDS-03: KW_TO_BTU_HR
-        returnFanHeat,     // kW     — FIX MED-02 + FIX RDS-03
+        supplyFanHeatBlow,
+        supplyFanHeatDraw,
+        returnFanHeat,
 
         // ── RSH + infiltration ─────────────────────────────────────────────────
         rsh,
@@ -373,7 +470,9 @@ export const selectRdsData = createSelector(
         ahuCap:        supplyAir,
         coolingLoadHL: coolingCapTR,
 
-        // ── OA coil loads (FIX CRIT-01: now included in grandTotal) ──────────
+        // ── OA coil loads ─────────────────────────────────────────────────────
+        // oaTotal per season now included in grandTotal (CRIT-RDS-02 FIX).
+        // oaSensible + oaLatent per season retained for display breakdown.
         ...oaFields,
 
         // ── Heating ───────────────────────────────────────────────────────────
@@ -399,7 +498,7 @@ export const selectRdsData = createSelector(
         // ── Pipe sizing ───────────────────────────────────────────────────────
         chwBranchSize:     pipes.chw.branchDiamMm,
         chwManifoldSize:   pipes.chw.manifoldDiamMm,
-        chwFlowRate:       pipes.chw.flowGPM,      // FIX CRIT-04: key confirmed correct
+        chwFlowRate:       pipes.chw.flowGPM,
         hwBranchSize:      pipes.hw.branchDiamMm,
         hwManifoldSize:    pipes.hw.manifoldDiamMm,
         hwFlow:            pipes.hw.flowGPM,

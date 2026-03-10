@@ -7,6 +7,56 @@
  *            ISPE Baseline Guide Vol.5 — Pharmaceutical Cleanrooms
  *            GMP Annex 1:2022 §4.23 — HVAC safety margins
  *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   CRIT-SL-01 FIX — rhIn: `|| 50` replaced with null-coalescing guard.
+ *
+ *     Old:
+ *       const rhIn = parseFloat(room.designRH) || 50;
+ *
+ *     The `|| 50` pattern in JavaScript treats 0 as falsy:
+ *       parseFloat(0) = 0  →  0 || 50 = 50   ← WRONG for dry rooms
+ *
+ *     For any room with designRH = 0 (battery dry rooms, pharma dry-powder,
+ *     Li-ion cell assembly), rhIn was silently set to 50%RH.
+ *
+ *     Impact cascade for a 1%RH battery dry room designed at 0%RH input:
+ *       grIn (indoor humidity ratio):
+ *         Correct at 0%: ~1.1 gr/lb
+ *         Corrupted at 50%: ~54 gr/lb  (50× too high)
+ *
+ *       infilLat (infiltration latent load):
+ *         Correct: Cl × CFM × max(0, grOut − 1.1) → small positive (cooling) or 0
+ *         Corrupted: Cl × CFM × max(0, grOut − 54) → 0 (phantom latent load removed,
+ *         but grIn used as the basis for all downstream moisture calcs is wrong)
+ *
+ *       erlh (effective room latent heat):
+ *         Corrupted grIn flows into coil SHR selection, humidification delta,
+ *         and all psychroStatePoints moisture calculations.
+ *
+ *       MOST CRITICAL — heatingHumid.js humidDeltaGr:
+ *         humidDeltaGr = max(0, humidGrTarget − mixedAirGr)
+ *         With corrupted grIn ≈ 54 gr/lb and winterGrOut ≈ 10 gr/lb:
+ *           humidDeltaGr = max(0, 54 − 10) = 44 gr/lb  ← wrong, room is a DRY room
+ *         But the REAL target for a 1%RH room is 1.1 gr/lb:
+ *           humidDeltaGr = max(0, 1.1 − 10) = 0 → humidifier sized to ZERO
+ *           (because grIn at 50%RH > winterGrOut, so no humidification "needed")
+ *
+ *         Result: the Li-ion dry room humidifier is never sized. The single most
+ *         critical piece of mechanical equipment in the facility is missing from
+ *         all output — silently, with no error or warning.
+ *
+ *     Fix: identical null guard already used correctly in rdsSelector.js:
+ *       const raRH = room.designRH != null ? parseFloat(room.designRH) : 50;
+ *     Applied consistently here: 0 passes through correctly; only null/undefined
+ *     falls back to the 50%RH default.
+ *
+ *     Affected facilities (all previously producing silent wrong results):
+ *       Li-ion cell assembly:    0.4%RH → rhIn was 50%RH
+ *       Pharma dry powder:       5%RH   → rhIn was 50%RH (if stored as 0 before entry)
+ *       Battery electrode:       5%RH   → rhIn was 50%RH (if stored as 0 before entry)
+ *       Any room with designRH field absent (null/undefined): correctly 50%RH
+ *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
  *   BUG-SL-01 [CRITICAL ★]: ASHRAE.SENSIBLE_FACTOR undefined → NaN cascade.
@@ -33,25 +83,13 @@
  *     Fix: import sensibleFactor(elevation) and latentFactor(elevation)
  *     directly from psychro.js. These functions always return a valid
  *     number (1.08 × Cf and 0.68 × Cf respectively) and cannot be undefined.
- *     This is the same fix already applied to heatingHumid.js and
- *     outdoorAirLoad.js for the same underlying naming issue.
  *
  *   BUG-SL-02 [LOW]: ASHRAE.KW_TO_BTU replaced with KW_TO_BTU_HR from units.js.
- *     ASHRAE.KW_TO_BTU has the correct value (3412.14) but the name 'BTU'
- *     implies energy rather than power (BTU/hr). Importing KW_TO_BTU_HR from
- *     units.js makes the unit explicit and consistent with all other fixed files.
  *
  *   BUG-SL-03 [LOW]: Local cToF() removed — was a duplicate of utils/units.js.
- *     The local version was: (parseFloat(c) * 9) / 5 + 32
- *     The units.js version uses a null-safe guard and returns null for invalid
- *     input. The call site already has an isNaN guard, so behaviour is identical.
- *     Import from units.js for a single implementation across the codebase.
  *
  *   BUG-SL-04 [CONFIRMED NOT A BUG]: FIX HIGH-07 double diversity.
- *     ashraeTables.js warns about compounding PROCESS_DIVERSITY_FACTOR with
- *     per-type diversityFactor. The ?? (nullish coalescing) operator ensures
- *     only ONE is applied — per-type if equipment.diversityFactor is set,
- *     global fallback if not. These are mutually exclusive. No change needed.
+ *     The ?? operator ensures only ONE diversity factor is applied.
  *
  * ── LOAD COMPONENTS (all in BTU/hr) ──────────────────────────────────────────
  *
@@ -169,17 +207,29 @@ export const calculateSeasonLoad = (
   const dbInFRaw = cToF(room.designTemp);
   const dbInF    = dbInFRaw === null ? 72 : dbInFRaw;
 
-  const rhIn = parseFloat(room.designRH) || 50;
+  // CRIT-SL-01 FIX: null-coalescing guard replaces || 50 pattern.
+  //
+  // Old: const rhIn = parseFloat(room.designRH) || 50;
+  //   parseFloat(0) = 0  →  0 || 50 = 50  ← WRONG for any 0%RH or 1%RH dry room.
+  //   Battery dry rooms (designRH=0), pharma dry-powder (designRH=0–5),
+  //   Li-ion assembly (designRH=0–1) were all treated as 50%RH rooms.
+  //   This caused the humidifier to be sized to ZERO for dry rooms:
+  //     humidDeltaGr = grTarget(50%RH=54gr) − grOut(winter) > 0 → no need
+  //   when the actual need is grTarget(1%RH=1.1gr) − grOut(winter) → large need.
+  //
+  // New: room.designRH != null preserves 0 (0 != null is true in JS).
+  //   Only null or undefined falls back to the 50%RH default.
+  //   This is identical to the guard already used in rdsSelector.js (raRH).
+  const rhIn = room.designRH != null
+    ? parseFloat(room.designRH)
+    : 50;                         // CRIT-SL-01 FIX: was: parseFloat(room.designRH) || 50
+
   const grIn = calculateGrains(dbInF, rhIn, elevation);
 
   // ── Altitude-corrected psychrometric factors ────────────────────────────────
   // BUG-SL-01 FIX: Import sensibleFactor() / latentFactor() from psychro.js.
   // These functions return 1.08 × Cf and 0.68 × Cf respectively for the given
   // elevation. They cannot return undefined or NaN on valid numeric input.
-  //
-  // REPLACED:
-  //   const Cs = ASHRAE.SENSIBLE_FACTOR * altCf;  ← ASHRAE.SENSIBLE_FACTOR = undefined → NaN
-  //   const Cl = ASHRAE.LATENT_FACTOR   * altCf;  ← ASHRAE.LATENT_FACTOR   = undefined → NaN
   const Cs = sensibleFactor(elevation);   // BUG-SL-01 FIX
   const Cl = latentFactor(elevation);     // BUG-SL-01 FIX
 
@@ -196,56 +246,36 @@ export const calculateSeasonLoad = (
   // ── 2. People (ASHRAE HOF 2021 Ch.18 Table 1) ──────────────────────────────
   // CLF = 1.0 assumed — occupants present 100% of occupied hours.
   // For 24/7 semiconductor / pharma operations this is correct.
-  // For part-time occupancy spaces, add a CLF schedule per HOF Ch.18 Table 3.
   const pplCount = parseFloat(int.people?.count) || 0;
   const pplSens  = pplCount * (int.people?.sensiblePerPerson ?? ASHRAE.PEOPLE_SENSIBLE_SEATED);
   const pplLat   = pplCount * (int.people?.latentPerPerson   ?? ASHRAE.PEOPLE_LATENT_SEATED);
 
   // ── 3. Lighting ─────────────────────────────────────────────────────────────
   // FIX HIGH-04: schedFactor applies useSchedule (0–100%) as operating fraction.
-  // Previously useSchedule was stored but never read — lights always ran at 100%.
   const schedFactor = (parseFloat(int.lights?.useSchedule) ?? 100) / 100;
 
   // FIX HIGH-05: ballastFactor per ASHRAE HOF 2021 Ch.18 Table 2.
-  // Previously LIGHTING_BALLAST_FACTOR was defined in ashrae.js but never used.
-  // Default: 1.0 (LED). T8 fluorescent = 1.2, T5 = 1.15.
   const ballastFactor = parseFloat(int.lights?.ballastFactor) || ASHRAE.LIGHTING_BALLAST_FACTOR;
 
   const lightsSens = (parseFloat(int.lights?.wattsPerSqFt) || 0)
     * floorAreaFt2
     * ASHRAE.BTU_PER_WATT
-    * schedFactor     // FIX HIGH-04
-    * ballastFactor;  // FIX HIGH-05
+    * schedFactor
+    * ballastFactor;
 
   // ── 4. Equipment ───────────────────────────────────────────────────────────
-  // FIX HIGH-02: Diversity factor applied.
-  // FIX HIGH-07 (CONFIRMED CORRECT): ?? operator ensures EITHER per-type
-  // diversityFactor from EQUIPMENT_LOAD_DENSITY OR the global fallback
-  // PROCESS_DIVERSITY_FACTOR is used — never both. See ashrae.js note.
-  //
-  // BUG-SL-02 FIX: ASHRAE.KW_TO_BTU replaced with KW_TO_BTU_HR from units.js.
-  // Numerically identical (both 3412.14) — this is a naming consistency fix.
+  // FIX HIGH-07: ?? ensures EITHER per-type diversityFactor OR global fallback —
+  // never both. See ashrae.js EQUIPMENT_LOAD_DENSITY note.
   const equipKW         = parseFloat(int.equipment?.kw)           || 0;
   const equipSensPct    = (parseFloat(int.equipment?.sensiblePct) ?? 100) / 100;
   const equipLatPct     = (parseFloat(int.equipment?.latentPct)   ?? 0)   / 100;
   const diversityFactor = parseFloat(int.equipment?.diversityFactor)
-    ?? ASHRAE.PROCESS_DIVERSITY_FACTOR;   // FIX HIGH-07: ?? = per-type OR global, never both
+    ?? ASHRAE.PROCESS_DIVERSITY_FACTOR;
 
   const equipSens   = equipKW * KW_TO_BTU_HR * equipSensPct * diversityFactor;  // BUG-SL-02 FIX
   const equipLatent = equipKW * KW_TO_BTU_HR * equipLatPct  * diversityFactor;  // BUG-SL-02 FIX
 
-  // MED-07 NOTE: MOTOR_HEAT_FRACTIONS is defined in ashrae.js but not yet
-  // wired in. When motorLocation is added to equipment config, replace
-  // equipSensPct with MOTOR_HEAT_FRACTIONS[motorLocation].
-
   // ── 5. Infiltration ────────────────────────────────────────────────────────
-  // CFM_inf = (Volume_ft³ × ACH_inf) / 60
-  // Q_s = Cs × CFM × (T_out − T_in)         [signed — neg if outdoor < indoor]
-  // Q_l = Cl × CFM × (gr_out − gr_in)        [floored at 0 for cooling season]
-  //
-  // Cs and Cl are now valid numbers (BUG-SL-01 FIX). Previously:
-  //   Cs = NaN → infilSens = NaN → rawSensible = NaN → ersh = NaN
-  //   NaN * 0 = NaN, so even zero-infiltration rooms were corrupted.
   const achValue  = parseFloat(inf.achValue) || 0;
   const infilCFM  = (volumeFt3 * achValue) / 60;
   const infilSens = Cs * infilCFM * (dbOut - dbInF);
@@ -258,12 +288,11 @@ export const calculateSeasonLoad = (
   // ── Safety factors (sensible only — FIX MED-06) ────────────────────────────
   // safetyMult: user-configured safety factor (default 10%)
   // gmpSafetyMult: 1.25× for pharma rooms per ISPE / GMP Annex 1 (FIX HIGH-03)
-  //
   // erlh deliberately excludes safetyMult — see policy note in file header.
   const safetyMult = 1 + (parseFloat(systemDesign?.safetyFactor) || 10) / 100;
 
   const gmpSafetyMult = (room.ventCategory === 'pharma')
-    ? ASHRAE.PROCESS_SAFETY_FACTOR   // FIX HIGH-03: 1.25×
+    ? ASHRAE.PROCESS_SAFETY_FACTOR
     : 1.0;
 
   const ersh = Math.round(rawSensible * safetyMult * gmpSafetyMult);

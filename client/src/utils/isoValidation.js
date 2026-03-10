@@ -2,38 +2,56 @@
  * isoValidation.js
  * Responsibility: ISO 14644-1 compliance checks for room ACPH and pressure.
  *
+ * CHANGELOG v2.2:
+ *
+ *   MED-ISO-01 FIX — computeActualAcph() now uses rdsRow.supplyAcph as
+ *   primary source of truth (single ACPH computation path).
+ *
+ *     The previous pattern computed ACPH independently inside isoValidation:
+ *       const volumeFt3 = parseFloat(rdsRow.volume) || 0;
+ *       const actualAcph = supplyAir * 60 / volumeFt3;
+ *
+ *     This created two separate ACPH computation paths:
+ *       1. rdsSelector.js → supplyAcph (uses local volumeFt3 in ft³)
+ *       2. isoValidation.js → computeActualAcph (reads rdsRow.volume)
+ *
+ *     These paths diverge critically when rdsRow.volume is in m³ (CRIT-RDS-01):
+ *       A 500 m³ room (= 17,657 ft³) at 1,000 CFM supply:
+ *         rdsSelector ACPH: 1000 × 60 / 17,657 = 3.4 ACPH (correct)
+ *         isoValidation ACPH: 1000 × 60 / 500  = 120 ACPH (false pass)
+ *
+ *     After CRIT-RDS-01 fix (rdsRow.volume is now ft³), both paths agree,
+ *     but maintaining two computation paths creates ongoing maintenance risk.
+ *
+ *     Fix: computeActualAcph() now prefers rdsRow.supplyAcph when available.
+ *     rdsSelector.js computes supplyAcph correctly using local volumeFt3 (ft³).
+ *     The fallback computation remains for contexts where rdsRow.supplyAcph
+ *     may not be present (e.g. unit tests that construct rdsRow manually).
+ *
+ *   CRIT-RDS-01 DEPENDENCY: This file assumes rdsRow.volume is in ft³.
+ *   After the CRIT-RDS-01 fix to rdsSelector.js (which adds volume: volumeFt3
+ *   to override the m³ value from room spread), the fallback computation here
+ *   is correct. Without CRIT-RDS-01 fix, even the fallback would be wrong.
+ *
  * CHANGELOG v2.1:
  *
  *   CRITICAL-02 FIX — validateGmpCompliance(): Grade D rooms now match correctly.
  *
  *     GMP_GRADE_MAPPING['Grade D'].isoInOp = null (correct — GMP Annex 1:2022
- *     §4.7 defines no fixed in-operation ISO class for Grade D; it is set by
- *     a facility contamination risk assessment).
+ *     §4.7 defines no fixed in-operation ISO class for Grade D).
  *
  *     The previous match logic used strict string equality:
  *       mapping.isoInOp === inOp
- *     where inOp comes from governingClass() → returns 'Unclassified' when
- *     room.classInOp is absent. The comparison null === 'Unclassified' is
- *     always false, so Grade D rooms NEVER matched — they always received the
- *     warning "ISO combination does not map to a standard GMP Annex 1 grade."
+ *     where inOp = 'Unclassified' when room.classInOp is absent.
+ *     null === 'Unclassified' is always false → Grade D rooms NEVER matched.
  *
- *     This was a false compliance failure for the most common room type in
- *     pharma facilities (gowning, inspection, packaging support areas).
- *
- *     Fix: the match function now handles null isoInOp explicitly — a null
- *     in the mapping means "any value or absent" for the in-operation class,
- *     so the match succeeds when room.classInOp is 'Unclassified', null, or
- *     undefined. The at-rest condition still must match exactly.
+ *     Fix: null isoInOp means "any absent/unclassified" — match succeeds
+ *     when room.classInOp is 'Unclassified', null, or undefined.
  *
  *   MEDIUM-05 FIX — validateRoom() pass logic made explicit and readable.
  *
- *     Previous:  allChecks.every(c => c.pass || c.severity !== 'error')
- *     New:       !allChecks.some(c => c.severity === 'error' && c.pass === false)
- *
- *     These are logically equivalent, but the new form directly expresses the
- *     intent: "fail only when a check has BOTH severity='error' AND pass=false."
- *     The previous double-negative form was a trap for future severity levels —
- *     adding a 'critical' severity would have silently been treated as 'info'.
+ *     Previous: allChecks.every(c => c.pass || c.severity !== 'error')
+ *     New:      !allChecks.some(c => c.severity === 'error' && c.pass === false)
  *
  * Reference: ISO 14644-1:2015, ISO 14644-4:2022, GMP Annex 1:2022
  */
@@ -55,17 +73,35 @@ const governingClass = (room) =>
     : (room.atRestClass || 'Unclassified');
 
 /**
- * computeVolumeFt3(rdsRow)
- * FIX HIGH-01: rdsRow.volume is in ft³ (rdsSelector computes floorArea[ft²] × height[ft]).
- */
-const computeVolumeFt3 = (rdsRow) => parseFloat(rdsRow.volume) || 0;
-
-/**
  * computeActualAcph(rdsRow)
- * Actual ACPH = supplyAir[CFM] × 60 / volume[ft³]
+ *
+ * MED-ISO-01 FIX: Uses rdsRow.supplyAcph as primary source of truth.
+ *
+ * rdsSelector.js computes supplyAcph from the correct local volumeFt3 (ft³):
+ *   supplyAcph = supplyAir * 60 / volumeFt3   (where volumeFt3 = m3ToFt3(room.volume))
+ *
+ * Preferring supplyAcph eliminates the second computation path and guarantees
+ * the same ACPH value is used for both compliance display and validation.
+ *
+ * Fallback: compute from rdsRow.supplyAir / rdsRow.volume. After CRIT-RDS-01
+ * fix, rdsRow.volume is in ft³. Without that fix, this fallback is wrong.
+ *
+ * @param {object} rdsRow - assembled rdsRow from rdsSelector.js
+ * @returns {number} ACPH, to 1 decimal place
  */
 const computeActualAcph = (rdsRow) => {
-  const volumeFt3 = computeVolumeFt3(rdsRow);
+  // MED-ISO-01 FIX: prefer the pre-computed supplyAcph from rdsSelector.js.
+  // This is the single canonical ACPH value — same number shown in the RDS
+  // display, same number used for ISO compliance validation.
+  if (rdsRow.supplyAcph != null && rdsRow.supplyAcph > 0) {
+    return parseFloat(rdsRow.supplyAcph);
+  }
+
+  // Fallback: recompute from raw fields.
+  // Requires rdsRow.volume to be in ft³ (guaranteed after CRIT-RDS-01 fix).
+  // ⚠️  If supplyAcph is missing and rdsRow.volume is still in m³ (CRIT-RDS-01
+  //     not yet applied), this fallback will produce ACPH values 35.3× too high.
+  const volumeFt3 = parseFloat(rdsRow.volume)    || 0;
   const supplyAir = parseFloat(rdsRow.supplyAir) || 0;
   if (volumeFt3 <= 0) return 0;
   return parseFloat((supplyAir * 60 / volumeFt3).toFixed(1));
@@ -91,7 +127,7 @@ const ISO_MIN_PRESSURE_PA = {
 export const validateAcph = (rdsRow) => {
   const isoClass   = governingClass(rdsRow);
   const range      = ACPH_RANGES[isoClass] ?? ACPH_RANGES['Unclassified'];
-  const actualAcph = computeActualAcph(rdsRow);
+  const actualAcph = computeActualAcph(rdsRow);  // MED-ISO-01 FIX: single source
   const minAcph    = range.min;
   const designAcph = range.design;
   const deficit    = minAcph - actualAcph;
@@ -188,15 +224,7 @@ export const validatePressure = (rdsRow) => {
  * validateGmpCompliance(rdsRow)
  *
  * CRITICAL-02 FIX: Grade D rooms now match correctly.
- *
- * The match function handles null isoInOp in GMP_GRADE_MAPPING:
- *   null means "in-operation class is defined by risk assessment" (Grade D).
- *   The match succeeds when room.classInOp is absent, 'Unclassified', or null.
- *
- * Match logic:
- *   atRestMatch:  mapping.isoAtRest === room.atRestClass        (exact)
- *   inOpMatch:    if mapping.isoInOp is null → any absent/unclassified inOp
- *                 if mapping.isoInOp is string → exact match required
+ * computeActualAcph() updated per MED-ISO-01.
  */
 export const validateGmpCompliance = (rdsRow) => {
   if (rdsRow.ventCategory !== 'pharma') {
@@ -214,24 +242,12 @@ export const validateGmpCompliance = (rdsRow) => {
   const inOp   = rdsRow.classInOp   || 'Unclassified';
 
   // CRITICAL-02 FIX: Handle null isoInOp (Grade D) correctly.
-  //
-  // GMP_GRADE_MAPPING['Grade D'].isoInOp = null because GMP Annex 1:2022 §4.7
-  // does not fix an in-operation ISO class for Grade D — it is set by facility
-  // risk assessment. null is the semantically correct data value.
-  //
-  // The previous code used: mapping.isoInOp === inOp
-  //   → null === 'Unclassified' is ALWAYS false
-  //   → Grade D rooms NEVER matched, producing a false "unknown grade" warning
-  //
-  // Fixed: when mapping.isoInOp is null, match succeeds if room.classInOp
-  // is absent ('Unclassified') or explicitly null — both indicate the room
-  // does not have a fixed in-operation class, consistent with Grade D intent.
   const matchedGrade = Object.entries(GMP_GRADE_MAPPING).find(([, mapping]) => {
     const atRestMatch = mapping.isoAtRest === atRest;
     const inOpMatch =
       mapping.isoInOp === null
-        ? (inOp === 'Unclassified' || !inOp)   // null = risk-assessment basis; any absent/unclassified matches
-        : mapping.isoInOp === inOp;              // defined grades require exact match
+        ? (inOp === 'Unclassified' || !inOp)
+        : mapping.isoInOp === inOp;
     return atRestMatch && inOpMatch;
   });
 
@@ -248,7 +264,7 @@ export const validateGmpCompliance = (rdsRow) => {
   }
 
   const [gradeName, gradeData] = matchedGrade;
-  const actualAcph = computeActualAcph(rdsRow);
+  const actualAcph = computeActualAcph(rdsRow);  // MED-ISO-01 FIX: single source
 
   if (gradeData.minAcph && actualAcph < gradeData.minAcph) {
     return {
@@ -277,21 +293,8 @@ export const validateGmpCompliance = (rdsRow) => {
 /**
  * validateRoom(rdsRow)
  *
- * MEDIUM-05 FIX: pass logic made explicit and readable.
- *
- * pass = false ONLY when a check has BOTH:
- *   severity === 'error'  AND  pass === false
- *
- * A check with pass=false but severity='warning' does NOT fail the room —
- * it means "meets minimum, engineering review recommended."
- *
- * A check with severity='error' but pass=true is logically contradictory
- * (should not occur) but is handled safely by the new form.
- *
- * If a new severity level (e.g. 'critical') is added in future:
- *   - Old form: c.severity !== 'error' would treat 'critical' like 'info' (silent bug)
- *   - New form: c.severity === 'error' would ignore 'critical' (visible omission)
- *   Update the condition explicitly when adding new severities.
+ * MEDIUM-05 FIX: pass logic explicit and readable.
+ * pass = false ONLY when a check has severity='error' AND pass=false.
  */
 export const validateRoom = (rdsRow) => {
   const acphCheck     = validateAcph(rdsRow);
@@ -300,9 +303,6 @@ export const validateRoom = (rdsRow) => {
 
   const allChecks = [acphCheck, pressureCheck, gmpCheck];
 
-  // MEDIUM-05 FIX: explicit readable form — was: allChecks.every(c => c.pass || c.severity !== 'error')
-  // pass = false only when a check has severity='error' AND pass=false.
-  // Equivalent boolean logic but directly expresses the intent.
   const pass        = !allChecks.some(c => c.severity === 'error' && c.pass === false);
   const hasWarnings = allChecks.some(c => c.severity === 'warning');
 
