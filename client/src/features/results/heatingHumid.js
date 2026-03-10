@@ -230,9 +230,7 @@ export const calculateHeatingHumid = (
     ? (heatingCapBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)).toFixed(1)
     : '0.0';
 
-  const chwFlowRate = grandTotal > 0
-    ? (grandTotal / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)).toFixed(1)
-    : '0.0';
+  
 
   // ── 4. Humidification load ────────────────────────────────────────────────
 
@@ -258,7 +256,8 @@ export const calculateHeatingHumid = (
   // 70–85% of supply. For pharma/semiconductor 100% OA systems it has no
   // effect (recirculationFraction = 0 → gr_mixed = gr_outdoor).
   const rcFrac     = Math.min(1, Math.max(0, recirculationFraction || 0));
-  const grReturn   = humidGrTarget; // return air ≈ room conditions
+  // grReturn must be at the room's ACTUAL operating condition, not the project target
+const grReturn = calculateGrains(dbInF, roomDesignRH, elevation);
   const mixedAirGr = winterGrOut * (1 - rcFrac) + grReturn * rcFrac;
 
   // Δgr: how many gr/lb the humidifier must add to the mixed-air stream

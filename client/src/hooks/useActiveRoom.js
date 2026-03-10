@@ -18,16 +18,30 @@
  *
  * Returns stable references — memoized selectors prevent unnecessary re-renders.
  *
+ * ── UNIT CONTRACT ────────────────────────────────────────────────────────────
+ *
+ *   room.floorArea  → m²  (roomSlice — SI)
+ *   room.volume     → m³  (roomSlice — SI)
+ *   room.designTemp → °C  (roomSlice — SI)
+ *
+ *   rdsRow.floorArea → ft²  (post CRIT-RDS-01 fix — rdsSelector converts)
+ *   rdsRow.volume    → ft³  (post CRIT-RDS-01 fix — rdsSelector converts)
+ *   rdsRow.supplyAir → CFM
+ *   rdsRow.coolingCapTR → TR
+ *
+ *   Consumers that display geometry must use room.* for SI display and
+ *   rdsRow.* for HVAC calculation results. Never mix sources for the same
+ *   displayed value.
+ *
  * @returns {{
- *   room:           object | null   raw room state from roomSlice
+ *   room:           object | null   raw room state from roomSlice (SI units)
  *   envelope:       object | null   envelope state for active room
- *   rdsRow:         object | null   fully computed RDS row from rdsSelector
+ *   rdsRow:         object | null   fully computed RDS row from rdsSelector (imperial units)
  *   activeRoomId:   string | null
  *   isLoading:      boolean         true when rdsRow not yet computed
  *   hasRoom:        boolean         false when room list is empty
  * }}
  */
-
 import { useMemo }        from 'react';
 import { useSelector }    from 'react-redux';
 import {
@@ -41,16 +55,15 @@ const useActiveRoom = () => {
   const room         = useSelector(selectActiveRoom);
 
   // Envelope for the active room only — avoids re-render when
-  // other rooms' envelopes change
+  // other rooms' envelopes change.
   const envelope = useSelector(
     (state) => state.envelope.byRoomId?.[activeRoomId] ?? null
   );
 
-  // Full computed RDS row — contains all derived fields (CFM, TR, ACPH etc.)
+  // Full computed RDS row — contains all derived fields (CFM, TR, ACPH, etc.)
   // selectRdsData is memoized via createSelector — only recomputes when
-  // room/envelope/climate/project state changes
+  // room/envelope/climate/project state changes.
   const allRdsRows = useSelector(selectRdsData);
-
   const rdsRow = useMemo(
     () => allRdsRows.find((r) => r.id === activeRoomId) ?? null,
     [allRdsRows, activeRoomId]

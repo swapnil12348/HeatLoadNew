@@ -347,8 +347,8 @@ export const selectRdsData = createSelector(
         preheatCapBTU, preheatCap,
         terminalHeatingCap, extraHeatingCap, needsHeating,
         hwFlowRate,
-        humidDeltaGr, humidGrTarget, winterGrOut,
-        humidLbsPerHr, humidKw, humidLoadBTU, needsHumidification,
+        humidDeltaGr, mixedAirGr, humidGrTarget, winterGrOut,
+        humidLbsPerHr, humidKw, humidLoadBTU, needsHumidification,highHumidificationLoad, humidWarning,
       } = heatHumid;
 
       // ════════════════════════════════════════════════════════════════════════
@@ -493,8 +493,11 @@ export const selectRdsData = createSelector(
         humidKw,
         needsHumidification,
         humidDeltaGr,
+        mixedAirGr,
         humidGrTarget,
         winterGrOut,
+        highHumidificationLoad,
+humidWarning,
 
         // ── Pipe sizing ───────────────────────────────────────────────────────
         chwBranchSize:     pipes.chw.branchDiamMm,
