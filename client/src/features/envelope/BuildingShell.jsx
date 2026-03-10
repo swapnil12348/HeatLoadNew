@@ -501,7 +501,6 @@ export default function BuildingShell({ roomId, elements, climate, tRoom }) {
               <>
                 {activeElements.map(el => {
                   const commonProps = {
-                    key:      el.id,
                     element:  el,
                     roomId,
                     climate,
@@ -510,12 +509,12 @@ export default function BuildingShell({ roomId, elements, climate, tRoom }) {
                     onRemove: () => handleRemove(activeCategory, el.id),
                   };
 
-                  if (activeCategory === 'walls')      return <WallRow      {...commonProps} />;
-                  if (activeCategory === 'roofs')      return <RoofRow      {...commonProps} />;
-                  if (activeCategory === 'glass')      return <GlassRow     {...commonProps} isSkylights={false} />;
-                  if (activeCategory === 'skylights')  return <GlassRow     {...commonProps} isSkylights={true}  />;
-                  if (activeCategory === 'partitions') return <PartitionRow {...commonProps} />;
-                  if (activeCategory === 'floors')     return <PartitionRow {...commonProps} />;
+                  if (activeCategory === 'walls')      return <WallRow      key={el.id} {...commonProps} />;
+                  if (activeCategory === 'roofs')      return <RoofRow      key={el.id} {...commonProps} />;
+                  if (activeCategory === 'glass')      return <GlassRow     key={el.id} {...commonProps} isSkylights={false} />;
+                  if (activeCategory === 'skylights')  return <GlassRow     key={el.id} {...commonProps} isSkylights={true}  />;
+                  if (activeCategory === 'partitions') return <PartitionRow key={el.id} {...commonProps} />;
+                  if (activeCategory === 'floors')     return <PartitionRow key={el.id} {...commonProps} />;
                   return null;
                 })}
 
