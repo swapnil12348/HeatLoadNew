@@ -135,7 +135,7 @@ export const calculateAirQuantities = (
   room,
   envelope,
   ahu,
-  systemDesign,
+  effectiveSystemDesign,
   altCf,
   peakErsh,
   floorAreaFt2,

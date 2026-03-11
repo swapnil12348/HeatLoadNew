@@ -133,6 +133,7 @@ const initialState = {
     safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,
     bypassFactor:         DEFAULT_BYPASS_FACTOR,
     adp:                  DEFAULT_ADP,
+    adpMode: 'manual',
     fanHeat:              DEFAULT_FAN_HEAT_PCT,
     humidificationTarget: DEFAULT_HUMID_TARGET,
   },

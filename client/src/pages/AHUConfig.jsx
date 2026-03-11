@@ -2,47 +2,55 @@
  * AHUConfig.jsx
  * Responsibility: AHU system configuration and per-system load summary.
  *
+ * -- CHANGELOG v2.2 -----------------------------------------------------------
+ *
+ *   ADP-01 — Apparatus Dew Point mode select + calculated ADP readout.
+ *
+ *     Each AHU now has an adpMode field ('manual' | 'calculated').
+ *
+ *     'manual':     Engineer enters ADP override (°F). 0 = use project default.
+ *                   Same as previous behaviour — no calculation change.
+ *
+ *     'calculated': ADP is back-calculated from room sensible load in
+ *                   rdsSelector.js via calculateAdpFromLoads() (psychro.js):
+ *                     T_ADP = T_room − ERSH ÷ (Cs × Coil CFM)
+ *                   The manual ADP input is hidden. A live readout table
+ *                   shows the calculated ADP for every assigned room.
+ *
+ *     adpMode dispatches via the existing updateAHU reducer — no slice changes
+ *     needed beyond adding the adpMode field to the AHU factory in ahuSlice.js.
+ *
+ *   BUG-UI-16 — deleteAHU replaced with deleteAhuWithCleanup.
+ *
+ *     The Delete System button was calling deleteAHU directly from ahuSlice.
+ *     ahuSlice.js BUG-SLICE-04 explicitly documents this as unsafe:
+ *     deleteAHU only removes the AHU from the list — it does NOT clear
+ *     room.assignedAhuIds references, leaving all assigned rooms with a stale
+ *     AHU ID. rdsSelector then silently reverts those rooms to Recirculating
+ *     type with ahuId: '' and typeOfUnit: '-'.
+ *
+ *     Fix: dispatch(deleteAhuWithCleanup(selectedAhuId)) from roomActions.js.
+ *     deleteAHU removed from the ahuSlice import (not needed in UI code).
+ *
  * -- CHANGELOG v2.1 -----------------------------------------------------------
  *
  *   BUG-UI-13 [CRITICAL — UNIT DOUBLE-CONVERSION] — floorArea × M2_TO_FT2 removed.
- *
- *     The previous "BUG-04 FIX" comment and M2_TO_FT2 multiplication was written
- *     before CRIT-RDS-01 changed rdsRow.floorArea from m² to ft². After that fix,
- *     rdsRow.floorArea is already ft². The M2_TO_FT2 multiplication was a 10.76×
- *     error introduced by an outdated fix.
- *
- *     Previous (wrong post CRIT-RDS-01):
- *       ((parseFloat(room.floorArea) || 0) * M2_TO_FT2).toFixed(0)
- *       → 1076 ft² × 10.7639 = 11,590 ft² for a 100 m² room
- *
- *     Fix: use rdsRow.floorArea directly — it is already ft².
- *       parseFloat(room.floorArea || 0).toFixed(0)
- *
- *     M2_TO_FT2 constant removed — no longer needed in this file.
- *
  *   BUG-UI-14 [MEDIUM — MISSING GOVERNED TYPE] — 'regulatoryAcph' added.
- *
- *     GovernedBadge had no style/label entry for 'regulatoryAcph' (added in
- *     HIGH-AQ-01). NFPA 855 battery rooms and GMP Annex 1 pharma suites rendered
- *     a gray fallback badge showing the raw key string as visible text.
- *
- *     acphCount also excluded 'regulatoryAcph' rooms — the count shown in the
- *     header ("N zones ACPH-governed") was wrong for battery / pharma facilities.
- *
- *     Fix: 'regulatoryAcph' entry added to GovernedBadge styles + labels.
- *     acphCount filter updated to include all 3 ACPH governed types.
- *     Matches the fix already applied in ResultsPage v2.1 (BUG-UI-08).
- *
  *   BUG-UI-15 [LOW] — unused React import removed.
- *     Vite with React 17+ automatic JSX transform does not require explicit import.
  */
 
-import { useState }                                    from 'react'; // BUG-UI-15 FIX
-import { useSelector, useDispatch }                    from 'react-redux';
-import { selectAllAHUs, addAHU, updateAHU, deleteAHU } from '../features/ahu/ahuSlice';
-import { selectRdsData }                               from '../features/results/rdsSelector';
+import { useState }                                 from 'react';
+import { useSelector, useDispatch }                 from 'react-redux';
+import { selectAllAHUs, addAHU, updateAHU }         from '../features/ahu/ahuSlice';
+// BUG-UI-16 FIX: deleteAhuWithCleanup instead of deleteAHU directly.
+// deleteAHU is retained as the underlying reducer for the thunk to dispatch —
+// do NOT re-add it here. See ahuSlice.js BUG-SLICE-04 for the full explanation.
+import { deleteAhuWithCleanup }                     from '../features/room/roomActions';
+import { selectRdsData }                            from '../features/results/rdsSelector';
+import ASHRAE                                       from '../constants/ashrae';
 
-// Supply air governance badge — matches ResultsPage v2.1
+// ── Supply air governance badge ───────────────────────────────────────────────
+// Matches ResultsPage v2.1
 const GovernedBadge = ({ governed }) => {
   if (!governed) return null;
 
@@ -50,15 +58,13 @@ const GovernedBadge = ({ governed }) => {
     thermal:        'bg-orange-100 text-orange-700 border-orange-200',
     designAcph:     'bg-purple-100 text-purple-700 border-purple-200',
     minAcph:        'bg-blue-100   text-blue-700   border-blue-200',
-    // BUG-UI-14 FIX: 'regulatoryAcph' — NFPA 855 battery / GMP Annex 1 pharma.
-    // Previous: no entry → gray fallback badge with raw key 'regulatoryAcph' as text.
     regulatoryAcph: 'bg-red-100    text-red-700    border-red-200',
   };
   const labels = {
     thermal:        'Heat load',
     designAcph:     'Design ACPH',
     minAcph:        'Min ACPH',
-    regulatoryAcph: 'Regulatory ACH', // BUG-UI-14 FIX
+    regulatoryAcph: 'Regulatory ACH',
   };
 
   return (
@@ -67,6 +73,91 @@ const GovernedBadge = ({ governed }) => {
     </span>
   );
 };
+
+// ── AdpCalculatedReadout ──────────────────────────────────────────────────────
+
+/**
+ * AdpCalculatedReadout
+ *
+ * Displayed when adpMode = 'calculated'. Reads coil_adp from the assembled
+ * rdsRows (populated by rdsSelector.js ADP-01 via calculateAdpFromLoads).
+ *
+ * Shows per-room: ADP (°F) and ΔT between room DB and ADP.
+ * If no rooms are assigned yet, shows a placeholder prompt.
+ *
+ * NOTE: room.designTemp from rdsRow is °C (roomSlice storage convention).
+ * It is converted to °F here for display only — the authoritative dbInF
+ * used in calculations lives in rdsSelector.js as summerCalcs.dbInF.
+ * If you add dbInF: dbInF to the rdsSelector return object, use that here
+ * instead to eliminate the duplicate conversion.
+ */
+const AdpCalculatedReadout = ({ assignedRooms, defaultAdp }) => {
+  const roomsWithAdp = assignedRooms.filter(r => r.coil_adp != null);
+
+  if (roomsWithAdp.length === 0) {
+    return (
+      <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 mt-1">
+        <p className="text-[10px] font-bold text-blue-600 uppercase">
+          Calculated from room load
+        </p>
+        <p className="text-[10px] text-slate-500 mt-0.5">
+          Assign rooms to see calculated ADP values.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1 rounded-md border border-blue-200 overflow-hidden">
+      <div className="bg-blue-50 px-3 py-1.5 border-b border-blue-200">
+        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wide">
+          Calculated ADP by Room
+        </p>
+      </div>
+      <table className="w-full text-left">
+        <thead>
+          <tr className="bg-white border-b border-slate-100">
+            <th className="px-3 py-1.5 text-[9px] font-bold text-slate-400 uppercase">Room</th>
+            <th className="px-3 py-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">ADP (°F)</th>
+            <th className="px-3 py-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">ΔT coil</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-50">
+          {roomsWithAdp.map(room => {
+            const adp     = parseFloat(room.coil_adp) || defaultAdp;
+            const roomDb  = parseFloat(room.designTemp);
+            // designTemp stored in °C — convert to °F for display label only
+            const roomDbF = !isNaN(roomDb) ? roomDb * 9 / 5 + 32 : 72;
+            const deltaT  = (roomDbF - adp).toFixed(1);
+
+            return (
+              <tr key={room.id} className="hover:bg-slate-50">
+                <td className="px-3 py-1.5 text-[10px] font-medium text-slate-700">
+                  {room.name}
+                </td>
+                <td className="px-3 py-1.5 text-[10px] font-mono text-blue-700 text-right font-bold">
+                  {adp.toFixed(1)}
+                </td>
+                <td className="px-3 py-1.5 text-[10px] font-mono text-slate-500 text-right">
+                  {deltaT}°F
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="bg-slate-50 px-3 py-1.5 border-t border-slate-100">
+        <p className="text-[9px] text-slate-400">
+          ADP = T<sub>room</sub> &minus; ERSH &divide; (C<sub>s</sub> &times; Coil CFM)
+          &nbsp;&middot;&nbsp;
+          Coil CFM = Supply &times; (1 &minus; BF)
+        </p>
+      </div>
+    </div>
+  );
+};
+
+// ── Main page component ───────────────────────────────────────────────────────
 
 export default function AHUConfig() {
   const dispatch = useDispatch();
@@ -83,8 +174,6 @@ export default function AHUConfig() {
   const totalTR  = assignedRooms.reduce((sum, r) => sum + (parseFloat(r.coolingCapTR) || 0), 0);
 
   // BUG-UI-14 FIX: include 'regulatoryAcph' in ACPH-governed count.
-  // Previous filter only counted 'designAcph' and 'minAcph' — excluded
-  // NFPA 855 battery rooms and GMP Annex 1 pharma suites.
   const acphCount = assignedRooms.filter(
     (r) => ['designAcph', 'minAcph', 'regulatoryAcph'].includes(r.supplyAirGoverned)
   ).length;
@@ -174,13 +263,15 @@ export default function AHUConfig() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-            {/* Config form */}
+            {/* ── Config form ──────────────────────────────────────────── */}
             <div className="space-y-6">
               <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <h3 className="text-sm font-bold text-slate-800 uppercase mb-4 border-b border-slate-100 pb-2">
                   System Specs
                 </h3>
                 <div className="space-y-4">
+
+                  {/* System Name */}
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
                       System Name
@@ -193,6 +284,7 @@ export default function AHUConfig() {
                     />
                   </div>
 
+                  {/* System Type */}
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
                       System Type
@@ -208,19 +300,83 @@ export default function AHUConfig() {
                     </select>
                   </div>
 
+                  {/* ── ADP-01: Apparatus Dew Point ─────────────────────── */}
+                  <div className="pt-4 border-t border-slate-100">
+                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3">
+                      Apparatus Dew Point
+                    </h4>
+
+                    {/* ADP Mode selector */}
+                    <div className="mb-3">
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                        ADP Mode
+                      </label>
+                      <select
+                        value={selectedAhu.adpMode ?? 'manual'}
+                        onChange={(e) => handleUpdate('adpMode', e.target.value)}
+                        className="w-full border-slate-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                      >
+                        <option value="manual">Manual — enter ADP</option>
+                        <option value="calculated">Calculated — from sensible load</option>
+                      </select>
+                      <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                        {(selectedAhu.adpMode ?? 'manual') === 'calculated' ? (
+                          <span>
+                            T<sub>ADP</sub> = T<sub>room</sub> &minus; ERSH &divide; (C<sub>s</sub> &times; Coil CFM)
+                          </span>
+                        ) : (
+                          '0 = use project default'
+                        )}
+                      </p>
+                    </div>
+
+                    {/* Manual ADP input — hidden in calculated mode */}
+                    {(selectedAhu.adpMode ?? 'manual') === 'manual' && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                          ADP Override (°F)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="35"
+                          max="65"
+                          value={selectedAhu.adp > 0 ? selectedAhu.adp : ''}
+                          placeholder={`Default: ${ASHRAE.DEFAULT_ADP}°F`}
+                          onChange={(e) => handleUpdate('adp', parseFloat(e.target.value) || 0)}
+                          className="w-full border-slate-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        />
+                      </div>
+                    )}
+
+                    {/* Calculated ADP live readout */}
+                    {(selectedAhu.adpMode ?? 'manual') === 'calculated' && (
+                      <AdpCalculatedReadout
+                        assignedRooms={assignedRooms}
+                        defaultAdp={ASHRAE.DEFAULT_ADP}
+                      />
+                    )}
+                  </div>
+
+                  {/* ── Delete ──────────────────────────────────────────── */}
+                  {/* BUG-UI-16 FIX: deleteAhuWithCleanup clears room.assignedAhuIds
+                      before removing the AHU. deleteAHU directly only removes the
+                      AHU from the list — assigned rooms would retain stale ahuId
+                      and silently revert to Recirculating / typeOfUnit: '-'. */}
                   <div className="pt-4">
                     <button
-                      onClick={() => dispatch(deleteAHU(selectedAhuId))}
+                      onClick={() => dispatch(deleteAhuWithCleanup(selectedAhuId))}
                       className="text-red-500 text-xs font-bold hover:text-red-700 hover:underline"
                     >
                       Delete System
                     </button>
                   </div>
+
                 </div>
               </div>
             </div>
 
-            {/* Assigned rooms table */}
+            {/* ── Assigned rooms table ──────────────────────────────────── */}
             <div className="lg:col-span-2">
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
@@ -267,10 +423,7 @@ export default function AHUConfig() {
                               </div>
                             )}
                           </td>
-                          {/* BUG-UI-13 FIX: rdsRow.floorArea is already ft² (CRIT-RDS-01).
-                              Previous code multiplied by M2_TO_FT2 (10.7639) again → 10.76× error.
-                              The "BUG-04 FIX" comment + M2_TO_FT2 multiplication was written before
-                              CRIT-RDS-01 changed rdsRow.floorArea unit from m² to ft². */}
+                          {/* BUG-UI-13 FIX: rdsRow.floorArea is already ft² (CRIT-RDS-01). */}
                           <td className="px-6 py-3 text-right font-mono text-slate-500">
                             {parseFloat(room.floorArea || 0).toFixed(0)}
                           </td>
@@ -278,7 +431,6 @@ export default function AHUConfig() {
                             {(room.supplyAir || 0).toLocaleString()}
                           </td>
                           <td className="px-6 py-3 text-right">
-                            {/* BUG-UI-14 FIX: GovernedBadge now handles 'regulatoryAcph' */}
                             <GovernedBadge governed={room.supplyAirGoverned} />
                           </td>
                           <td className="px-6 py-3 text-right font-mono text-blue-600">

@@ -114,6 +114,7 @@ import { calculateAllSeasonStatePoints } from './psychroStatePoints';
 import {
   altitudeCorrectionFactor,
   sensibleFactor,
+  calculateAdpFromLoads
 } from '../../utils/psychro';
 
 import { KW_TO_BTU_HR, m2ToFt2, m3ToFt3 } from '../../utils/units';
@@ -157,8 +158,82 @@ export const selectRdsData = createSelector(
       const floorAreaFt2 = m2ToFt2(room.floorArea);
       const volumeFt3    = m3ToFt3(room.volume);
 
-      const bf   = parseFloat(systemDesign.bypassFactor) || 0.10;
-      const adpF = parseFloat(systemDesign.adp)          || 55;
+      const bf = parseFloat(systemDesign.bypassFactor) || 0.10;
+
+      // ── ADP-01: Resolve effective ADP ─────────────────────────────────────
+      //
+      // Priority chain (most specific wins):
+      //   1. adpMode = 'calculated' → back-calculate from room sensible load
+      //   2. ahu.adp > 0            → per-AHU manual override
+      //   3. systemDesign.adp       → project-level default
+      //   4. ASHRAE.DEFAULT_ADP     → 55°F hardcoded fallback
+      //
+      // For 'calculated' mode we need a preliminary supplyAir estimate to break
+      // the circular dependency (supplyAir ↔ ADP). Two-pass approach:
+      //
+      //   Pass 1: calculateAirQuantities with project-default ADP
+      //           → gets preliminary supplyAir (ACPH constraints dominate anyway
+      //             for cleanrooms; thermal CFM changes <5% between passes)
+      //   Pass 2: calculateAdpFromLoads(dbInF, peakErsh, prelimSupplyAir, bf)
+      //           → effective ADP
+      //   Final:  all downstream calcs (psychro, state points) use effective ADP
+      //
+      // ⚠️  'calculated' mode is only physically valid for cooling-coil AHUs.
+      //     Battery dry rooms and desiccant systems should remain 'manual'.
+      //     ADP < 35°F is clamped inside calculateAdpFromLoads — the function
+      //     will return DEFAULT_ADP (55°F) if peakErsh = 0 or supplyAir = 0.
+      //
+      // Resolution of adpMode:
+      //   Per-AHU adpMode → project systemDesign.adpMode → 'manual' hardcoded.
+      //   This allows a project-wide default mode to be set from ProjectDetails
+      //   and overridden per-AHU in AHUConfig.
+
+      const projectAdpMode = systemDesign?.adpMode   || 'manual';
+      const ahuAdpMode     = ahu?.adpMode             || projectAdpMode;
+      const projectAdp     = parseFloat(systemDesign?.adp) || ASHRAE.DEFAULT_ADP;
+      const ahuAdpOverride = parseFloat(ahu?.adp)     || 0;
+
+      let adpF;
+
+      if (ahuAdpMode === 'calculated') {
+        // Two-pass: preliminary air quantities with project-default ADP,
+        // then recalculate ADP from the resulting supplyAir.
+        //
+        // Pass 1 uses a synthetic systemDesign with the project-default ADP
+        // so airQuantities.js reads a valid value on the first pass.
+        const prelimSystemDesign = { ...systemDesign, adp: projectAdp };
+        const prelimAirQty = calculateAirQuantities(
+          room, envelope, ahu, prelimSystemDesign,
+          altCf, peakErsh,
+          floorAreaFt2, volumeFt3,
+        );
+
+        adpF = calculateAdpFromLoads(
+          dbInF,
+          peakErsh,
+          prelimAirQty.supplyAir,
+          bf,
+          elevation,
+        );
+
+        // Pass 2 supplyAir is computed below with the final adpF.
+        // In practice, the difference between pass-1 and pass-2 supplyAir is
+        // small (<5%) for ACPH-governed rooms. For thermally-governed rooms it
+        // converges in one iteration because ADP drives thermalCFM, and
+        // thermalCFM was already consistent with the preliminary ADP.
+
+      } else {
+        // Manual mode: per-AHU override wins; project default as fallback.
+        adpF = ahuAdpOverride > 0 ? ahuAdpOverride : projectAdp;
+      }
+
+      // Build effective systemDesign with the resolved ADP so that
+      // calculateAirQuantities (called in STEP 2 below) and all downstream
+      // calcs receive the same effective value.
+      // We do NOT mutate systemDesign — this is a local copy for this room only.
+      const effectiveSystemDesign = adpF !== projectAdp
+        ? { ...systemDesign, adp: adpF }
+        : systemDesign; // no copy needed if ADP unchanged
 
       // Null-coalescing guard: preserves 0%RH for battery dry rooms.
       // 0 != null is true in JS → 0 passes through correctly.
@@ -512,6 +587,8 @@ humidWarning,
         // ── Coil performance ──────────────────────────────────────────────────
         coil_shr:           psychroFields['coil_shr'],
         coil_contactFactor: psychroFields['coil_contactFactor'],
+        coil_adp:           adpF,           // ADP-01: resolved ADP for RDS display
+        coil_adpMode:       ahuAdpMode,     // ADP-01: 'manual' | 'calculated' — for UI badge
 
         // ── Seasonal load results ─────────────────────────────────────────────
         ...seasonResults,

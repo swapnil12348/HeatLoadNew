@@ -92,6 +92,7 @@ const makeAhu = (id, index = 0, overrides = {}) => ({
   // These override fields are NOT yet wired into rdsSelector — they are
   // placeholders for Sprint 3 per-AHU psychro override feature.
   bypassFactor:  0,    // 0 = use project default
+  adpMode: 'manual',   // 'manual' | 'calculated'
   adp:           0,    // °F — 0 = use project default
 
   // ── Filter / location ─────────────────────────────────────────────────────

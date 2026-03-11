@@ -551,3 +551,91 @@ export const calculateSpecificVolume = (dbF, grains, elevFt = 0) => {
   const v = 0.370486 * (T / Patm_psia) * (1 + 1.607858 * W);
   return isNaN(v) ? 0 : v;
 };
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADP back-calculation  (ADD TO BOTTOM OF psychro.js)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * calculateAdpFromLoads(dbInF, peakErsh, supplyAir, bf, elevFt?)
+ *
+ * Back-calculates the Apparatus Dew Point (ADP) from room sensible load.
+ *
+ * ASHRAE HOF 2021, Ch.18 — ADP-bypass model derivation:
+ *
+ *   Qs = Cs × CFM_supply × ΔT_supply
+ *   ΔT_supply = T_room − T_supply
+ *
+ *   ADP-bypass blend:
+ *     T_supply = T_ADP × (1 − BF) + T_room × BF
+ *   ∴ ΔT_supply = (T_room − T_ADP) × (1 − BF)
+ *
+ *   Substituting:
+ *     Qs = Cs × supplyAir × (T_room − T_ADP) × (1 − BF)
+ *        = Cs × coilAir × (T_room − T_ADP)
+ *
+ *   Solving for T_ADP:
+ *     T_ADP = T_room − Qs / (Cs × coilAir)
+ *
+ * Physical constraints:
+ *   ADP must be below room DB (coil must cool below room temperature).
+ *   ADP floored at 35°F — minimum achievable chilled-water coil leaving temp.
+ *   ADP must be at least 2°F below room DB — coil cannot operate at zero ΔT.
+ *
+ * ⚠️  THIS IS A COOLING-COIL CONCEPT ONLY.
+ *   Do NOT use for desiccant dry rooms (battery Li-ion, sub-10%RH pharma).
+ *   For those systems, ADP has no physical meaning — the dehumidification is
+ *   achieved by adsorption, not coil condensation. See ASHRAE.DEFAULT_ADP notes
+ *   in ashrae.js and heatingHumid.js for the correct desiccant sizing path.
+ *
+ * @param {number} dbInF      - room design dry-bulb (°F)
+ * @param {number} peakErsh   - peak effective room sensible heat (BTU/hr)
+ * @param {number} supplyAir  - total supply air CFM (from airQuantities first pass)
+ * @param {number} bf         - bypass factor (0–1)
+ * @param {number} elevFt     - site elevation (ft)
+ * @returns {number} ADP dry-bulb (°F)
+ *   Returns ASHRAE.DEFAULT_ADP (55°F) if inputs are invalid or coilAir = 0.
+ *   Returns ASHRAE.DEFAULT_ADP (55°F) if peakErsh ≤ 0 (no cooling load).
+ *   Result is clamped: max(35, min(result, dbInF − 2)).
+ */
+export const calculateAdpFromLoads = (
+  dbInF,
+  peakErsh,
+  supplyAir,
+  bf,
+  elevFt = 0,
+) => {
+  const dbNum   = parseFloat(dbInF);
+  const ersh    = parseFloat(peakErsh);
+  const cfm     = parseFloat(supplyAir);
+  const bfNum   = parseFloat(bf);
+
+  // Guard: invalid inputs → project default
+  if (isNaN(dbNum) || isNaN(ersh) || isNaN(cfm) || isNaN(bfNum)) {
+    return ASHRAE.DEFAULT_ADP;
+  }
+
+  // Guard: no cooling load or no supply air → project default
+  if (ersh <= 0 || cfm <= 0) return ASHRAE.DEFAULT_ADP;
+
+  // coilAir = air that actually passes through the coil (non-bypass portion)
+  const coilAir = cfm * (1 - Math.min(0.99, Math.max(0, bfNum)));
+  if (coilAir <= 0) return ASHRAE.DEFAULT_ADP;
+
+  // Altitude-corrected sensible factor
+  const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
+  if (Cs <= 0) return ASHRAE.DEFAULT_ADP;
+
+  // T_ADP = T_room − ERSH / (Cs × coilAir)
+  const adpRaw = dbNum - ersh / (Cs * coilAir);
+
+  // Physical clamp:
+  //   Lower bound 35°F: minimum CHW coil leaving air temp in practice
+  //     (CHW supply typically 42–46°F; coil approach ΔT ≈ 5–7°F)
+  //   Upper bound dbInF − 2°F: ADP must be meaningfully below room DB
+  //     for the coil to perform dehumidification
+  const adpClamped = Math.max(35, Math.min(adpRaw, dbNum - 2));
+
+  return Math.round(adpClamped * 10) / 10;
+};
