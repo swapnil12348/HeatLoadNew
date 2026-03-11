@@ -36,23 +36,23 @@
  *     the AHU grouping table where the engineer will see them immediately.
  */
 
-import { useState }                    from 'react';
-import { useSelector, useDispatch }    from 'react-redux';
-import { ChevronRight }                from 'lucide-react';
-import { addNewRoom }                  from '../features/room/roomActions';
-import { selectAllAHUs, addAHU }       from '../features/ahu/ahuSlice';
-import { selectAllRooms }              from '../features/room/roomSlice';
-import { selectRdsData }               from '../features/results/rdsSelector';
-import useProjectTotals                from '../hooks/useProjectTotals';
-import RoomDetailPanel                 from './rds/RoomDetailPanel';
+import { useState } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { ChevronRight } from 'lucide-react';
+import { addNewRoom } from '../features/room/roomActions';
+import { selectAllAHUs, addAHU } from '../features/ahu/ahuSlice';
+import { selectAllRooms } from '../features/room/roomSlice';
+import { selectRdsData } from '../features/results/rdsSelector';
+import useProjectTotals from '../hooks/useProjectTotals';
+import RoomDetailPanel from './rds/RoomDetailPanel';
 
 // ── ISO class colour map ──────────────────────────────────────────────────────
 const ISO_BADGE = {
-  'ISO 5':        'bg-red-50    text-red-700    border-red-100',
-  'ISO 6':        'bg-orange-50 text-orange-700 border-orange-100',
-  'ISO 7':        'bg-purple-50 text-purple-700 border-purple-100',
-  'ISO 8':        'bg-slate-50  text-slate-600  border-slate-200',
-  'CNC':          'bg-teal-50   text-teal-700   border-teal-100',
+  'ISO 5': 'bg-red-50    text-red-700    border-red-100',
+  'ISO 6': 'bg-orange-50 text-orange-700 border-orange-100',
+  'ISO 7': 'bg-purple-50 text-purple-700 border-purple-100',
+  'ISO 8': 'bg-slate-50  text-slate-600  border-slate-200',
+  'CNC': 'bg-teal-50   text-teal-700   border-teal-100',
   'Unclassified': 'bg-gray-50   text-gray-500   border-gray-200',
 };
 
@@ -139,8 +139,8 @@ export default function RDSPage() {
 
   // Raw rooms — passed to RoomDetailPanel for editing.
   // Never pass rdsSelector rows to the panel — those are derived/computed.
-  const rawRooms   = useSelector(selectAllRooms);
-  const ahus       = useSelector(selectAllAHUs);
+  const rawRooms = useSelector(selectAllRooms);
+  const ahus = useSelector(selectAllAHUs);
   const allRdsRows = useSelector(selectRdsData);
 
   const [selectedRoomId, setSelectedRoomId] = useState(null);
@@ -168,6 +168,7 @@ export default function RDSPage() {
 
   // Raw room for the panel — NOT the rdsSelector row
   const selectedRawRoom = rawRooms.find((r) => r.id === selectedRoomId) ?? null;
+  const selectedRdsRow = allRdsRows.find((r) => r.id === selectedRoomId) ?? null;
 
   return (
     <div className="flex h-full bg-slate-50 relative overflow-hidden">
@@ -319,7 +320,7 @@ export default function RDSPage() {
 
             {/* AHU groups — byAhu from useProjectTotals */}
             {Object.entries(byAhu).map(([ahuId, group]) => {
-              const ahu         = ahus.find((a) => a.id === ahuId);
+              const ahu = ahus.find((a) => a.id === ahuId);
               const groupRdsRows = allRdsRows.filter(
                 (r) => (r.ahuId || 'unassigned') === ahuId
               );
@@ -413,6 +414,7 @@ export default function RDSPage() {
           />
           <RoomDetailPanel
             room={selectedRawRoom}
+            rdsRow={selectedRdsRow}
             envelope={selectedEnvelope}
             ahus={ahus}
             onClose={() => setSelectedRoomId(null)}

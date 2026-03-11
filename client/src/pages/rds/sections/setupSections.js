@@ -3,10 +3,8 @@
  * RDS category: setup
  * Sections: Identification, Room Geometry, Design Conditions, Classification
  */
+import { ISO_CLASS_OPTIONS } from '../../../constants/isoCleanroom';
 
-const ISO_OPTIONS = [
-  'ISO 5', 'ISO 6', 'ISO 7', 'ISO 8', 'CNC', 'Unclassified',
-];
 
 const VENT_CATEGORY_OPTIONS = [
   { value: 'general',  label: 'General / Office'           },
@@ -82,8 +80,8 @@ export const SETUP_SECTIONS = [
     category: 'setup',
     color:    'purple',
     columns: [
-      { key: 'classInOp',   label: 'ISO Class', subLabel: 'In Operation', type: 'select', options: ISO_OPTIONS, width: 'w-28' },
-      { key: 'atRestClass', label: 'ISO Class', subLabel: 'At Rest',      type: 'select', options: ISO_OPTIONS, width: 'w-28' },
+      { key: 'classInOp',   label: 'ISO Class', subLabel: 'In Operation', type: 'select', options: ISO_CLASS_OPTIONS, width: 'w-28' },
+      { key: 'atRestClass', label: 'ISO Class', subLabel: 'At Rest',      type: 'select', options: ISO_CLASS_OPTIONS, width: 'w-28' },
       { key: 'recOt',       label: 'REC. / OT', type: 'select', options: ['REC', 'OT'],   width: 'w-20' },
       { key: 'flpType',     label: 'FLP / NFLP',type: 'select', options: ['FLP', 'NFLP'], width: 'w-20' },
     ],

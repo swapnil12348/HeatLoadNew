@@ -3,82 +3,62 @@
  * Responsibility: Fixed side-panel editor for a single room.
  *                 Renders all RDS_SECTIONS fields in a tabbed form layout.
  *
+ * -- CHANGELOG v2.3 -----------------------------------------------------------
+ *
+ *   UI-REFRESH — Readability and layout improvements:
+ *     - Panel widened from 620px → 820px
+ *     - Typography scaled up: labels text-xs (12px), values text-sm (14px)
+ *     - Section headers now colour-coded per section.color
+ *     - readOnly/derived fields visually distinct (slate-50 bg, italic label)
+ *     - Tab bar taller with larger icons and text
+ *     - 3-column grid for setup fields, 2-col for others
+ *     - Header badges and room name scaled up
+ *     - Footer buttons full-size text
+ *
  * -- CHANGELOG v2.2 -----------------------------------------------------------
- *
- *   BUG-UI-01 [MEDIUM — ISO CORRECTNESS] — useRdsRow called with room object.
- *
- *     Previous: useRdsRow(room?.id)
- *     Fixed:    useRdsRow(room?.id, room)
- *
- *     useRdsRow(roomId, room = null) uses room?.classInOp inside handleEnvUpdate
- *     to dispatch initializeRoom({ id, room: { classInOp } }). This is the
- *     FIX-H05 fix — ensures isIsoClassified() fires correctly when a room is
- *     first edited through the panel before its envelope entry is initialized.
- *
- *     Without the room argument: classInOp is always undefined → '' → false,
- *     meaning isIsoClassified() never fires for any room opened in this panel.
- *     A pressurized ISO-classified room (e.g. ISO 6 semiconductor anteroom)
- *     whose envelope is first touched via this panel could receive a non-zero
- *     achValue default — a silent, uncatchable ASHRAE compliance error.
- *
- *     The panel is the most likely first-edit path for envelope fields (it is
- *     the dedicated room editor), making this the highest-risk entry point.
- *
- *   BUG-UI-02 [LOW — MODULE CORRECTNESS] — dynamic require() removed.
- *
- *     Previous:
- *       dispatch(
- *         require('../../features/room/roomActions').deleteRoomWithCleanup(room.id)
- *       );
- *
- *     This was a CommonJS require() inside a useCallback body in a Vite/ESM
- *     project. It bypasses Vite's module graph (no tree-shaking, no HMR
- *     tracking) and used room.id from props directly instead of the hook-
- *     managed roomId.
- *
- *     Fix: deleteRoomWithCleanup imported at module level (top-level ESM).
- *     handleDelete owns its own window.confirm + onClose() because:
- *       - useRdsRow.handleDeleteRoom also calls window.confirm internally.
- *       - onClose() must NOT fire if the user cancels the confirm dialog.
- *       - Therefore the panel cannot delegate to handleDeleteRoom — it must
- *         own the confirm guard so onClose() is conditional.
- *     The direct dispatch(deleteRoomWithCleanup(room.id)) is the correct
- *     pattern for this specific case.
- *
- * -- Previous changelog (v2.1) ------------------------------------------------
- *   - Dead React import removed
- *   - handleRoomUpdate + handleEnvUpdate replaced by useRdsRow hook
- *   - delete uses useRdsRow.handleDeleteRoom + calls onClose after
- *   - parseFloat(rawValue) || 0 → parseFloat(rawValue) in env updates
- *   - categoryMap { setup:'setup'... } removed — activeTab used directly
- *   - Close button raw SVG → lucide-react X
- *   - AHU selector label uses FieldLabel pattern from RDSCellComponents
- *   - col.width === 'w-40' → col.fullWidth flag for span detection
- *   - assignedAhuIds[0] badge guard checks for non-empty string
- *   - renderField extracted as PanelField sub-component
+ *   BUG-UI-01 — useRdsRow called with room object (ISO correctness)
+ *   BUG-UI-02 — dynamic require() removed, top-level ESM import
  */
 
-import { useState, useCallback }        from 'react';
-import { useDispatch }                  from 'react-redux';
-import { X }                            from 'lucide-react';
+import { useState, useCallback }     from 'react';
+import { useDispatch }               from 'react-redux';
+import { X, Lock }                   from 'lucide-react';
 import { FormInput, FormSelect,
-         SeasonBadge }                  from './RDSCellComponents';
+         SeasonBadge }               from './RDSCellComponents';
 import { RDS_SECTIONS,
          RDS_CATEGORIES,
-         getFieldValue }                from './RDSConfig';
-import useRdsRow                        from '../../hooks/useRdsRow';
-import { deleteRoomWithCleanup }        from '../../features/room/roomActions'; // BUG-UI-02 FIX: top-level ESM import
+         getFieldValue }             from './RDSConfig';
+import useRdsRow                     from '../../hooks/useRdsRow';
+import { deleteRoomWithCleanup }     from '../../features/room/roomActions';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Section colour palette ────────────────────────────────────────────────────
+// Maps section.color → { header bg, border, label text }
+const SECTION_PALETTE = {
+  gray:   { header: 'bg-slate-50   border-slate-200', accent: 'bg-slate-400',   text: 'text-slate-600'  },
+  blue:   { header: 'bg-blue-50    border-blue-200',  accent: 'bg-blue-500',    text: 'text-blue-700'   },
+  amber:  { header: 'bg-amber-50   border-amber-200', accent: 'bg-amber-500',   text: 'text-amber-700'  },
+  purple: { header: 'bg-purple-50  border-purple-200',accent: 'bg-purple-500',  text: 'text-purple-700' },
+  green:  { header: 'bg-green-50   border-green-200', accent: 'bg-green-500',   text: 'text-green-700'  },
+  red:    { header: 'bg-red-50     border-red-200',   accent: 'bg-red-500',     text: 'text-red-700'    },
+  orange: { header: 'bg-orange-50  border-orange-200',accent: 'bg-orange-500',  text: 'text-orange-700' },
+  teal:   { header: 'bg-teal-50    border-teal-200',  accent: 'bg-teal-500',    text: 'text-teal-700'   },
+  cyan:   { header: 'bg-cyan-50    border-cyan-200',  accent: 'bg-cyan-500',    text: 'text-cyan-700'   },
+  indigo: { header: 'bg-indigo-50  border-indigo-200',accent: 'bg-indigo-500',  text: 'text-indigo-700' },
+  sky:    { header: 'bg-sky-50     border-sky-200',   accent: 'bg-sky-500',     text: 'text-sky-700'    },
+  lime:   { header: 'bg-lime-50    border-lime-200',  accent: 'bg-lime-500',    text: 'text-lime-700'   },
+  rose:   { header: 'bg-rose-50    border-rose-200',  accent: 'bg-rose-500',    text: 'text-rose-700'   },
+  pink:   { header: 'bg-pink-50    border-pink-200',  accent: 'bg-pink-500',    text: 'text-pink-700'   },
+  violet: { header: 'bg-violet-50  border-violet-200',accent: 'bg-violet-500',  text: 'text-violet-700' },
+  yellow: { header: 'bg-yellow-50  border-yellow-200',accent: 'bg-yellow-500',  text: 'text-yellow-700' },
+};
 
-/**
- * Group columns by their seasonLabel for divider rendering.
- * Ungrouped columns (no seasonLabel) come first as a group with label null.
- */
+const getPalette = (color) =>
+  SECTION_PALETTE[color] ?? SECTION_PALETTE.gray;
+
+// ── Season grouping ───────────────────────────────────────────────────────────
 const groupColumnsBySeason = (columns) => {
   const groups    = {};
   const ungrouped = [];
-
   for (const col of columns) {
     if (col.seasonLabel) {
       if (!groups[col.seasonLabel]) groups[col.seasonLabel] = [];
@@ -87,7 +67,6 @@ const groupColumnsBySeason = (columns) => {
       ungrouped.push(col);
     }
   }
-
   const result = [];
   if (ungrouped.length) result.push({ groupLabel: null, columns: ungrouped });
   for (const [label, cols] of Object.entries(groups)) {
@@ -96,24 +75,51 @@ const groupColumnsBySeason = (columns) => {
   return result;
 };
 
-// ── PanelField ────────────────────────────────────────────────────────────────
-// Renders a single RDS column definition as a form field.
-// Pure presentational — all handlers passed as props.
+// ── ReadOnly display ──────────────────────────────────────────────────────────
+// Derived fields shown as display-only tiles, not inputs.
+const ReadOnlyField = ({ label, subLabel, value }) => (
+  <div className="flex flex-col gap-0.5">
+    <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider flex items-center gap-1">
+      <Lock className="w-2.5 h-2.5 opacity-50" aria-hidden="true" />
+      {label}
+      {subLabel && <span className="normal-case font-normal opacity-70">({subLabel})</span>}
+    </span>
+    <div className="bg-slate-50 border border-slate-100 rounded-md px-3 py-2
+                    text-sm font-semibold text-slate-600 font-mono tracking-tight">
+      {value === '' || value === null || value === undefined ? (
+        <span className="text-slate-300 font-normal not-italic">—</span>
+      ) : value}
+    </div>
+  </div>
+);
 
+// ── PanelField ────────────────────────────────────────────────────────────────
 const PanelField = ({
-  col, room, envelope, ahus,
+  col, room, rdsRow, envelope, ahus,
   onRoomUpdate, onEnvUpdate, onAhuChange,
 }) => {
-  const value = getFieldValue(col, room, envelope);
+  const value = getFieldValue(col, room, envelope, rdsRow);
+  const isReadOnly = col.type === 'readOnly' || col.derived;
+
+  // ── ReadOnly derived ───────────────────────────────────────────────────────
+  if (isReadOnly) {
+    return (
+      <ReadOnlyField
+        label={col.label}
+        subLabel={col.subLabel}
+        value={value}
+      />
+    );
+  }
 
   // ── AHU selector ──────────────────────────────────────────────────────────
   if (col.type === 'select-ahu') {
     return (
       <div className="col-span-2">
-        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+        <label className="block text-xs font-semibold text-slate-500 mb-1.5">
           {col.label}
           {col.subLabel && (
-            <span className="text-slate-300 font-normal ml-1 normal-case">
+            <span className="text-slate-400 font-normal ml-1.5 text-[11px]">
               ({col.subLabel})
             </span>
           )}
@@ -123,8 +129,8 @@ const PanelField = ({
           onChange={(e) => onAhuChange(e.target.value)}
           className="
             w-full text-sm font-bold text-blue-700
-            bg-blue-50 border border-blue-200 rounded-md
-            px-3 py-2
+            bg-blue-50 border border-blue-200 rounded-lg
+            px-3 py-2.5
             focus:outline-none focus:ring-2 focus:ring-blue-300
             transition-all
           "
@@ -151,7 +157,7 @@ const PanelField = ({
     );
   }
 
-  // ── Number / text / readOnly ──────────────────────────────────────────────
+  // ── Number / text ──────────────────────────────────────────────────────────
   return (
     <FormInput
       label={col.label}
@@ -159,7 +165,7 @@ const PanelField = ({
       type={col.inputType || 'number'}
       value={value}
       step={col.step}
-      disabled={col.type === 'readOnly'}
+      disabled={false}
       onChange={
         col.isEnv
           ? (e) => onEnvUpdate(col, e.target.value)
@@ -169,198 +175,228 @@ const PanelField = ({
   );
 };
 
+// ── ISO badge colour ──────────────────────────────────────────────────────────
+const ISO_BADGE_COLOR = {
+  'ISO 1': 'bg-red-100    text-red-700    border-red-200',
+  'ISO 2': 'bg-red-50     text-red-600    border-red-100',
+  'ISO 3': 'bg-orange-100 text-orange-700 border-orange-200',
+  'ISO 4': 'bg-orange-50  text-orange-600 border-orange-100',
+  'ISO 5': 'bg-amber-100  text-amber-700  border-amber-200',
+  'ISO 6': 'bg-yellow-100 text-yellow-700 border-yellow-200',
+  'ISO 7': 'bg-purple-100 text-purple-700 border-purple-200',
+  'ISO 8': 'bg-slate-100  text-slate-600  border-slate-200',
+  'ISO 9': 'bg-gray-100   text-gray-500   border-gray-200',
+  'CNC':   'bg-teal-100   text-teal-700   border-teal-200',
+};
+
+const isoBadgeClass = (cls) =>
+  ISO_BADGE_COLOR[cls] ?? 'bg-gray-100 text-gray-500 border-gray-200';
+
 // ── RoomDetailPanel ───────────────────────────────────────────────────────────
 
-export default function RoomDetailPanel({ room, envelope, ahus, onClose }) {
-  const dispatch   = useDispatch();
+export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose }) {
+  const dispatch = useDispatch();
   const [activeTab, setActiveTab] = useState('setup');
 
-  // BUG-UI-01 FIX: pass room as second argument so handleEnvUpdate dispatches
-  // initializeRoom({ id, room: { classInOp } }) correctly.
-  //
-  // Previously: useRdsRow(room?.id)
-  //   → room?.classInOp always undefined → '' → isIsoClassified('') = false
-  //   → ISO pressurization achValue guard silently bypassed on first envelope edit.
-  //
-  // Now: useRdsRow(room?.id, room)
-  //   → room?.classInOp correctly forwarded to initializeRoom payload
-  //   → isIsoClassified() fires correctly for pressurized ISO rooms
   const {
     handleRoomUpdate,
     handleEnvUpdate,
     handleAhuChange,
-  } = useRdsRow(room?.id, room); // BUG-UI-01 FIX: room passed as second arg
+  } = useRdsRow(room?.id, room);
 
-  // Panel owns its own delete confirm because:
-  //   1. useRdsRow.handleDeleteRoom also calls window.confirm internally — would double-prompt.
-  //   2. onClose() must be conditional on confirmation — must not fire on cancel.
-  //   Therefore: direct dispatch after panel-owned confirm is the correct pattern.
-  //
-  // BUG-UI-02 FIX: deleteRoomWithCleanup is now a top-level ESM import (see top of file).
-  //   Previous: require('../../features/room/roomActions').deleteRoomWithCleanup(room.id)
-  //   — CommonJS require() inside useCallback in a Vite/ESM project. Bypassed module
-  //   graph, disabled tree-shaking, broke HMR for this module.
   const handleDelete = useCallback(() => {
     if (window.confirm('Permanently delete this room and all its data?')) {
-      dispatch(deleteRoomWithCleanup(room.id)); // BUG-UI-02 FIX: ESM import, not require()
+      dispatch(deleteRoomWithCleanup(room.id));
       onClose();
     }
   }, [dispatch, room?.id, onClose]);
 
   if (!room) return null;
 
-  // Active sections — filter by current tab category directly
   const activeSections = RDS_SECTIONS.filter((s) => s.category === activeTab);
+  const assignedAhuId  = room.assignedAhuIds?.[0];
+  const isAssigned     = Boolean(assignedAhuId && assignedAhuId.trim() !== '');
 
-  // Assigned AHU — guard against empty string being truthy
-  const assignedAhuId = room.assignedAhuIds?.[0];
-  const isAssigned    = Boolean(assignedAhuId && assignedAhuId.trim() !== '');
+  // Columns per row — setup fields are compact enough for 3 cols
+  const gridCols = activeTab === 'setup' ? 'grid-cols-3' : 'grid-cols-2';
 
   return (
-    <div className="fixed inset-y-0 right-0 w-[620px] bg-white shadow-2xl z-50
-                    flex flex-col border-l border-slate-200">
+    <div className="fixed inset-y-0 right-0 w-[820px] bg-white shadow-2xl z-50
+                    flex flex-col border-l border-slate-200 overflow-hidden">
 
       {/* ── Header ────────────────────────────────────────────────────── */}
-      <div className="px-6 py-5 border-b border-slate-100 bg-slate-50
+      <div className="px-6 py-3.5 border-b border-slate-200 bg-white
                       flex justify-between items-start shrink-0">
-        <div>
+        <div className="flex-1 min-w-0">
+
           {/* Badge row */}
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
               Room Editor
             </span>
 
             {isAssigned && (
-              <span className="bg-blue-100 text-blue-700 text-[9px] px-2 py-0.5
-                               rounded font-bold uppercase tracking-wide">
+              <span className="bg-blue-100 text-blue-700 text-[10px] px-2.5 py-0.5
+                               rounded-full font-bold uppercase tracking-wide border border-blue-200">
                 Assigned
               </span>
             )}
 
             {room.atRestClass && (
-              <span className="bg-purple-50 text-purple-600 text-[9px] px-2 py-0.5
-                               rounded border border-purple-100 font-bold">
+              <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold
+                                border ${isoBadgeClass(room.atRestClass)}`}>
                 {room.atRestClass}
               </span>
             )}
 
-            {/* BUG-11 FIX: show classInOp only when different from atRestClass */}
             {room.classInOp && room.classInOp !== room.atRestClass && (
-              <span className="bg-amber-50 text-amber-600 text-[9px] px-2 py-0.5
-                               rounded border border-amber-100 font-bold">
-                {room.classInOp} (Op.)
+              <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold
+                                border ${isoBadgeClass(room.classInOp)}`}>
+                {room.classInOp} <span className="opacity-60 font-normal">(Op.)</span>
               </span>
             )}
           </div>
 
-          {/* Room name */}
-          <h2 className="text-xl font-bold text-slate-900 leading-tight">
-            {room.name || (
-              <span className="text-slate-400 italic">Unnamed Room</span>
+          {/* Room name + number */}
+          <div className="flex items-baseline gap-3">
+            <h2 className="text-xl font-bold text-slate-900 leading-tight truncate">
+              {room.name || (
+                <span className="text-slate-300 italic font-normal">Unnamed Room</span>
+              )}
+            </h2>
+            {room.roomNo && (
+              <span className="text-sm text-slate-400 font-mono shrink-0">
+                #{room.roomNo}
+              </span>
             )}
-          </h2>
+          </div>
 
-          {/* Room number */}
-          {room.roomNo && (
-            <p className="text-xs text-slate-400 font-mono mt-0.5">
-              #{room.roomNo}
-            </p>
+          {/* Quick stats row */}
+          {rdsRow && (
+            <div className="flex items-center gap-4 mt-1">
+              {rdsRow.supplyAir > 0 && (
+                <span className="text-xs text-slate-500">
+                  <span className="font-bold text-slate-700">
+                    {Math.round(rdsRow.supplyAir).toLocaleString()}
+                  </span> CFM
+                </span>
+              )}
+              {rdsRow.coolingCapTR > 0 && (
+                <span className="text-xs text-slate-500">
+                  <span className="font-bold text-blue-600">
+                    {parseFloat(rdsRow.coolingCapTR).toFixed(2)}
+                  </span> TR
+                </span>
+              )}
+              {room.designTemp != null && (
+                <span className="text-xs text-slate-500">
+                  <span className="font-bold text-amber-600">{room.designTemp}°C</span>
+                  {' / '}
+                  <span className="font-bold text-amber-600">{room.designRH}%RH</span>
+                </span>
+              )}
+            </div>
           )}
         </div>
 
-        {/* Close button — lucide-react X */}
+        {/* Close button */}
         <button
           onClick={onClose}
           aria-label="Close panel"
-          className="text-slate-400 hover:text-slate-700
-                     bg-white hover:bg-slate-100
-                     p-2 rounded-full transition-all"
+          className="ml-4 text-slate-400 hover:text-slate-700
+                     bg-slate-50 hover:bg-slate-100 border border-slate-200
+                     p-2 rounded-lg transition-all shrink-0"
         >
-          <X className="w-4 h-4" aria-hidden="true" />
+          <X className="w-5 h-5" aria-hidden="true" />
         </button>
       </div>
 
       {/* ── Tab bar ───────────────────────────────────────────────────── */}
-      <div className="flex border-b border-slate-100 px-4 bg-white shrink-0">
+      <div className="flex border-b border-slate-200 px-6 bg-white shrink-0">
         {RDS_CATEGORIES.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             aria-current={activeTab === tab.id ? 'true' : undefined}
             className={`
-              py-3 px-3 text-[11px] font-bold uppercase tracking-wide
-              border-b-2 transition-colors
+              py-3 px-3 text-xs font-bold uppercase tracking-widest
+              border-b-2 transition-all
               flex items-center gap-1.5 whitespace-nowrap
               ${activeTab === tab.id
                 ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-slate-400 hover:text-slate-600'
+                : 'border-transparent text-slate-400 hover:text-slate-700 hover:border-slate-300'
               }
             `}
           >
-            <span aria-hidden="true">{tab.icon}</span>
+            <span className="text-sm" aria-hidden="true">{tab.icon}</span>
             {tab.label}
           </button>
         ))}
       </div>
 
       {/* ── Scrollable content ────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto p-5 bg-slate-50/50 space-y-5">
+      <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-3">
         {activeSections.map((section) => {
           const columnGroups = groupColumnsBySeason(section.columns);
+          const palette      = getPalette(section.color);
 
           return (
             <div
               key={section.id}
-              className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden"
+              className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
             >
-              {/* Section header */}
-              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100
-                              flex items-center gap-2">
-                <h3 className="text-[11px] font-bold text-slate-700 uppercase tracking-widest">
+              {/* Section header — colour-coded */}
+              <div className={`px-4 py-2 border-b ${palette.header}
+                              flex items-center gap-3`}>
+                <span className={`w-1 h-5 rounded-full shrink-0 ${palette.accent}`}
+                      aria-hidden="true" />
+                <h3 className={`text-xs font-bold uppercase tracking-widest ${palette.text}`}>
                   {section.title}
                 </h3>
-                <span className="text-[9px] text-slate-400 font-mono ml-auto">
+                <span className="text-[10px] text-slate-400 font-mono ml-auto">
                   {section.columns.length} fields
                 </span>
               </div>
 
               {/* Section fields */}
-              <div className="p-4 space-y-5">
+              <div className="p-4 space-y-3">
                 {columnGroups.map(({ groupLabel, columns }, gi) => (
                   <div key={gi}>
+
                     {/* Season divider */}
                     {groupLabel && (
-                      <div className="flex items-center gap-2 mb-3">
+                      <div className="flex items-center gap-3 mb-4">
                         <SeasonBadge season={groupLabel} />
                         <div className="flex-1 h-px bg-slate-100" />
                       </div>
                     )}
 
                     {/* Field grid */}
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                      {columns.map((col) => (
-                        <div
-                          key={col.key}
-                          // fullWidth flag OR wide text fields span both columns
-                          className={
-                            col.fullWidth ||
-                            col.type === 'select-ahu' ||
-                            (col.inputType === 'text' && col.width === 'w-44')
-                              ? 'col-span-2'
-                              : 'col-span-1'
-                          }
-                        >
-                          <PanelField
-                            col={col}
-                            room={room}
-                            envelope={envelope}
-                            ahus={ahus}
-                            onRoomUpdate={handleRoomUpdate}
-                            onEnvUpdate={handleEnvUpdate}
-                            onAhuChange={handleAhuChange}
-                          />
-                        </div>
-                      ))}
+                    <div className={`grid ${gridCols} gap-x-4 gap-y-3`}>
+                      {columns.map((col) => {
+                        const isWide =
+                          col.fullWidth ||
+                          col.type === 'select-ahu' ||
+                          (col.inputType === 'text' && col.width === 'w-44');
+
+                        return (
+                          <div
+                            key={col.key}
+                            className={isWide ? 'col-span-2' : 'col-span-1'}
+                          >
+                            <PanelField
+                              col={col}
+                              room={room}
+                              rdsRow={rdsRow}
+                              envelope={envelope}
+                              ahus={ahus}
+                              onRoomUpdate={handleRoomUpdate}
+                              onEnvUpdate={handleEnvUpdate}
+                              onAhuChange={handleAhuChange}
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -371,20 +407,21 @@ export default function RoomDetailPanel({ room, envelope, ahus, onClose }) {
       </div>
 
       {/* ── Footer ────────────────────────────────────────────────────── */}
-      <div className="px-5 py-3.5 border-t border-slate-100 bg-white
+      <div className="px-5 py-3 border-t border-slate-200 bg-white
                       flex justify-between items-center shrink-0">
         <button
           onClick={handleDelete}
-          className="text-red-500 hover:bg-red-50 px-3 py-1.5
-                     rounded text-[11px] font-bold transition-colors"
+          className="text-red-500 hover:bg-red-50 border border-transparent
+                     hover:border-red-100 px-4 py-2 rounded-lg text-sm
+                     font-semibold transition-all"
         >
           Delete Room
         </button>
         <button
           onClick={onClose}
-          className="bg-slate-900 text-white px-5 py-1.5
-                     rounded font-bold text-[11px]
-                     hover:bg-slate-700 transition-colors shadow"
+          className="bg-slate-900 text-white px-6 py-2 rounded-lg
+                     font-semibold text-sm
+                     hover:bg-slate-700 transition-colors shadow-sm"
         >
           Done
         </button>

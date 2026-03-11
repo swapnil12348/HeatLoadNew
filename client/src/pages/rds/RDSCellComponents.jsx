@@ -153,8 +153,15 @@ export const FormInput = ({
   label,
   subLabel,
 }) => (
-  <div>
-    <FieldLabel label={label} subLabel={subLabel} />
+  <div className="flex flex-col gap-1.5">
+    {label && (
+      <label className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+        {label}
+        {subLabel && (
+          <span className="text-slate-400 font-normal text-[11px]">({subLabel})</span>
+        )}
+      </label>
+    )}
     <input
       type={type}
       value={value ?? ''}
@@ -162,18 +169,17 @@ export const FormInput = ({
       onChange={onChange}
       step={step}
       className={`
-        w-full text-sm px-3 py-2 rounded-md border transition-all
+        w-full text-sm px-3 py-2 rounded-lg border transition-all
         ${disabled
-          ? 'bg-slate-100 text-slate-400 border-slate-100 cursor-not-allowed'
-          : `bg-white border-slate-200 text-slate-800
+          ? 'bg-slate-50 text-slate-400 border-slate-100 cursor-not-allowed'
+          : `bg-white border-slate-200 text-slate-800 font-medium
              focus:border-blue-500 focus:ring-2 focus:ring-blue-100
-             focus:outline-none`
+             focus:outline-none hover:border-slate-300`
         }
       `}
     />
   </div>
 );
-
 // ── FormSelect ────────────────────────────────────────────────────────────────
 // Form-style labelled select — used in RoomDetailPanel side panel.
 
@@ -184,26 +190,34 @@ export const FormSelect = ({
   label,
   subLabel,
 }) => (
-  <div>
-    <FieldLabel label={label} subLabel={subLabel} />
+  <div className="flex flex-col gap-1.5">
+    {label && (
+      <label className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+        {label}
+        {subLabel && (
+          <span className="text-slate-400 font-normal text-[11px]">({subLabel})</span>
+        )}
+      </label>
+    )}
     <select
       value={value ?? ''}
       onChange={onChange}
       className="
-        w-full text-sm px-3 py-2 rounded-md border border-slate-200
-        bg-white text-slate-800
+        w-full text-sm px-3 py-2 rounded-lg border border-slate-200
+        bg-white text-slate-800 font-medium
         focus:border-blue-500 focus:ring-2 focus:ring-blue-100
-        focus:outline-none transition-all
+        focus:outline-none transition-all hover:border-slate-300
+        cursor-pointer
       "
     >
       {options.map((opt) => {
-        const { value: v, label: l } = resolveOption(opt);
+        const v = typeof opt === 'string' ? opt : opt.value;
+        const l = typeof opt === 'string' ? opt : (opt.label ?? opt.value);
         return <option key={v} value={v}>{l}</option>;
       })}
     </select>
   </div>
 );
-
 // ── SeasonBadge ───────────────────────────────────────────────────────────────
 // Coloured pill badge for season labels.
 

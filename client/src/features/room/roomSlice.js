@@ -81,6 +81,7 @@
  */
 
 import { createSlice } from '@reduxjs/toolkit';
+import { ACPH_RANGES } from '../../constants/isoCleanroom';
 
 // ── ID generator ──────────────────────────────────────────────────────────────
 const generateRoomId = () =>
@@ -122,37 +123,37 @@ const makeRoom = (id, index = 0, overrides = {}) => {
   const base = {
     // ── Identity ──────────────────────────────────────────────────────────────
     id,
-    name:     `Room ${index + 1}`,
-    roomNo:   '',
-    level:    '',
+    name: `Room ${index + 1}`,
+    roomNo: '',
+    level: '',
     function: '',
 
     // ── Geometry (SI) ─────────────────────────────────────────────────────────
-    length:    10,
-    width:     10,
-    height:     3,
+    length: 10,
+    width: 10,
+    height: 3,
     floorArea: 100,
-    volume:    300,
+    volume: 300,
 
     // ── Environmental design targets ──────────────────────────────────────────
     designTemp: 22,          // °C — source of truth
     // FIX-ROOM-DB-01: designDB is the °F equivalent, kept in sync by updateRoom.
     // psychroValidation reads designDB; calc modules convert designTemp themselves.
-    designDB:   71.6,        // °F — derived: 22 × 9/5 + 32 = 71.6
-    designRH:   50,          // % (0 is valid for dry rooms — keep as number)
-    pressure:   15,          // Pa
+    designDB: 71.6,        // °F — derived: 22 × 9/5 + 32 = 71.6
+    designRH: 50,          // % (0 is valid for dry rooms — keep as number)
+    pressure: 15,          // Pa
 
     // ── Classification ────────────────────────────────────────────────────────
-    classInOp:   'ISO 8',
+    classInOp: 'ISO 8',
     atRestClass: 'ISO 8',
-    recOt:       'REC',
-    flpType:     'NFLP',
+    recOt: 'REC',
+    flpType: 'NFLP',
 
     // ── ASHRAE 62.1-2022 ventilation category ────────────────────────────────
     ventCategory: 'general',
 
     // ── Airflow constraints (ACH) ─────────────────────────────────────────────
-    minAcph:    10,
+    minAcph: 10,
     designAcph: 20,
 
     // ── Fresh air override ────────────────────────────────────────────────────
@@ -161,7 +162,7 @@ const makeRoom = (id, index = 0, overrides = {}) => {
     // ── Exhaust air breakdown ─────────────────────────────────────────────────
     exhaustAir: {
       general: 0,
-      bibo:    0,
+      bibo: 0,
       machine: 0,
     },
 
@@ -187,21 +188,21 @@ const initialState = {
   activeRoomId: 'room_default_1',
   list: [
     makeRoom('room_default_1', 0, {
-      name:           'Production Hall',
-      length:         20,
-      width:          15,
-      height:          4,
-      floorArea:      300,
-      volume:        1200,
-      designTemp:     22,       // °C
+      name: 'Production Hall',
+      length: 20,
+      width: 15,
+      height: 4,
+      floorArea: 300,
+      volume: 1200,
+      designTemp: 22,       // °C
       // designDB derived automatically by makeRoom: 22 × 9/5 + 32 = 71.6 °F
-      designRH:       50,
-      pressure:       15,
-      classInOp:     'ISO 8',
-      atRestClass:   'ISO 8',
-      ventCategory:  'general',
-      minAcph:        10,
-      designAcph:     20,
+      designRH: 50,
+      pressure: 15,
+      classInOp: 'ISO 8',
+      atRestClass: 'ISO 8',
+      ventCategory: 'general',
+      minAcph: 10,
+      designAcph: 20,
       assignedAhuIds: ['ahu1'],
     }),
   ],
@@ -218,9 +219,9 @@ const roomSlice = createSlice({
     },
 
     addRoom: (state, action) => {
-      const payload   = action.payload;
-      const isLegacy  = typeof payload === 'string';
-      const id        = isLegacy ? payload : (payload.id ?? generateRoomId());
+      const payload = action.payload;
+      const isLegacy = typeof payload === 'string';
+      const id = isLegacy ? payload : (payload.id ?? generateRoomId());
       const overrides = isLegacy ? {} : (() => {
         const o = { ...payload };
         delete o.id;
@@ -259,14 +260,22 @@ const roomSlice = createSlice({
         // in place rather than setting it to null — preserves last valid value.
       }
 
+      if (field === 'classInOp') {
+        const acph = ACPH_RANGES[value];
+        if (acph) {
+          room.minAcph = acph.min;
+          room.designAcph = acph.design;
+        }
+      }
+
       // Keep derived geometry consistent
-      const l = parseFloat(room.length)    || 0;
-      const w = parseFloat(room.width)     || 0;
-      const h = parseFloat(room.height)    || 0;
+      const l = parseFloat(room.length) || 0;
+      const w = parseFloat(room.width) || 0;
+      const h = parseFloat(room.height) || 0;
 
       if (field === 'length' || field === 'width') {
         room.floorArea = parseFloat((l * w).toFixed(1));
-        room.volume    = parseFloat((room.floorArea * h).toFixed(1));
+        room.volume = parseFloat((room.floorArea * h).toFixed(1));
       }
       if (field === 'height') {
         room.volume = parseFloat((room.floorArea * h).toFixed(1));
