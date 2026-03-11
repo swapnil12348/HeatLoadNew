@@ -101,12 +101,6 @@
 │   └── README.md
 │   └── vercel.json
 │   └── vite.config.js
-└── txt/
-│   └── hooks.txt
-│   └── results.txt
-│   └── slices.txt
-│   └── ui.txt
-│   └── utils+calculations.txt
 └── package-lock.json
 └── package.json
 └── vercel.json
