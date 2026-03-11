@@ -6,10 +6,35 @@
  *   state.room.list          →  Room[]
  *   state.room.activeRoomId  →  string | null
  *
- * ── FIELD CONTRACT WITH THE LOGIC LAYER ──────────────────────────────────────
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   The following fields are READ by calculation modules. All must be present
- *   in makeRoom() with a valid numeric default so parseFloat() never returns NaN.
+ *   FIX-ROOM-DB-01 — designDB field added to room shape.
+ *
+ *     psychroValidation.validateRoomHumidity() reads room.designDB (°F).
+ *     roomSlice previously stored only designTemp (°C) and had no designDB field.
+ *
+ *     Effect: parseFloat(room.designDB) === parseFloat(undefined) === NaN.
+ *     validateRoomHumidity immediately hit:
+ *       if (isNaN(rh) || isNaN(db)) {
+ *         errors.push('Invalid design conditions...');
+ *         return makeResult(errors, warnings);   ← exits before any real check
+ *       }
+ *     Every room failed humidity validation with an invalid-input error.
+ *     No actual humidity standard checks ever ran.
+ *
+ *     Fix:
+ *       1. makeRoom() now includes designDB (°F) derived from designTemp (°C).
+ *       2. updateRoom() keeps designDB in sync when designTemp changes.
+ *
+ *     designDB is a derived/display field — it is NOT the source of truth.
+ *     designTemp (°C) remains the canonical storage field, used by:
+ *       seasonalLoads.js (cToF conversion), airQuantities.js (cToF).
+ *     designDB (°F) is the convenience field for psychroValidation and any
+ *     UI components that work in °F (ASHRAE psychrometric display).
+ *
+ *     Conversion: designDB = designTemp × 9/5 + 32  (exact, no rounding error)
+ *
+ * ── FIELD CONTRACT WITH THE LOGIC LAYER ──────────────────────────────────────
  *
  *   rdsSelector.js:
  *     room.id
@@ -22,43 +47,37 @@
  *     room.designRH     (%)       → != null guard — 0 is VALID (battery dry rooms)
  *     room.ventCategory (string)  → 'pharma' triggers GMP 1.25× safety factor
  *
+ *   psychroValidation.js:
+ *     room.designDB     (°F)      → derived from designTemp; kept in sync by updateRoom
+ *     room.designRH     (%)
+ *
  *   airQuantities.js:
  *     room.designTemp             (same cToF guard as above)
  *     room.minAcph    (ACH)       — regulatory minimum ACPH floor
  *     room.designAcph (ACH)       — ISO/GMP class design ACPH
  *     room.exhaustAir.general (CFM)
- *     room.exhaustAir.bibo    (CFM)   — Bag-In-Bag-Out filter change exhaust
+ *     room.exhaustAir.bibo    (CFM)
  *     room.exhaustAir.machine (CFM)
- *     room.manualFreshAir     (CFM)   — 0 = use ASHRAE 62.1 VRP result
- *     room.ventCategory               — maps to Rp + Ra via ventilation.js
- *
- * ── REMOVED: createSeasonData() ──────────────────────────────────────────────
- *
- *   The previous slice stored supplyAir_Summer / returnAir_Summer / outsideAir_Summer
- *   etc. directly on each room object. These are NOT read by rdsSelector —
- *   it COMPUTES them via airQuantities.js and returns them in the RDS row.
- *   Storing them in room state:
- *     (a) duplicates data that rdsSelector already owns
- *     (b) goes stale when any upstream input changes
- *     (c) created ambiguity in the RDS grid: room.supplyAir vs rds.supplyAir
- *   Removed. The RDS grid reads all computed values from selectRdsData only.
- *
- * ── designRH = 0 IS VALID ─────────────────────────────────────────────────────
- *
- *   rdsSelector uses:
- *     const raRH = room.designRH != null ? parseFloat(room.designRH) : 50;
- *   NOT:
- *     const raRH = parseFloat(room.designRH) || 50;   ← 0 → 50 (wrong)
- *
- *   Keep designRH default as 50 (a number). Never set it to null or undefined.
+ *     room.manualFreshAir     (CFM)
+ *     room.ventCategory
  *
  * ── UNIT CONVENTIONS ─────────────────────────────────────────────────────────
  *
  *   floorArea, volume  → SI (m², m³)     converted to ft²/ft³ in rdsSelector
  *   designTemp         → °C              converted to °F in calc modules
+ *   designDB           → °F              derived from designTemp; for psychro display
  *   designRH           → percentage (0–100), not fraction
  *   exhaustAir.*       → CFM (imperial)
  *   minAcph, designAcph → ACH (hr⁻¹)
+ *
+ * ── designRH = 0 IS VALID ─────────────────────────────────────────────────────
+ *
+ *   rdsSelector uses:
+ *     const raRH = !isNaN(parsedRaRh) ? parsedRaRh : 50;
+ *   NOT:
+ *     const raRH = parseFloat(room.designRH) || 50;   ← 0 → 50 (wrong)
+ *
+ *   Keep designRH default as 50 (a number). Never set it to null or undefined.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
@@ -68,7 +87,6 @@ const generateRoomId = () =>
   `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
 // ── Nested field setter ───────────────────────────────────────────────────────
-// Resolves dot-notation paths: 'exhaustAir.general', 'designTemp', etc.
 const setNestedValue = (obj, path, value) => {
   const keys = path.split('.');
   let cur = obj;
@@ -81,77 +99,88 @@ const setNestedValue = (obj, path, value) => {
   cur[keys[keys.length - 1]] = value;
 };
 
+// ── Temperature helpers ───────────────────────────────────────────────────────
+// Inlined to avoid circular imports from utils/units in the Redux slice.
+// units.js cToF() is the canonical version; keep these in sync.
+const cToF_inline = (c) => {
+  const n = parseFloat(c);
+  return isNaN(n) ? null : parseFloat((n * 9 / 5 + 32).toFixed(1));
+};
+
 // ── Room factory ──────────────────────────────────────────────────────────────
 /**
  * makeRoom(id, index, overrides)
  *
  * Single source of truth for the default room shape.
- * addRoom and addNewRoom() thunk both call this — never duplicating defaults.
  *
- * @param {string} id        — pre-generated room ID
- * @param {number} index     — list length at creation time (for default name)
- * @param {object} overrides — any fields to override after all defaults are set
+ * FIX-ROOM-DB-01: designDB (°F) added — derived from designTemp (°C).
+ * psychroValidation.validateRoomHumidity() reads room.designDB.
  */
-const makeRoom = (id, index = 0, overrides = {}) => ({
-  // ── Identity ──────────────────────────────────────────────────────────────
-  id,
-  name:     `Room ${index + 1}`,
-  roomNo:   '',           // room tag / drawing number (empty string, not undefined)
-  level:    '',           // floor / level label
-  function: '',           // room function description for RDS header
+const makeRoom = (id, index = 0, overrides = {}) => {
+  // Build base object first so we can derive designDB from designTemp,
+  // accounting for any designTemp override passed in.
+  const base = {
+    // ── Identity ──────────────────────────────────────────────────────────────
+    id,
+    name:     `Room ${index + 1}`,
+    roomNo:   '',
+    level:    '',
+    function: '',
 
-  // ── Geometry (SI) ─────────────────────────────────────────────────────────
-  length:    10,           // m
-  width:     10,           // m
-  height:     3,           // m  — realistic single-storey height (was 10, wrong)
-  floorArea: 100,          // m²  auto-derived: length × width
-  volume:    300,          // m³  auto-derived: floorArea × height
+    // ── Geometry (SI) ─────────────────────────────────────────────────────────
+    length:    10,
+    width:     10,
+    height:     3,
+    floorArea: 100,
+    volume:    300,
 
-  // ── Environmental design targets ──────────────────────────────────────────
-  designTemp: 22,          // °C
-  designRH:   50,          // %   (0 is valid for dry rooms — keep as number)
-  pressure:   15,          // Pa  (positive = supply-side pressurized room)
+    // ── Environmental design targets ──────────────────────────────────────────
+    designTemp: 22,          // °C — source of truth
+    // FIX-ROOM-DB-01: designDB is the °F equivalent, kept in sync by updateRoom.
+    // psychroValidation reads designDB; calc modules convert designTemp themselves.
+    designDB:   71.6,        // °F — derived: 22 × 9/5 + 32 = 71.6
+    designRH:   50,          // % (0 is valid for dry rooms — keep as number)
+    pressure:   15,          // Pa
 
-  // ── Classification ────────────────────────────────────────────────────────
-  // Used by envelopeSlice.isIsoClassified() to enforce achValue=0 on init.
-  // '' or 'Unclassified' → not ISO classified → infiltration may be non-zero.
-  classInOp:   'ISO 8',
-  atRestClass: 'ISO 8',
-  recOt:       'REC',      // Recirculating or once-through flag
-  flpType:     'NFLP',     // Non-unidirectional / unidirectional flow pattern
+    // ── Classification ────────────────────────────────────────────────────────
+    classInOp:   'ISO 8',
+    atRestClass: 'ISO 8',
+    recOt:       'REC',
+    flpType:     'NFLP',
 
-  // ── ASHRAE 62.1-2022 ventilation category ────────────────────────────────
-  // Maps to Rp (CFM/person) + Ra (CFM/ft²) via ventilation.js calculateVbz().
-  // 'pharma' also triggers GMP Annex 1 1.25× safety factor in seasonalLoads.js.
-  ventCategory: 'general',
+    // ── ASHRAE 62.1-2022 ventilation category ────────────────────────────────
+    ventCategory: 'general',
 
-  // ── Airflow constraints (ACH) ─────────────────────────────────────────────
-  // Fallback defaults — addNewRoom() thunk overrides these from
-  // isoCleanroom.getAcphDefaults(classInOp) at creation time.
-  minAcph:    10,           // ACH  regulatory minimum
-  designAcph: 20,           // ACH  design target (headroom above min)
+    // ── Airflow constraints (ACH) ─────────────────────────────────────────────
+    minAcph:    10,
+    designAcph: 20,
 
-  // ── Fresh air override ────────────────────────────────────────────────────
-  // 0 → use ASHRAE 62.1 VRP Vbz result (airQuantities freshAirCheck).
-  // > 0 → engineer-specified override (e.g. 100% OA pharmaceutical suites).
-  manualFreshAir: 0,        // CFM
+    // ── Fresh air override ────────────────────────────────────────────────────
+    manualFreshAir: 0,
 
-  // ── Exhaust air breakdown ─────────────────────────────────────────────────
-  // All CFM (imperial — matches ASHRAE 62.1 unit convention).
-  exhaustAir: {
-    general: 0,             // CFM  general area exhaust
-    bibo:    0,             // CFM  Bag-In-Bag-Out filter exchange
-    machine: 0,             // CFM  dedicated process / tool exhaust
-  },
+    // ── Exhaust air breakdown ─────────────────────────────────────────────────
+    exhaustAir: {
+      general: 0,
+      bibo:    0,
+      machine: 0,
+    },
 
-  // ── AHU assignment ────────────────────────────────────────────────────────
-  // Array supports future multi-AHU rooms.
-  // Logic layer reads assignedAhuIds[0] only today.
-  assignedAhuIds: [],
+    // ── AHU assignment ────────────────────────────────────────────────────────
+    assignedAhuIds: [],
+  };
 
-  // Overrides applied last — wins over every default above.
-  ...overrides,
-});
+  // Apply overrides, then re-derive designDB if designTemp was overridden.
+  const merged = { ...base, ...overrides };
+
+  // FIX-ROOM-DB-01: If the override included a designTemp, recalculate designDB
+  // unless the override also explicitly set designDB (engineer override takes precedence).
+  if (overrides.designTemp !== undefined && overrides.designDB === undefined) {
+    const derivedDB = cToF_inline(overrides.designTemp);
+    if (derivedDB !== null) merged.designDB = derivedDB;
+  }
+
+  return merged;
+};
 
 // ── Initial state ─────────────────────────────────────────────────────────────
 const initialState = {
@@ -161,12 +190,13 @@ const initialState = {
       name:           'Production Hall',
       length:         20,
       width:          15,
-      height:          4,     // m — realistic fab floor height
-      floorArea:      300,    // m²
-      volume:        1200,    // m³  (300 × 4)
-      designTemp:     22,     // °C
-      designRH:       50,     // %
-      pressure:       15,     // Pa
+      height:          4,
+      floorArea:      300,
+      volume:        1200,
+      designTemp:     22,       // °C
+      // designDB derived automatically by makeRoom: 22 × 9/5 + 32 = 71.6 °F
+      designRH:       50,
+      pressure:       15,
       classInOp:     'ISO 8',
       atRestClass:   'ISO 8',
       ventCategory:  'general',
@@ -183,24 +213,17 @@ const roomSlice = createSlice({
   initialState,
 
   reducers: {
-    /** Set which room is selected in the sidebar / detail panel. */
     setActiveRoom: (state, action) => {
       state.activeRoomId = action.payload;
     },
 
-    /**
-     * addRoom
-     * Payload: string ID (legacy) OR object { id, minAcph, designAcph, ...overrides }.
-     * The addNewRoom() thunk in roomActions.js is the preferred caller —
-     * it also dispatches envelopeSlice.initializeRoom in the same transaction.
-     */
     addRoom: (state, action) => {
       const payload   = action.payload;
       const isLegacy  = typeof payload === 'string';
       const id        = isLegacy ? payload : (payload.id ?? generateRoomId());
       const overrides = isLegacy ? {} : (() => {
         const o = { ...payload };
-        delete o.id; // id is passed separately to makeRoom — don't double it
+        delete o.id;
         return o;
       })();
 
@@ -212,6 +235,8 @@ const roomSlice = createSlice({
     /**
      * updateRoom
      * { id, field, value }  —  field supports dot-notation paths.
+     *
+     * FIX-ROOM-DB-01: When designTemp changes, designDB is updated automatically.
      * Auto-derives floorArea and volume when geometry dimensions change.
      */
     updateRoom: (state, action) => {
@@ -220,6 +245,19 @@ const roomSlice = createSlice({
       if (!room) return;
 
       setNestedValue(room, field, value);
+
+      // FIX-ROOM-DB-01: keep designDB (°F) in sync with designTemp (°C).
+      // This ensures psychroValidation.validateRoomHumidity always has a valid °F value.
+      // Only update designDB when designTemp changes — not on direct designDB edits
+      // (which would allow an engineer to override for special conditions).
+      if (field === 'designTemp') {
+        const derivedDB = cToF_inline(value);
+        if (derivedDB !== null) {
+          room.designDB = derivedDB;
+        }
+        // If value is '' or NaN (user cleared field), leave existing designDB
+        // in place rather than setting it to null — preserves last valid value.
+      }
 
       // Keep derived geometry consistent
       const l = parseFloat(room.length)    || 0;
@@ -234,27 +272,16 @@ const roomSlice = createSlice({
         room.volume = parseFloat((room.floorArea * h).toFixed(1));
       }
       if (field === 'floorArea') {
-        // Engineer entered irregular area directly
         room.volume = parseFloat((parseFloat(value) * h).toFixed(1));
       }
     },
 
-    /**
-     * setRoomAhu
-     * Replace the entire AHU assignment: { roomId, ahuId }.
-     * Pass ahuId = null to clear the assignment.
-     */
     setRoomAhu: (state, action) => {
       const { roomId, ahuId } = action.payload;
       const room = state.list.find(r => r.id === roomId);
       if (room) room.assignedAhuIds = ahuId ? [ahuId] : [];
     },
 
-    /**
-     * toggleRoomAhu
-     * Toggle a single AHU in the assignment list (used by AhuAssignment.jsx).
-     * { roomId, ahuId }
-     */
     toggleRoomAhu: (state, action) => {
       const { roomId, ahuId } = action.payload;
       const room = state.list.find(r => r.id === roomId);
@@ -270,9 +297,8 @@ const roomSlice = createSlice({
     /**
      * deleteRoom
      * Never removes the last room.
-     * IMPORTANT: Do NOT call from the UI directly.
-     * Always use deleteRoomWithCleanup() thunk from roomActions.js so that
-     * envelopeSlice.removeRoomEnvelope also fires in the same transaction.
+     * Use deleteRoomWithCleanup() thunk from roomActions.js — it also fires
+     * envelopeSlice.removeRoomEnvelope in the same transaction.
      */
     deleteRoom: (state, action) => {
       if (state.list.length <= 1) return;

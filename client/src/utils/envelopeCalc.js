@@ -2,17 +2,35 @@
  * envelopeCalc.js
  * Opaque envelope heat gain / loss calculations.
  *
+ * CHANGELOG v2.2:
+ *
+ *   FIX-INFIL-01 (CRITICAL) — calcInfiltrationGain: volume now correctly
+ *   converted from m³ (roomSlice SI storage) to ft³ before CFM calculation.
+ *
+ *     The previous "FIX-11" comment claimed floorArea was already in ft² and
+ *     removed the M2_TO_FT2 multiplier. This was WRONG. roomSlice stores:
+ *       room.floorArea in m²   (confirmed: RoomConfig StatCard shows "m²")
+ *       room.height    in m    (confirmed: RoomConfig InputGroup shows "m")
+ *       room.volume    in m³   (confirmed: RoomConfig StatCard shows "m³")
+ *
+ *     With the bad FIX-11 in place:
+ *       volumeFt3 = floorArea(m²) × height(m) = volume(m³) labelled as ft³
+ *       For the default room (300 m³ = 10,764 ft³):
+ *         cfmInf = 300 × 0.25 / 60 = 1.25 CFM   ← computed
+ *         cfmInf = 10,764 × 0.25 / 60 = 44.9 CFM ← correct
+ *       Error factor: 35.9× — infiltration load systematically understated.
+ *
+ *     Fix: use room.volume (already the correct product of length×width×height,
+ *     maintained by roomSlice.updateRoom) and convert via m3ToFt3().
+ *     floorAreaFt2 and heightFt intermediate variables removed — they were
+ *     only used to compute volumeFt3 and are no longer needed.
+ *
  * CHANGELOG v2.1:
  *
  *   LOW-01 FIX — Import path for psychro.js corrected.
  *
  *     Previous: import { sensibleFactor, latentFactor } from '../utils/psychro';
  *     Fixed:    import { sensibleFactor, latentFactor } from './psychro';
- *
- *     envelopeCalc.js lives in src/utils/. The path '../utils/psychro' resolves
- *     correctly (up to src/, then back into utils/) but is non-idiomatic —
- *     it implies the import is from a different directory, misleading developers.
- *     The correct sibling-module form is './psychro'.
  *
  * Reference: ASHRAE Handbook — Fundamentals (2021), Ch.18 & 28
  *            ASHRAE CHLCM 2nd Edition, §3
@@ -36,6 +54,7 @@ import {
 
 import { sensibleFactor, latentFactor } from './psychro';   // LOW-01 FIX: was '../utils/psychro'
 import { getMeanOutdoorTemp, getLM }     from './envelopeHelpers';
+import { m3ToFt3 }                       from './units';    // FIX-INFIL-01: SI→imperial volume conversion
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal guard helpers
@@ -210,10 +229,25 @@ export const calcSlabGain = (
 /**
  * calcInfiltrationGain(room, climate, season, tRoom, grRoom?, elevFt?)
  *
- * FIX-10: altitude-corrected factors from psychro.js.
- * FIX-11: floorArea in ft² — M2_TO_FT2 multiplier removed.
+ * FIX-INFIL-01 (CRITICAL): volume now correctly converted from m³ → ft³.
+ *
+ *   roomSlice stores all room geometry in SI units:
+ *     room.floorArea → m²    room.height → m    room.volume → m³
+ *
+ *   The previous "FIX-11" claimed floorArea was in ft² and removed the
+ *   M2_TO_FT2 conversion. This was incorrect — it produced volumeFt3 in
+ *   m³ units (35.3× too small), making cfmInf 35.3× too small.
+ *
+ *   Fix: use room.volume (m³, already maintained by roomSlice.updateRoom)
+ *   and convert via m3ToFt3(). This is the single correct conversion point.
+ *
+ *   For the default Production Hall room (volume = 1,200 m³):
+ *     Old (wrong): volumeFt3 = 1200  → cfmInf @ 0.25 ACH = 5.0 CFM
+ *     New (fixed): volumeFt3 = 42,378 → cfmInf @ 0.25 ACH = 176.6 CFM
+ *
  * FIX LOW-02: climate field is .gr (climateSlice), not .grains.
  * FIX LOW-03: room field is .floorArea (roomSlice), not .area.
+ * FIX-10: altitude-corrected factors from psychro.js.
  *
  * @returns {{ sensible: number, latent: number }} BTU/hr, signed
  */
@@ -228,9 +262,11 @@ export const calcInfiltrationGain = (
   const isPressurized = room?.pressurized ?? false;
   if (isPressurized) return { sensible: 0, latent: 0 };
 
-  const floorAreaFt2 = parseFloat(room?.floorArea) || 0;
-  const heightFt     = parseFloat(room?.height)    || 10;
-  const volumeFt3    = floorAreaFt2 * heightFt;
+  // FIX-INFIL-01: room.volume is in m³ (roomSlice SI convention).
+  // m3ToFt3 converts to ft³ for the CFM/ACH calculation.
+  // Do NOT use room.floorArea × room.height here — both are in SI units
+  // and their product is m³, not ft³.
+  const volumeFt3 = m3ToFt3(parseFloat(room?.volume) || 0);
 
   const achInf = parseFloat(room?.infiltrationAch) || 0.25;
   const cfmInf = (volumeFt3 * achInf) / 60;
