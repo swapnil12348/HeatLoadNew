@@ -15,12 +15,9 @@
 │   │   │   │   └── RoomSidebarItem.jsx
 │   │   │   │   └── TabNav.jsx
 │   │   │   └── UI/
-│   │   │   │   └── BtuBadge.jsx
-│   │   │   │   └── GovernedBadge.jsx
 │   │   │   │   └── InputField.jsx
 │   │   │   │   └── InputGroup.jsx
 │   │   │   │   └── NumberControl.jsx
-│   │   │   │   └── SeasonBadge.jsx
 │   │   │   │   └── StatCard.jsx
 │   │   └── constants/
 │   │   │   └── ashrae.js
@@ -90,8 +87,6 @@
 │   │   └── App.jsx
 │   │   └── index.css
 │   │   └── main.jsx
-│   │   └── setupTests.js
-│   │   └── test-utils.jsx
 │   └── .gitignore
 │   └── eslint.config.js
 │   └── index.html
