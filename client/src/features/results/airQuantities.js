@@ -143,8 +143,8 @@ export const calculateAirQuantities = (
 ) => {
   // BUG-AQ-01 FIX: ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL (exists) × altCf.
   const Cs  = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altCf;
-  const bf  = parseFloat(systemDesign.bypassFactor) || 0.10;
-  const adp = parseFloat(systemDesign.adp)          || 55;
+  const bf  = parseFloat(effectiveSystemDesign.bypassFactor) || 0.10;
+  const adp = parseFloat(effectiveSystemDesign.adp)          || 55;
 
   // ── Room design DB (°F) ───────────────────────────────────────────────────
   // BUG-AQ-02 FIX: cToF() from units.js — null-safe.
