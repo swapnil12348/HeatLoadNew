@@ -3,37 +3,22 @@
  * Responsibility: Master project overview — rooms grouped by AHU system,
  *                 with click-to-edit side panel.
  *
+ * -- CHANGELOG v2.2 -----------------------------------------------------------
+ *
+ *   BUG-UI-12 [MEDIUM — FALSY GUARD] — RSH / ERSH / GTSH conditionals in
+ *     SummaryRow changed from truthy check to null + NaN guard.
+ *
+ *     Previous: {roomData.ersh ? value : '—'}
+ *     Problem:  0 is falsy in JS. A room with near-zero sensible load displays
+ *               '—' instead of the actual value.
+ *     Fix:      {roomData.ersh != null && !isNaN(roomData.ersh) ? value : '—'}
+ *
  * -- CHANGELOG v2.1 -----------------------------------------------------------
  *
  *   BUG-UI-03 [CRITICAL — UNIT LABEL] — SummaryRow floorArea label corrected.
  *
- *     Previous: roomData.floorArea displayed with hardcoded 'm²' label.
- *
- *     roomData is an rdsRow from selectRdsData. Per CRIT-RDS-01 (rdsSelector
- *     v2.1), rdsRow.floorArea is ft² — the selector converts room.floorArea
- *     (m², roomSlice) to ft² for ACPH calculations. The column definition
- *     subLabel 'm²' is correct only in the RDSRow/panel context where
- *     getFieldValue reads from the raw room object (SI). SummaryRow reads
- *     the rdsRow directly, bypassing getFieldValue.
- *
- *     Impact: For a 100 m² room:
- *       rdsRow.floorArea ≈ 1,076 ft²
- *       Display was: '1,076.0 m²' — 10.76× error shown to engineer.
- *
- *     Fix: label changed to 'ft²'. Value is already ft² (correct).
- *
  *   BUG-UI-04 [MEDIUM — MISSING CRITICAL SURFACE] — highHumidRooms and
  *     regulatoryAcphRooms banners added.
- *
- *     useProjectTotals FIX-H02 added highHumidRooms (Δgr > 40 gr/lb,
- *     sub-5%RH warning) and FIX-H03 added regulatoryAcphRooms (NFPA 855 /
- *     GMP statutory ACH floor). Neither was consumed by RDSPage. The hook's
- *     own JSDoc states these MUST be surfaced in UI.
- *
- *     For Exide Li-ion battery rooms, TSMC dry-rooms, and Cipla pharma
- *     dry-powder suites: a missing humidification banner is a production-
- *     stopping engineering oversight. Both banners are now rendered above
- *     the AHU grouping table where the engineer will see them immediately.
  */
 
 import { useState } from 'react';
@@ -48,12 +33,12 @@ import RoomDetailPanel from './rds/RoomDetailPanel';
 
 // ── ISO class colour map ──────────────────────────────────────────────────────
 const ISO_BADGE = {
-  'ISO 5': 'bg-red-50    text-red-700    border-red-100',
-  'ISO 6': 'bg-orange-50 text-orange-700 border-orange-100',
-  'ISO 7': 'bg-purple-50 text-purple-700 border-purple-100',
-  'ISO 8': 'bg-slate-50  text-slate-600  border-slate-200',
-  'CNC': 'bg-teal-50   text-teal-700   border-teal-100',
-  'Unclassified': 'bg-gray-50   text-gray-500   border-gray-200',
+  'ISO 5':       'bg-red-50    text-red-700    border-red-100',
+  'ISO 6':       'bg-orange-50 text-orange-700 border-orange-100',
+  'ISO 7':       'bg-purple-50 text-purple-700 border-purple-100',
+  'ISO 8':       'bg-slate-50  text-slate-600  border-slate-200',
+  'CNC':         'bg-teal-50   text-teal-700   border-teal-100',
+  'Unclassified':'bg-gray-50   text-gray-500   border-gray-200',
 };
 
 // ── SummaryRow ────────────────────────────────────────────────────────────────
@@ -94,15 +79,12 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
         </span>
       </td>
 
-      {/* Area — BUG-UI-03 FIX: roomData is an rdsRow; rdsRow.floorArea is ft²
-           (CRIT-RDS-01). Previous label 'm²' was wrong — 10.76× unit error.
-           getFieldValue is NOT used here; the value is read directly from the
-           rdsRow. The raw room.floorArea (m², roomSlice) is a different object. */}
+      {/* Area — BUG-UI-03 FIX: rdsRow.floorArea is ft² (CRIT-RDS-01). */}
       <td className="px-6 py-3 text-sm text-slate-600 font-mono">
         {roomData.floorArea
           ? parseFloat(roomData.floorArea).toLocaleString(undefined, { maximumFractionDigits: 0 })
           : '—'}
-        <span className="text-[10px] text-slate-400 ml-1">ft²</span> {/* BUG-UI-03 FIX */}
+        <span className="text-[10px] text-slate-400 ml-1">ft²</span>
       </td>
 
       {/* Supply airflow */}
@@ -113,16 +95,29 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
         <div className="text-[10px] text-slate-400">CFM</div>
       </td>
 
-      {/* Sensible heat breakdown — RSH / ERSH */}
+      {/* Sensible heat — ERSH / RSH / GTSH
+          BUG-UI-12 FIX: null + NaN guard replaces plain truthy check.
+          0 is a valid sensible load (e.g. room with only latent gains from
+          people in a cold space). A plain `roomData.ersh ?` check would show
+          '—' for 0, which is incorrect. `!= null` passes 0 through correctly
+          while still guarding against undefined and NaN from missing calc fields. */}
       <td className="px-6 py-3 text-right">
         <div className="text-sm font-bold text-violet-600">
-          {roomData.ersh ? Math.round(roomData.ersh).toLocaleString() : '—'}
+          {roomData.ersh != null && !isNaN(roomData.ersh)
+            ? Math.round(roomData.ersh).toLocaleString()
+            : '—'}
         </div>
         <div className="text-[10px] text-slate-400">
-          ERSH · RSH {roomData.rsh ? Math.round(roomData.rsh).toLocaleString() : '—'}
+          ERSH · RSH{' '}
+          {roomData.rsh != null && !isNaN(roomData.rsh)
+            ? Math.round(roomData.rsh).toLocaleString()
+            : '—'}
         </div>
         <div className="text-[10px] text-slate-400 font-mono">
-          GTSH {roomData.grandTotalSensible ? Math.round(roomData.grandTotalSensible).toLocaleString() : '—'}
+          GTSH{' '}
+          {roomData.grandTotalSensible != null && !isNaN(roomData.grandTotalSensible)
+            ? Math.round(roomData.grandTotalSensible).toLocaleString()
+            : '—'}
         </div>
       </td>
 
@@ -150,38 +145,28 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
 export default function RDSPage() {
   const dispatch = useDispatch();
 
-  // Raw rooms — passed to RoomDetailPanel for editing.
-  // Never pass rdsSelector rows to the panel — those are derived/computed.
-  const rawRooms = useSelector(selectAllRooms);
-  const ahus = useSelector(selectAllAHUs);
+  const rawRooms   = useSelector(selectAllRooms);
+  const ahus       = useSelector(selectAllAHUs);
   const allRdsRows = useSelector(selectRdsData);
 
   const [selectedRoomId, setSelectedRoomId] = useState(null);
 
-  // Single envelope for selected room only
   const selectedEnvelope = useSelector(
     (state) => state.envelope.byRoomId?.[selectedRoomId] ?? null
   );
 
-  // BUG-UI-04 FIX: destructure highHumidRooms and regulatoryAcphRooms.
-  //
-  // FIX-H02 added highHumidRooms (Δgr > 40 gr/lb, sub-5%RH) and
-  // FIX-H03 added regulatoryAcphRooms (NFPA 855 / GMP statutory ACH) to the
-  // hook return value specifically so UI components would surface them.
-  // Neither was being consumed. Banners rendered below.
   const {
     byAhu,
     totalTR,
     totalCFM,
     roomCount,
     hasData,
-    highHumidRooms,       // BUG-UI-04 FIX: FIX-H02 — dry-room humidification warnings
-    regulatoryAcphRooms,  // BUG-UI-04 FIX: FIX-H03 — NFPA 855 / GMP statutory ACH rooms
+    highHumidRooms,
+    regulatoryAcphRooms,
   } = useProjectTotals();
 
-  // Raw room for the panel — NOT the rdsSelector row
   const selectedRawRoom = rawRooms.find((r) => r.id === selectedRoomId) ?? null;
-  const selectedRdsRow = allRdsRows.find((r) => r.id === selectedRoomId) ?? null;
+  const selectedRdsRow  = allRdsRows.find((r) => r.id === selectedRoomId) ?? null;
 
   return (
     <div className="flex h-full bg-slate-50 relative overflow-hidden">
@@ -225,8 +210,7 @@ export default function RDSPage() {
                   dispatch({ type: 'RESET_ALL' });
                 }
               }}
-              className="text-red-400 text-xs font-bold hover:text-red-600
-                         hover:underline px-3 transition-colors"
+              className="text-red-400 text-xs font-bold hover:text-red-600 hover:underline px-3 transition-colors"
             >
               Reset
             </button>
@@ -241,8 +225,7 @@ export default function RDSPage() {
             <button
               onClick={() => dispatch(addNewRoom())}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm
-                         font-bold shadow-md hover:bg-blue-700 hover:shadow-lg
-                         transition-all"
+                         font-bold shadow-md hover:bg-blue-700 hover:shadow-lg transition-all"
             >
               + Add Room
             </button>
@@ -253,12 +236,7 @@ export default function RDSPage() {
         <div className="flex-1 overflow-auto p-8">
           <div className="max-w-6xl mx-auto space-y-6">
 
-            {/* ── BUG-UI-04 FIX: High humidification warning banner ──────────
-                FIX-H02 (useProjectTotals) — Δgr > 40 gr/lb, sub-5%RH.
-                This is the single most critical mechanical sizing condition
-                for Exide Li-ion battery, TSMC dry-rooms, Cipla dry-powder.
-                A missing humidifier in these rooms is a production-stopping
-                failure — must be surfaced immediately. */}
+            {/* High humidification warning banner */}
             {highHumidRooms.length > 0 && (
               <div className="bg-red-50 border border-red-300 rounded-xl p-4 flex items-start gap-3">
                 <div className="text-xl mt-0.5 shrink-0">⚠️</div>
@@ -272,20 +250,10 @@ export default function RDSPage() {
                   </p>
                   <div className="mt-2 space-y-1">
                     {highHumidRooms.map((r) => (
-                      <div
-                        key={r.id}
-                        className="text-xs font-mono text-red-800 bg-red-100 rounded px-2 py-1"
-                      >
+                      <div key={r.id} className="text-xs font-mono text-red-800 bg-red-100 rounded px-2 py-1">
                         <span className="font-bold">{r.name}</span>
-                        {' — '}
-                        Δ{r.humidDeltaGr} gr/lb
-                        {' · '}
-                        {r.humidLbsPerHr} lb/hr
-                        {' · '}
-                        {r.humidKw} kW
-                        {r.humidWarning && (
-                          <span className="text-red-600 ml-2">({r.humidWarning})</span>
-                        )}
+                        {' — '}Δ{r.humidDeltaGr} gr/lb{' · '}{r.humidLbsPerHr} lb/hr{' · '}{r.humidKw} kW
+                        {r.humidWarning && <span className="text-red-600 ml-2">({r.humidWarning})</span>}
                       </div>
                     ))}
                   </div>
@@ -293,11 +261,7 @@ export default function RDSPage() {
               </div>
             )}
 
-            {/* ── BUG-UI-04 FIX: Regulatory ACH statutory floor banner ───────
-                FIX-H03 (useProjectTotals) — NFPA 855, OSHA, GMP Annex 1.
-                These rooms have supply air set by statute, not by engineering
-                thermal load. The compliance auditor must see this distinction
-                clearly — statutory ACH governs even if thermal CFM is higher. */}
+            {/* Regulatory ACH statutory floor banner */}
             {regulatoryAcphRooms.length > 0 && (
               <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-start gap-3">
                 <div className="text-xl mt-0.5 shrink-0">📋</div>
@@ -312,15 +276,10 @@ export default function RDSPage() {
                   </p>
                   <div className="mt-2 space-y-1">
                     {regulatoryAcphRooms.map((r) => (
-                      <div
-                        key={r.id}
-                        className="text-xs font-mono text-amber-800 bg-amber-100 rounded px-2 py-1"
-                      >
+                      <div key={r.id} className="text-xs font-mono text-amber-800 bg-amber-100 rounded px-2 py-1">
                         <span className="font-bold">{r.name}</span>
-                        {' — '}
-                        Reg. {Math.round(r.regulatoryAcphCFM).toLocaleString()} CFM
-                        {' vs '}
-                        {Math.round(r.thermalCFM).toLocaleString()} CFM thermal
+                        {' — '}Reg. {Math.round(r.regulatoryAcphCFM).toLocaleString()} CFM
+                        {' vs '}{Math.round(r.thermalCFM).toLocaleString()} CFM thermal
                         {' ('}
                         {(((r.regulatoryAcphCFM - r.thermalCFM) / r.thermalCFM) * 100).toFixed(0)}% above thermal
                         {')'}
@@ -331,7 +290,7 @@ export default function RDSPage() {
               </div>
             )}
 
-            {/* AHU groups — byAhu from useProjectTotals */}
+            {/* AHU groups */}
             {Object.entries(byAhu).map(([ahuId, group]) => {
               const ahu = ahus.find((a) => a.id === ahuId);
               const groupRdsRows = allRdsRows.filter(
@@ -344,19 +303,14 @@ export default function RDSPage() {
                   className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
                 >
                   {/* Group header */}
-                  <div className="px-6 py-3 bg-slate-50 border-b border-slate-200
-                                  flex justify-between items-center">
+                  <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                      <div className={`w-3 h-3 rounded-full shrink-0
-                        ${ahu ? 'bg-blue-500' : 'bg-slate-300'}`}
-                      />
+                      <div className={`w-3 h-3 rounded-full shrink-0 ${ahu ? 'bg-blue-500' : 'bg-slate-300'}`} />
                       <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide">
                         {ahu ? ahu.name : 'Unassigned Zones'}
                       </h3>
                       {ahu?.type && (
-                        <span className="text-[10px] text-slate-400 font-mono ml-1">
-                          ({ahu.type})
-                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono ml-1">({ahu.type})</span>
                       )}
                     </div>
                     <div className="flex items-center gap-3">
@@ -365,8 +319,7 @@ export default function RDSPage() {
                           {group.tr.toFixed(1)} TR
                         </span>
                       )}
-                      <span className="bg-white border border-slate-200 px-2 py-0.5
-                                       rounded text-xs font-bold text-slate-500">
+                      <span className="bg-white border border-slate-200 px-2 py-0.5 rounded text-xs font-bold text-slate-500">
                         {group.rooms.length} room{group.rooms.length !== 1 ? 's' : ''}
                       </span>
                     </div>
@@ -378,10 +331,9 @@ export default function RDSPage() {
                       <tr>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Room</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Class</th>
-                        {/* BUG-UI-03 FIX: header updated to ft² to match cell label */}
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Area (ft²)</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Airflow</th>
-                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Sensible Heat</th>
+                        <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Sensible Heat</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Load</th>
                         <th className="px-6 py-3" />
                       </tr>
@@ -404,8 +356,7 @@ export default function RDSPage() {
             {/* Empty state */}
             {!hasData && (
               <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center
-                                justify-center mb-4 text-3xl">
+                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-3xl">
                   📐
                 </div>
                 <p className="font-medium text-slate-600">No rooms yet</p>
@@ -422,8 +373,7 @@ export default function RDSPage() {
       {selectedRoomId && selectedRawRoom && (
         <>
           <div
-            className="absolute inset-0 bg-slate-900/20 backdrop-blur-[2px]
-                        z-40 transition-opacity"
+            className="absolute inset-0 bg-slate-900/20 backdrop-blur-[2px] z-40 transition-opacity"
             onClick={() => setSelectedRoomId(null)}
           />
           <RoomDetailPanel
