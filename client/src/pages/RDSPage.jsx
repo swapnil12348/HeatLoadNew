@@ -113,6 +113,19 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
         <div className="text-[10px] text-slate-400">CFM</div>
       </td>
 
+      {/* Sensible heat breakdown — RSH / ERSH */}
+      <td className="px-6 py-3 text-right">
+        <div className="text-sm font-bold text-violet-600">
+          {roomData.ersh ? Math.round(roomData.ersh).toLocaleString() : '—'}
+        </div>
+        <div className="text-[10px] text-slate-400">
+          ERSH · RSH {roomData.rsh ? Math.round(roomData.rsh).toLocaleString() : '—'}
+        </div>
+        <div className="text-[10px] text-slate-400 font-mono">
+          GTSH {roomData.grandTotalSensible ? Math.round(roomData.grandTotalSensible).toLocaleString() : '—'}
+        </div>
+      </td>
+
       {/* Cooling load */}
       <td className="px-6 py-3 text-right">
         <div className="text-sm font-bold text-blue-600">
@@ -368,6 +381,7 @@ export default function RDSPage() {
                         {/* BUG-UI-03 FIX: header updated to ft² to match cell label */}
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Area (ft²)</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Airflow</th>
+                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Sensible Heat</th>
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Load</th>
                         <th className="px-6 py-3" />
                       </tr>

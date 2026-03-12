@@ -329,6 +329,9 @@ export const selectRdsData = createSelector(
         + returnFanHeatBTU;
 
       const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
+      const grandTotalSensible = Math.round(
+        peakErsh + oaSummer.oaSensible + supplyFanHeatBTU + returnFanHeatBTU
+      );
 
       const coilLoadBTU = (peakErsh + peakErlh)
         + oaSummer.oaTotal
@@ -450,7 +453,9 @@ export const selectRdsData = createSelector(
         supplyAcph,
         coolingCapTR,
         grandTotal:  Math.round(grandTotal),
+        grandTotalSensible,
         coilLoadBTU: Math.round(coilLoadBTU),
+        ersh:                peakErsh,
 
         // ── Fan heat ──────────────────────────────────────────────────────────
         supplyFanHeatBlow,

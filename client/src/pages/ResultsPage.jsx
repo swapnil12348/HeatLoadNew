@@ -488,7 +488,7 @@ export default function ResultsPage() {
                 <h3 className="text-sm font-bold text-slate-800">Zone Supply Air Summary</h3>
                 {/* BUG-UI-08 FIX: label updated to include 'regulatory ACH' */}
                 <span className="text-[10px] text-slate-400 font-mono">
-                  governed by: thermal load | design ACPH | min ACPH | regulatory ACH
+                  RSH / ERSH / GTSH in BTU/hr · governed by: thermal load | design ACPH | min ACPH | regulatory ACH
                 </span>
               </div>
               <div className="overflow-x-auto">
@@ -504,6 +504,15 @@ export default function ResultsPage() {
                       </th>
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">
                         Design CFM
+                      </th>
+                      <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">
+                        RSH
+                      </th>
+                      <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">
+                        ERSH
+                      </th>
+                      <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">
+                        GTSH
                       </th>
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">
                         Governed By
