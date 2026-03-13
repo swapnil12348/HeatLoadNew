@@ -188,7 +188,3 @@ export const calcDetailedEnvelopeGain = (
   };
 };
 
-// Re-export individual calculators for callers that need direct access
-// (e.g. BuildingShell.jsx showing per-element previews)
-export { calcWallGain, calcRoofGain, calcPartitionGain, calcSlabGain } from './envelopeCalc';
-export { calcGlassGain, calcSkylightGain }                             from './glazingCalc';
