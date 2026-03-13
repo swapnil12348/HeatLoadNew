@@ -157,6 +157,13 @@ export const calculateAirQuantities = (
     ? Math.ceil(peakErsh / (Cs * supplyDT))
     : 0;
 
+  console.log('[AQ debug]', {
+  dbInF, adp, bf, supplyDT,
+  peakErsh,
+  Cs,
+  thermalCFM,
+});
+
   // ── 2. ACPH-based CFM constraints ─────────────────────────────────────────
   const minAcphCFM    = Math.round(volumeFt3 * (parseFloat(room.minAcph)    || 0) / 60);
   const designAcphCFM = Math.round(volumeFt3 * (parseFloat(room.designAcph) || 0) / 60);
