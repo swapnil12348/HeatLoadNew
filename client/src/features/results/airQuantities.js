@@ -235,7 +235,7 @@ export const calculateAirQuantities = (
   // ── 7. AHU air balance ────────────────────────────────────────────────────
   const coilAir   = Math.round(supplyAir * (1 - bf));
   const bypassAir = Math.round(supplyAir * bf);
-  const returnAir = Math.max(0, supplyAir - freshAirCheck); // FIX: Removed double-dip of 
+  const returnAir = Math.max(0, supplyAir - freshAirCheck ); // FIX: Removed double-dip of 
 
   // ── 8. ACES nomenclature aliases ─────────────────────────────────────────
   const dehumidifiedAir = coilAir;

@@ -6,8 +6,8 @@
  * should import from.
  *
  * Import map:
- *   seasonalLoads.js  → envelopeAggregator.js  (this file)
- *   envelopeCalc.js   → opaque elements (walls, roofs, partitions, slabs)
+ *   seasonalLoads.js  → envelopeAggregator.js  (this file — ALL envelope imports via here)
+ *   envelopeCalc.js   → opaque elements (walls, roofs, partitions, slabs, infiltration)
  *   glazingCalc.js    → transparent elements (glass, skylights)
  *   envelopeHelpers.js → internal helpers (not imported externally)
  *
@@ -19,18 +19,9 @@
  * and represent heating loads that must reach seasonalLoads.js intact.
  */
 
-import {
-  calcWallGain,
-  calcRoofGain,
-  calcPartitionGain,
-  calcSlabGain,
-} from './envelopeCalc';
-
-import {
-  calcGlassGain,
-  calcSkylightGain,
-} from './glazingCalc';
-
+export { calcWallGain, calcRoofGain, calcPartitionGain, calcSlabGain,
+         calcInfiltrationGain }                                        from './envelopeCalc';
+export { calcGlassGain, calcSkylightGain }                             from './glazingCalc';
 // ─────────────────────────────────────────────────────────────────────────────
 // Total envelope gain — room level
 // ─────────────────────────────────────────────────────────────────────────────

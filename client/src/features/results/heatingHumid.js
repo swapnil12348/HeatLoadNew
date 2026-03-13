@@ -254,7 +254,8 @@ export const calculateHeatingHumid = (
 
   // ── 2. OA preheat load ────────────────────────────────────────────────────
   const winterOut     = climate?.outside?.winter || {};
-  const winterDbOut   = parseFloat(winterOut.db) || 45;
+  const parsedWinterDb = parseFloat(winterOut.db);
+const winterDbOut = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;   // BUG-HH-09 FIX
   const preheatDeltaT = Math.max(0, dbInF - winterDbOut);
   const preheatCapBTU = Math.round(Cs * (freshAirCFM || 0) * preheatDeltaT);
   const preheatCap    = (preheatCapBTU / KW_TO_BTU_HR).toFixed(2);
@@ -276,7 +277,8 @@ export const calculateHeatingHumid = (
   // ── 4. Humidification load ────────────────────────────────────────────────
 
   // Outdoor winter humidity ratio
-  const winterRhOut = parseFloat(winterOut.rh) || 30;
+  const parsedWinterRh = parseFloat(winterOut.rh);
+const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09 FIX
   const winterGrOut = calculateGrains(winterDbOut, winterRhOut, elevation);
 
   // Indoor target humidity ratio

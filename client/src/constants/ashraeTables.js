@@ -250,6 +250,14 @@ export const SHGF_LATITUDE_FACTOR = {
   // Horizontal:    1.01 + 0.333×(1.00−1.01) = 1.01 − 0.003 = 1.007 → 1.00 (rounded)
   24: { N: 0.94, NE: 1.00, E: 1.00, SE: 0.98, S: 0.85, SW: 0.98, W: 1.00, NW: 1.00, Horizontal: 1.00 },
   32: { N: 1.00, NE: 1.00, E: 1.00, SE: 1.00, S: 1.00, SW: 1.00, W: 1.00, NW: 1.00, Horizontal: 1.00 },
+  // LOW-TIER1-06 FIX (v2): 36°N row added to match CLTD_LM breakpoints.
+  // CLTD_LM has breakpoints at 0,10,20,24,32,36,40,48,56.
+  // Previous SHGF_LATITUDE_FACTOR was missing 36°N, leaving an 8-degree
+  // interpolation span (32→40) for sites like Denver (39.7°N), Istanbul (41°N).
+  // Interpolated from ASHRAE HOF 2021 Ch.27 at t=(36−32)/(40−32)=0.5:
+  //   N: 1.00+0.5×0.15=1.08  SE: 1.00+0.5×0.04=1.02  S: 1.00+0.5×0.22=1.11
+  //   SW: 1.02  Horizontal: 1.00+0.5×(−0.03)=0.99
+  36: { N: 1.08, NE: 1.00, E: 1.00, SE: 1.02, S: 1.11, SW: 1.02, W: 1.00, NW: 1.00, Horizontal: 0.99 },
   40: { N: 1.15, NE: 1.00, E: 1.00, SE: 1.04, S: 1.22, SW: 1.04, W: 1.00, NW: 1.00, Horizontal: 0.97 },
   48: { N: 1.35, NE: 1.02, E: 0.98, SE: 1.08, S: 1.52, SW: 1.08, W: 0.98, NW: 1.02, Horizontal: 0.93 },
   56: { N: 1.60, NE: 1.05, E: 0.96, SE: 1.14, S: 1.90, SW: 1.14, W: 0.96, NW: 1.05, Horizontal: 0.88 },
@@ -490,12 +498,12 @@ export const ROOM_MASS_OPTIONS  = ['light', 'medium', 'heavy'];
  * ⚠️  Callers MUST NOT clamp the return value to zero.
  */
 export const correctCLTD = (
-  cltdTable,
+  baseCltd,        // scalar CLTD value (°F) — NOT a table object
   tRoom,
   tOutdoorMean,
   lmCorrection = 0,
 ) => {
-  return cltdTable + (78 - tRoom) + (tOutdoorMean - 85) + lmCorrection;
+  return baseCltd + (78 - tRoom) + (tOutdoorMean - 85) + lmCorrection;
 };
 
 // ── Default element templates ─────────────────────────────────────────────────
