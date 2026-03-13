@@ -92,7 +92,9 @@
  *
  *   calculateRH(dbF, grains, elevFt)      → % RH — reverse of calculateGrains
  *   grainsFromDewPoint(dpF, elevFt)       → gr/lb — for dew-point setpoint control
- *   calculateSpecificVolume(dbF, grains, elevFt) → ft³/lb dry air — for CFM↔lb/hr
+ *    calculateSpecificVolume(dbF, grains, elevFt) → ft³/lb dry air
+ *   calculateAdpFromLoads(dbInF, peakErsh, supplyAir, bf, elevFt?) → °F ADP
+ *     ⚠️  Cooling-coil systems ONLY — do not use for desiccant dry rooms.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * FULL PUBLIC API
