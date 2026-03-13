@@ -251,35 +251,33 @@ export const calcSlabGain = (
  *
  * @returns {{ sensible: number, latent: number }} BTU/hr, signed
  */
+// REPLACE the entire calcInfiltrationGain function
+
 export const calcInfiltrationGain = (
-  room,
-  climate,
-  season,
-  tRoom,
-  grRoom = 50,
+  inf,        // envelope.infiltration object  (was: room — wrong source)
+  room,       // room state — used only for pressurized check
+  volumeFt3,  // ft³, pre-converted by caller  (was: derived from room.volume internally)
+  dbOut,      // outdoor dry-bulb (°F)          (was: read from climate.outside[season].db)
+  tRoom,      // room design dry-bulb (°F)
+  grIn,       // indoor humidity ratio (gr/lb), elevation-corrected (was: grRoom param, default 50)
+  grOut,      // outdoor humidity ratio (gr/lb), elevation-corrected (was: climate.outside[season].gr)
   elevFt = 0,
 ) => {
   const isPressurized = room?.pressurized ?? false;
-  if (isPressurized) return { sensible: 0, latent: 0 };
+  if (isPressurized) return { sensible: 0, latent: 0, cfm: 0 };
 
-  // FIX-INFIL-01: room.volume is in m³ (roomSlice SI convention).
-  // m3ToFt3 converts to ft³ for the CFM/ACH calculation.
-  // Do NOT use room.floorArea × room.height here — both are in SI units
-  // and their product is m³, not ft³.
-  const volumeFt3 = m3ToFt3(parseFloat(room?.volume) || 0);
-
-  const achInf = parseFloat(room?.infiltrationAch) || 0.25;
-  const cfmInf = (volumeFt3 * achInf) / 60;
-  if (cfmInf <= 0) return { sensible: 0, latent: 0 };
-
-  const dbOut = parseFloat(climate?.outside?.[season]?.db) || 95;
-  const grOut = parseFloat(climate?.outside?.[season]?.gr) || 85;
+  // FIX: read from envelope.infiltration.achValue (was: room.infiltrationAch).
+  // seasonalLoads.js sources ACH from env.infiltration.achValue — single field, no default 0.25.
+  const achInf = parseFloat(inf?.achValue) || 0;
+  const cfm    = (volumeFt3 * achInf) / 60;
+  if (cfm <= 0) return { sensible: 0, latent: 0, cfm: 0 };
 
   const sf = sensibleFactor(elevFt);
   const lf = latentFactor(elevFt);
 
   return {
-    sensible: Math.round(sf * cfmInf * (dbOut - tRoom)),
-    latent:   Math.round(lf * cfmInf * Math.max(0, grOut - grRoom)),
+    sensible: Math.round(sf * cfm * (dbOut - tRoom)),
+    latent:   Math.round(lf * cfm * Math.max(0, grOut - grIn)),
+    cfm,
   };
 };
