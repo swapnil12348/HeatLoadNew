@@ -383,8 +383,17 @@ export const validateSupplyAirState = (supply, room, elevFt = 0) => {
   const supplyGrains = parseFloat(supply.grains);
   const supplyDB     = parseFloat(supply.dbF);
   const supplyCFM    = parseFloat(supply.cfm);
-  const roomDB       = parseFloat(room.designDB);
-  const roomRH       = parseFloat(room.designRH);
+
+  // FIX-PVAL-DB-02: mirror the FIX-PVAL-DB-01 fallback from validateRoomHumidity.
+  // roomSlice v2.1+ stores designDB (°F). For legacy persisted state that only
+  // has designTemp (°C), derive designDB here to prevent a false NaN failure.
+  const rawRoomDB = room.designDB != null
+    ? parseFloat(room.designDB)
+    : room.designTemp != null
+      ? parseFloat(room.designTemp) * 9 / 5 + 32
+      : NaN;
+  const roomDB = rawRoomDB;
+  const roomRH = parseFloat(room.designRH);
 
   if ([supplyGrains, supplyDB, supplyCFM, roomDB, roomRH].some(isNaN)) {
     errors.push('validateSupplyAirState: one or more inputs are not valid numbers.');

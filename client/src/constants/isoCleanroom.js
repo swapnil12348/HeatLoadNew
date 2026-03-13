@@ -99,7 +99,9 @@ export const ACPH_RANGES = {
     max:         160,
     oaFraction:  0.12,
     flowType:    'Turbulent mixing (TMF)',
-    note:        'GMP Annex 1:2022 §4.23 — ≥60 ACPH for Grade C equivalent.',
+    note:        'IEST-RP-CC012.2 design minimum ≥60 ACPH. '
+               + 'GMP Annex 1:2022 §4.23 regulatory minimum = 20 ACPH for Grade C '
+               + '(applied by isoValidation.js for pharma rooms; IEST value = warning level only).',
   },
   'ISO 8': {
     min:         10,
