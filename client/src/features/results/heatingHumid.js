@@ -10,10 +10,7 @@
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   BUG-HH-07 [CRITICAL — ReferenceError]: roomDesignRH → humidificationTarget.
- *
- *     In the BUG-HH-04 mixed-air correction block, grReturn was computed as:
- *       const grReturn = calculateGrains(dbInF, roomDesignRH, elevation);
+
  *
  *     'roomDesignRH' is not a parameter of calculateHeatingHumid and was never
  *     assigned anywhere in the function body. At runtime this throws:
@@ -282,7 +279,6 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
   // Indoor target humidity ratio
   const humidGrTarget = calculateGrains(dbInF, humidificationTarget, elevation);
 
-  // BUG-HH-04 FIX: Mixed-air humidity ratio at AHU inlet.
   //
   // For a 100% OA system (recirculationFraction = 0, the default):
   //   gr_mixed = gr_outdoor  ← identical to v1.x behaviour
@@ -290,9 +286,7 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
   // For a recirculation system (recirculationFraction > 0):
   //   gr_mixed = gr_OA × (1 − recircFraction) + gr_return × recircFraction
   //
-  // BUG-HH-07 FIX: grReturn now uses humidificationTarget (was: roomDesignRH,
-  // an undefined variable that caused ReferenceError at runtime for all
-  // recirculation systems).
+
   //
   // Basis: return air is at steady-state room conditions — the room's winter
   // humidity target IS humidificationTarget. The BUG-HH-04 changelog comment
