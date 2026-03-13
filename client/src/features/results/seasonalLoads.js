@@ -129,10 +129,10 @@
  *   Negative = heat OUT of conditioned space (heating load / heat loss)
  */
 
-import { calculateGrains, sensibleFactor, latentFactor } from '../../utils/psychro';
+import { calculateGrains} from '../../utils/psychro';
 import { cToF, KW_TO_BTU_HR }                           from '../../utils/units';
 import ASHRAE                                            from '../../constants/ashrae';
-import { calcTotalEnvelopeGain }                         from '../../utils/envelopeAggregator';
+import { calcTotalEnvelopeGain, calcInfiltrationGain }                         from '../../utils/envelopeAggregator';
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
@@ -229,8 +229,7 @@ export const calculateSeasonLoad = (
   // BUG-SL-01 FIX: Import sensibleFactor() / latentFactor() from psychro.js.
   // These functions return 1.08 × Cf and 0.68 × Cf respectively for the given
   // elevation. They cannot return undefined or NaN on valid numeric input.
-  const Cs = sensibleFactor(elevation);   // BUG-SL-01 FIX
-  const Cl = latentFactor(elevation);     // BUG-SL-01 FIX
+
 
   // ── 1. Envelope gain ────────────────────────────────────────────────────────
   const envelopeGain = calcTotalEnvelopeGain(
@@ -281,10 +280,16 @@ export const calculateSeasonLoad = (
   const equipLatent = equipKW * KW_TO_BTU_HR * equipLatPct  * diversityFactor;  // BUG-SL-02 FIX
 
   // ── 5. Infiltration ────────────────────────────────────────────────────────
-  const achValue  = parseFloat(inf.achValue) || 0;
-  const infilCFM  = (volumeFt3 * achValue) / 60;
-  const infilSens = Cs * infilCFM * (dbOut - dbInF);
-  const infilLat  = Cl * infilCFM * Math.max(0, grOut - grIn);
+  const { sensible: infilSens, latent: infilLat, cfm: infilCFM } = calcInfiltrationGain(
+  inf,           // envelope.infiltration — achValue lives here
+  room,          // for pressurized check (previously missing from inline path)
+  volumeFt3,     // pre-converted ft³, consistent with rest of seasonalLoads
+  dbOut,         // already computed above from climate.outside[season].db
+  dbInF,         // room design dry-bulb, already computed
+  grIn,          // indoor gr/lb, already computed via calculateGrains
+  grOut,         // outdoor gr/lb, already computed via calculateGrains
+  elevation,     // site elevation ft, from caller
+);
 
   // ── Totals ──────────────────────────────────────────────────────────────────
   const rawSensible = envelopeGain + pplSens + lightsSens + equipSens + infilSens;

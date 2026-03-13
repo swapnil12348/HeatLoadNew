@@ -265,14 +265,7 @@ const winterDbOut = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;   // BUG-HH-09
     ? (heatingCapBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)).toFixed(1)
     : '0.0';
 
-  // BUG-HH-08 FIX: chwFlowRate was referenced in the return object but the
-  // assignment line was missing from the function body (blank line in v2.0).
-  // rdsSelector.js uses pipes.chw.flowGPM from calculatePipeSizing for the
-  // authoritative CHW flow, but this field must still be defined in the return
-  // contract for any direct consumer of calculateHeatingHumid.
-  const chwFlowRate = grandTotal > 0
-    ? (grandTotal / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)).toFixed(1)
-    : '0.0';
+
 
   // ── 4. Humidification load ────────────────────────────────────────────────
 
@@ -350,7 +343,7 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
 
     // Hydronic flows
     hwFlowRate,
-    chwFlowRate, // BUG-HH-08 FIX: was undefined (assignment was missing)
+     // BUG-HH-08 FIX: was undefined (assignment was missing)
 
     // Humidification
     humidDeltaGr:          humidDeltaGr.toFixed(1),

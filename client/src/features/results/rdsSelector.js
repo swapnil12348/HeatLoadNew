@@ -113,8 +113,7 @@ const selectSystemDesign = (state) => state.project.systemDesign;
 const selectElevation = (state) => state.project.ambient.elevation || 0;
 const selectLatitude = (state) => state.project.ambient.latitude ?? 28;
 const selectDailyRange = (state) => state.project.ambient.dailyRange ?? 0;
-const selectHumidTarget = (state) =>
-  state.project.systemDesign.humidificationTarget ?? 45;
+
 
 // ── Main memoized selector ────────────────────────────────────────────────────
 export const selectRdsData = createSelector(
@@ -122,11 +121,11 @@ export const selectRdsData = createSelector(
     selectRooms, selectEnvelopes, selectAhus,
     selectClimate, selectSystemDesign,
     selectElevation, selectLatitude, selectDailyRange,
-    selectHumidTarget,
+    
   ],
   (
     rooms, envelopes, ahus, climate, systemDesign,
-    elevation, latitude, dailyRange, humidificationTarget,
+    elevation, latitude, dailyRange
   ) => {
     const altCf = altitudeCorrectionFactor(elevation);
     const SEASONS_LIST = ['summer', 'monsoon', 'winter'];
@@ -343,7 +342,7 @@ export const selectRdsData = createSelector(
 
         const coilLoadBTU = (peakErsh + peakErlh)
           + oaSummer.oaTotal
-          + supplyFanHeatBTU;
+          + returnFanHeat;
 
         const supplyFanHeatBlow = supplyFanHeatBTU;
         const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);

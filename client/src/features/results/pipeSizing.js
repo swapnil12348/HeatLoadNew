@@ -48,16 +48,19 @@
  *
  * ── COIL LOAD VS GRAND TOTAL ─────────────────────────────────────────────────
  *
- *   calculatePipeSizing() (per-room) receives coilLoadBTU — room+OA load
+// calculatePipeSizing() receives coilLoadBTU for CHW sizing.
+// coilLoadBTU = ERSH + ERLH + OA enthalpy load + return fan heat.
+// Supply fan heat is EXCLUDED — draw-through arrangement: fan is
+// downstream of coil and does not contribute to coil heat transfer.
+// Source: ASHRAE HVAC S&E 2020 Ch.4 (fan arrangement), Ch.22 (pipe sizing).
+// Applies to: semiconductor fabs, pharma cleanrooms, battery manufacturing
+// (all draw-through per SEMI S2, ISPE Baseline Guide Vol.5, GMP Annex 1).
+
+
  *   BEFORE fan heat. Fan heat is a SENSIBLE allowance added to the air-side
  *   system heat balance; it does NOT flow through the chilled water coil.
  *   Sizing CHW pipes on grandTotal (which includes fan heat) would oversize
  *   the CHW plant by the fan heat fraction (~5%). See BUG-PIPE-01.
- *   /newer change
- * 
- *    calculatePipeSizing() (per-room) receives coilLoadBTU.
-//   coilLoadBTU now correctly includes supply fan heat, as the cooling coil 
-//   must offset the sensible heat added to the air stream by the fan motor/impeller.
  *
  *   calculateProjectPipeSizing() (plant-level) must sum coilLoadBTU values,
  *   not grandTotal values, for the same reason. Fixed in this version.
