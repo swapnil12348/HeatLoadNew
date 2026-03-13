@@ -365,7 +365,7 @@ export const selectRdsData = createSelector(
           freshAirCheck,
           climate,
           dbInF,
-          humidificationTarget,
+          raRH,
           altCf,
           elevation,
           grandTotal,
