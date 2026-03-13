@@ -348,12 +348,12 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
 
     // Hydronic flows
     hwFlowRate,
-    chwFlowRate
+    chwFlowRate,
    
 
     // Humidification
-    humidDeltaGr:          humidDeltaGr.toFixed(1),
-    humidGrTarget:         humidGrTarget.toFixed(1),
+    humidDeltaGr:       humidDeltaGr.toFixed(1),
+    humidGrTarget:        humidGrTarget.toFixed(1),
     winterGrOut:           winterGrOut.toFixed(1),
     mixedAirGr:            mixedAirGr.toFixed(1),
     humidLbsPerHr,
