@@ -218,7 +218,9 @@ export const calculateProjectPipeSizing = (rdsRows) => {
     };
   }
 
-  // FIX PIPE-01: coilLoadBTU excludes fan heat — correct basis for CHW plant sizing.
+// coilLoadBTU = room loads + OA enthalpy + return fan heat.
+// Supply fan heat excluded (draw-through: supply fan is downstream of coil).
+// Return fan heat included (return fan is upstream of coil — ASHRAE HVAC S&E 2020 Ch.4).
   const totalCoolingBTU = rdsRows.reduce(
     (sum, r) => sum + (parseFloat(r.coilLoadBTU) || 0), 0  // FIX PIPE-01: was r.grandTotal
   );

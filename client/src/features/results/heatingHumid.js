@@ -18,6 +18,8 @@
  *     'roomDesignRH' is not a parameter of calculateHeatingHumid and was never
  *     assigned anywhere in the function body. At runtime this throws:
  *       ReferenceError: roomDesignRH is not defined
+ * const winterDbOut = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;   // BUG-HH-09 FIX
+const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09 FIX
  *
  *     The ReferenceError propagates through the rdsSelector createSelector call
  *     and crashes the entire selectRdsData output for any room on any

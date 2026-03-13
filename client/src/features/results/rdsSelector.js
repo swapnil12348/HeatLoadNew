@@ -560,6 +560,8 @@ export const selectRdsData = createSelector(
       console.error(`[rdsSelector] Room ${room.id} failed:`, err);
       return {
         ...room,
+        volume:            0,   // SI value from ...room is wrong unit — zero is safer than misleading
+    floorArea:         0,
         _error: err.message,
         _calculationFailed: true,
       }; // Added semicolon
