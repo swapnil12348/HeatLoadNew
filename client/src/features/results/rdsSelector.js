@@ -342,7 +342,7 @@ export const selectRdsData = createSelector(
 
         const coilLoadBTU = (peakErsh + peakErlh)
           + oaSummer.oaTotal
-          + returnFanHeat;
+          + returnFanHeatBTU;
 
         const supplyFanHeatBlow = supplyFanHeatBTU;
         const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
