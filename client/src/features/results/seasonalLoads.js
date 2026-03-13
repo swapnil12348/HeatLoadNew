@@ -176,6 +176,13 @@ import { calcTotalEnvelopeGain, calcInfiltrationGain }                         f
  *   gmpSafetyMult:   number,  GMP safety actually applied (1.0 or 1.25)
  * }}
  */
+
+
+const parseDef = (val, fallback) => {
+    const parsed = parseFloat(val);
+    return !isNaN(parsed) ? parsed : fallback;
+  };
+
 export const calculateSeasonLoad = (
   room,
   envelope,
@@ -252,10 +259,7 @@ export const calculateSeasonLoad = (
   
   // Helper to safely parse numbers and apply a fallback if the value is missing or an empty string
   
-  const parseDef = (val, fallback) => {
-    const parsed = parseFloat(val);
-    return !isNaN(parsed) ? parsed : fallback;
-  };
+  
   // FIX HIGH-04: schedFactor applies useSchedule (0–100%) as operating fraction.
    const schedFactor = parseDef(int.lights?.useSchedule, 100) / 100;
 

@@ -227,27 +227,10 @@ export const calcSlabGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * calcInfiltrationGain(room, climate, season, tRoom, grRoom?, elevFt?)
+ * calcInfiltrationGain(inf, room, volumeFt3, dbOut, tRoom, grIn, grOut, elevFt)
  *
- * FIX-INFIL-01 (CRITICAL): volume now correctly converted from m³ → ft³.
  *
- *   roomSlice stores all room geometry in SI units:
- *     room.floorArea → m²    room.height → m    room.volume → m³
  *
- *   The previous "FIX-11" claimed floorArea was in ft² and removed the
- *   M2_TO_FT2 conversion. This was incorrect — it produced volumeFt3 in
- *   m³ units (35.3× too small), making cfmInf 35.3× too small.
- *
- *   Fix: use room.volume (m³, already maintained by roomSlice.updateRoom)
- *   and convert via m3ToFt3(). This is the single correct conversion point.
- *
- *   For the default Production Hall room (volume = 1,200 m³):
- *     Old (wrong): volumeFt3 = 1200  → cfmInf @ 0.25 ACH = 5.0 CFM
- *     New (fixed): volumeFt3 = 42,378 → cfmInf @ 0.25 ACH = 176.6 CFM
- *
- * FIX LOW-02: climate field is .gr (climateSlice), not .grains.
- * FIX LOW-03: room field is .floorArea (roomSlice), not .area.
- * FIX-10: altitude-corrected factors from psychro.js.
  *
  * @returns {{ sensible: number, latent: number }} BTU/hr, signed
  */
