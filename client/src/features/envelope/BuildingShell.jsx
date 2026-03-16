@@ -2,23 +2,24 @@
  * BuildingShell.jsx
  * Full ASHRAE CLTD/CLF envelope element editor.
  *
- * -- CHANGELOG v2.2 -----------------------------------------------------------
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
  *   BUG-UI-20 [LOW] — unused React import removed.
  *     Vite with React 17+ automatic JSX transform does not require explicit import.
  *     useState and useCallback are still imported directly from 'react'.
  *
- * -- Previous fixes (retained) ------------------------------------------------
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   FIX MED-04: PartitionRow and FloorRow now show per-season heat gain.
- *     calcPartitionGain(element, tRoom, season) now accepts a season arg and
- *     selects tAdjSummer (summer/monsoon) or tAdjWinter (winter) from the
- *     element. Two separate inputs replace the single tAdj field.
- *     SectionTotals also updated to pass season for partitions/floors.
+ *   FIX MED-04 — PartitionRow now shows per-season heat gain.
+ *     calcPartitionGain(element, tRoom, season) accepts a season argument and
+ *     selects tAdjSummer (summer/monsoon) or tAdjWinter (winter).
+ *     Two separate temperature inputs replace the single tAdj field.
+ *     SectionTotals passes season for partitions/floors.
  *     Backward-compatible: elements that only have tAdj continue to work
  *     (legacy fallback in calcPartitionGain).
+ *     Note: floors reuse PartitionRow — there is no separate FloorRow component.
  *
- *   FIX FIX-05 companion: GlassRow now surfaces SHGC (not SC).
+ *   FIX FIX-05 — GlassRow now surfaces SHGC (not SC).
  *     envelopeCalc.resolveShgc() prefers element.shgc over element.sc × 0.87.
  *     The UI previously only wrote the sc field — shgc was never set, so
  *     resolveShgc() always fell back to sc × 0.87 (close but not exact).
@@ -27,7 +28,7 @@
  *     input is now the shgc field. SC is shown as a read-only reference.
  */
 
-import { useState, useCallback } from 'react'; // BUG-UI-20 FIX: React removed
+import { useState, useCallback } from 'react';
 import { useDispatch }           from 'react-redux';
 import {
   addEnvelopeElement,
@@ -38,7 +39,7 @@ import {
   ORIENTATIONS,
   WALL_CONSTRUCTIONS,
   ROOF_CONSTRUCTIONS,
-  GLAZING_OPTIONS,   // FIX FIX-05: replaces SC_OPTIONS — has both shgc and sc
+  GLAZING_OPTIONS,
   U_VALUE_PRESETS,
   DEFAULT_ELEMENTS,
 } from '../../constants/ashraeTables';
@@ -47,8 +48,6 @@ import {
   calcRoofGain,
   calcPartitionGain,
 } from '../../utils/envelopeCalc';
-
-// calcGlassGain and calcSkylightGain live in glazingCalc.js (transparent envelope module)
 import {
   calcGlassGain,
   calcSkylightGain,
@@ -76,7 +75,7 @@ const CATEGORIES = [
 
 const BtuBadge = ({ value }) => {
   const rounded = Math.round(value);
-  const color = rounded > 0
+  const color   = rounded > 0
     ? 'text-red-600 bg-red-50 border-red-200'
     : 'text-blue-600 bg-blue-50 border-blue-200';
   return (
@@ -112,7 +111,7 @@ const CellSelect = ({ value, onChange, options }) => (
 
 // ── Per-category row renderers ───────────────────────────────────────────────
 
-const WallRow = ({ element, roomId, climate, tRoom, onUpdate, onRemove }) => {
+const WallRow = ({ element, climate, tRoom, onUpdate, onRemove }) => {
   const gains = SEASONS.map(s => calcWallGain(element, climate, tRoom, s));
   return (
     <tr className="group hover:bg-orange-50/30 border-b border-gray-100">
@@ -160,7 +159,7 @@ const WallRow = ({ element, roomId, climate, tRoom, onUpdate, onRemove }) => {
   );
 };
 
-const RoofRow = ({ element, roomId, climate, tRoom, onUpdate, onRemove }) => {
+const RoofRow = ({ element, climate, tRoom, onUpdate, onRemove }) => {
   const gains = SEASONS.map(s => calcRoofGain(element, climate, tRoom, s));
   return (
     <tr className="group hover:bg-red-50/30 border-b border-gray-100">
@@ -203,7 +202,7 @@ const RoofRow = ({ element, roomId, climate, tRoom, onUpdate, onRemove }) => {
 
 /**
  * GlassRow / SkylightRow
- * FIX FIX-05: now wired to SHGC (element.shgc) not SC.
+ * Wired to SHGC (element.shgc) not SC.
  * - Preset selector uses GLAZING_OPTIONS (has both shgc + sc columns).
  * - On preset change: writes both shgc AND sc for full backward compat.
  * - Manual override edits element.shgc directly (resolveShgc() prefers it).
@@ -296,8 +295,9 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
 };
 
 /**
- * PartitionRow / FloorRow
- * FIX MED-04: now shows per-season heat gain using tAdjSummer / tAdjWinter.
+ * PartitionRow
+ * Used for both partitions and floors — shows per-season heat gain.
+ * tAdjSummer and tAdjWinter are separate inputs; falls back to legacy tAdj.
  */
 const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
   const gains = SEASONS.map(s => calcPartitionGain(element, tRoom, s));
@@ -464,7 +464,7 @@ export default function BuildingShell({ roomId, elements, climate, tRoom }) {
           </span>
         ))}
         <span className="text-[9px] text-gray-400 ml-2 italic">
-          ASHRAE CLTD/CLF · +red = heat gain · −blue = heat loss · partition gain is now season-dependent
+          ASHRAE CLTD/CLF · +red = heat gain · −blue = heat loss · partition gain is season-dependent
         </span>
       </div>
 
@@ -502,7 +502,6 @@ export default function BuildingShell({ roomId, elements, climate, tRoom }) {
                 {activeElements.map(el => {
                   const commonProps = {
                     element:  el,
-                    roomId,
                     climate,
                     tRoom,
                     onUpdate: (field, val) => handleUpdate(activeCategory, el.id, field, val),

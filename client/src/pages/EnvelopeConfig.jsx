@@ -2,37 +2,33 @@
  * EnvelopeConfig.jsx
  * Responsibility: Envelope layers and internal heat gains editor.
  *
- * -- CHANGELOG v2.1 -----------------------------------------------------------
- *
- *   BUG-UI-16 [LOW] — unused React import removed.
- *     Vite with React 17+ automatic JSX transform does not require explicit import.
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   BUG-UI-17 [MEDIUM — UNIT BUG] — infiltration CFM preview uses correct m³→ft³ factor.
- *
- *     Previous:
- *       (parseFloat(activeRoom.volume) || 0) * ASHRAE.M2_TO_FT2   ← 10.7639 ft²/m²
  *
  *     activeRoom.volume is m³ (roomSlice stores SI units).
  *     m³ → ft³ requires × 35.3147, NOT × 10.7639 (which is ft²/m² — an area factor).
  *
  *     Impact: For a 300 m³ room:
- *       Correct:  300 × 35.3147 = 10,594 ft³ → displayed CFM is correct
- *       Previous: 300 × 10.7639 =  3,229 ft³ → displayed CFM was 3.28× too low
+ *       Correct:  300 × 35.3147 = 10,594 ft³ → CFM preview is correct
+ *       Previous: 300 × 10.7639 =  3,229 ft³ → CFM preview was 3.28× too low
  *
  *     The actual infiltration calculation in envelopeCalc.js is unaffected —
- *     it uses its own unit conversion internally. This was a display-only
- *     preview bug, but an engineer reading "42 CFM" instead of "138 CFM" on the
- *     infiltration input would have wrong context when entering ACPH values.
+ *     it converts units internally. This was a display-only preview bug, but an
+ *     engineer reading "42 CFM" instead of "138 CFM" would have wrong context
+ *     when entering ACPH values.
  *
- *     Fix: M3_TO_FT3 = 35.3147 defined at module level.
- *     ASHRAE.M2_TO_FT2 usage in infiltration section replaced throughout.
+ *   BUG-UI-18 [MEDIUM — UNIT BUG] — equipment preview: ASHRAE.KW_TO_BTU → KW_TO_BTU_HR.
  *
- * -- Previous fixes (retained) ------------------------------------------------
- *   FIX CRIT-03 follow-up: initializeRoom dispatched with { id, room } payload.
- *   FIX HIGH-04: useSchedule input added.
- *   FIX HIGH-05: ballastFactor input added.
- *   FIX HIGH-02: diversityFactor input added.
- *   FIX LOW-01: preview uses ASHRAE.KW_TO_BTU (3412.14).
+ *     ASHRAE.KW_TO_BTU is not a valid export from ashrae.js. Using it produces
+ *     undefined → NaN in all three equipment preview values (sensible, latent,
+ *     rejected-to-CW). Engineers see "NaN BTU/hr" for any non-zero equipment kW.
+ *
+ *     Fix: import KW_TO_BTU_HR from utils/units.js — the same fix applied to
+ *     seasonalLoads.js (BUG-SL-02) and heatingHumid.js (BUG-HH-03).
+ *
+ *   BUG-UI-16 [LOW] — unused React import removed.
+ *     Vite with React 17+ automatic JSX transform does not require explicit import.
  */
 
 import { useSelector, useDispatch }      from 'react-redux';
@@ -46,10 +42,10 @@ import {
 import RoomSidebar                       from '../components/Layout/RoomSidebar';
 import BuildingShell                     from '../features/envelope/BuildingShell';
 import ASHRAE                            from '../constants/ashrae';
+import { KW_TO_BTU_HR }                  from '../utils/units';
 
-// BUG-UI-17 FIX: m³ → ft³ conversion. Standard: 1 m³ = 35.3147 ft³.
-// ASHRAE.M2_TO_FT2 (10.7639) is ft²/m² — an AREA factor. Using it for
-// volume (m³ → ft³) produced a 3.28× error in the infiltration CFM preview.
+// m³ → ft³ conversion. Standard: 1 m³ = 35.3147 ft³.
+// ASHRAE.M2_TO_FT2 (10.7639) is ft²/m² — an AREA factor, not a volume factor.
 const M3_TO_FT3 = 35.3147;
 
 // ── Unit conversion ──────────────────────────────────────────────────────────
@@ -109,8 +105,8 @@ export default function EnvelopeConfig() {
   const envelope   = useSelector(selectActiveEnvelope);
   const climate    = useSelector((state) => state.climate);
 
-  // FIX CRIT-03 follow-up: use preferred { id, room } payload so initializeRoom
-  // can apply the ISO classification guard (achValue = 0 for pressurized rooms).
+  // Use { id, room } payload so initializeRoom can apply the ISO classification
+  // guard (achValue = 0 for positively pressurized rooms).
   const ensureRoom = () => {
     dispatch(initializeRoom({ id: activeRoom.id, room: activeRoom }));
   };
@@ -155,6 +151,9 @@ export default function EnvelopeConfig() {
     );
   }
 
+  // tRoomF is passed to BuildingShell as tRoom (°F).
+  // All envelope calc functions (calcWallGain, calcRoofGain, calcPartitionGain)
+  // expect °F — this conversion is the single point where °C → °F happens for UI.
   const tRoomF = isNaN(parseFloat(activeRoom.designTemp))
     ? 72
     : celsiusToFahrenheit(activeRoom.designTemp);
@@ -166,8 +165,8 @@ export default function EnvelopeConfig() {
   const equipSensPct = envelope.internalLoads?.equipment?.sensiblePct ?? 100;
   const equipLatPct  = envelope.internalLoads?.equipment?.latentPct   ?? 0;
 
-  const useSchedule   = envelope.internalLoads?.lights?.useSchedule ?? 100;
-  const schedFactor   = useSchedule / 100;
+  const useSchedule = envelope.internalLoads?.lights?.useSchedule ?? 100;
+  const schedFactor = useSchedule / 100;
 
   const ballastFactor = envelope.internalLoads?.lights?.ballastFactor
     ?? ASHRAE.LIGHTING_BALLAST_FACTOR;
@@ -178,35 +177,33 @@ export default function EnvelopeConfig() {
   const diversityFactor = envelope.internalLoads?.equipment?.diversityFactor
     ?? ASHRAE.PROCESS_DIVERSITY_FACTOR;
 
-  const equipKW          = envelope.internalLoads?.equipment?.kw || 0;
+  const equipKW = envelope.internalLoads?.equipment?.kw || 0;
+
+  // Equipment preview — KW_TO_BTU_HR from units.js (3412.14 BTU/hr per kW).
+  // ASHRAE.KW_TO_BTU is not a valid export and would produce NaN.
   const equipSensPreview = Math.round(
-    equipKW * ASHRAE.KW_TO_BTU * (equipSensPct / 100) * diversityFactor
+    equipKW * KW_TO_BTU_HR * (equipSensPct / 100) * diversityFactor
   );
-  const equipLatPreview  = Math.round(
-    equipKW * ASHRAE.KW_TO_BTU * (equipLatPct / 100) * diversityFactor
+  const equipLatPreview = Math.round(
+    equipKW * KW_TO_BTU_HR * (equipLatPct / 100) * diversityFactor
   );
-  const equipCwPreview   = Math.max(0, Math.round(
-    equipKW * ASHRAE.KW_TO_BTU * (1 - equipSensPct / 100 - equipLatPct / 100) * diversityFactor
+  const equipCwPreview = Math.max(0, Math.round(
+    equipKW * KW_TO_BTU_HR * (1 - equipSensPct / 100 - equipLatPct / 100) * diversityFactor
   ));
 
-  // Lighting preview — activeRoom.floorArea is m² (roomSlice SI).
-  // W/ft² × ft² × BTU/W × schedule × ballast = BTU/hr (correct).
+  // Lighting preview — floorArea is m² (roomSlice SI); × M2_TO_FT2 → ft².
   const lightsWpFt2       = parseFloat(envelope.internalLoads?.lights?.wattsPerSqFt) || 0;
   const lightsSensPreview = Math.round(
     lightsWpFt2 * (activeRoom.floorArea || 0) * ASHRAE.M2_TO_FT2
     * ASHRAE.BTU_PER_WATT * schedFactor * ballastFactor
   );
 
-  // BUG-UI-17 FIX: activeRoom.volume is m³ (roomSlice SI).
-  // Infiltration CFM = Volume(ft³) × ACPH / 60.
-  // Volume(ft³) = Volume(m³) × M3_TO_FT3 (35.3147), NOT × M2_TO_FT2 (10.7639).
-  // Using M2_TO_FT2 for a volume produced a 3.28× underestimate in the preview.
-  const volumeFt3 = (parseFloat(activeRoom.volume) || 0) * M3_TO_FT3;
+  // Infiltration preview — volume is m³ (roomSlice SI); × M3_TO_FT3 → ft³.
+  const volumeFt3              = (parseFloat(activeRoom.volume) || 0) * M3_TO_FT3;
   const infiltrationCFMPreview = Math.round(
     volumeFt3 * parseFloat(envelope.infiltration?.achValue || 0) / 60
   );
 
-  // ISO pressurization warning
   const isIsoRoom = activeRoom.classInOp && activeRoom.classInOp !== 'Unclassified';
 
   return (
@@ -523,9 +520,6 @@ export default function EnvelopeConfig() {
               <span className="text-gray-500 text-sm font-medium">ACPH</span>
             </div>
 
-            {/* BUG-UI-17 FIX: preview uses M3_TO_FT3 (35.3147) not M2_TO_FT2 (10.7639).
-                activeRoom.volume is m³ (roomSlice SI). Converting m³ to ft³ requires ×35.3147.
-                Using ×10.7639 (an area factor) gave a 3.28× underestimate. */}
             <div className="mt-3 text-[10px] text-gray-400 space-y-1">
               <p>
                 CFM = Volume(ft³) × ACPH / 60
