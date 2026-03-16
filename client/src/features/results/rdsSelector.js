@@ -218,10 +218,9 @@ export const selectRdsData = createSelector(
         const peakCalcs = seasonCalcs[peakCFMSeason];
 
         const peakErsh = peakCalcs.ersh;
-        const peakErlh = peakCalcs.erlh;
-        // dbInF from the peak sensible season — feeds ADP calculation and
-        // psychrometric state points. Using summer's dbInF when a different
-        // season governs CFM would produce a mismatched supply temperature.
+        // peakErlh from peakCFMSeason is NOT used for capacity — capacity uses
+        // peakErlhForCap from peakCoolingSeason (determined after STEP 3).
+        // dbInF from the peak sensible season feeds ADP and psychro state points.
         const dbInF    = peakCalcs.dbInF ?? 72;
 
         // ════════════════════════════════════════════════════════════════════════
