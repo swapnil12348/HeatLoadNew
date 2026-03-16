@@ -20,20 +20,17 @@
  *   state.project.ambient.dailyRange  → CLTD mean-temp correction (°F swing).
  *                                       0 = use DIURNAL_RANGE_DEFAULTS by climate zone.
  *
- *   state.project.systemDesign.safetyFactor       → safety multiplier in seasonalLoads
- *   state.project.systemDesign.bypassFactor        → BF in airQuantities + psychroStatePoints
- *   state.project.systemDesign.adp                 → apparatus dew point in airQuantities + psychro
- *   state.project.systemDesign.fanHeat             → supply fan heat fraction in rdsSelector
+ *   state.project.systemDesign.safetyFactor        → safety multiplier in seasonalLoads
+ *   state.project.systemDesign.bypassFactor         → BF in airQuantities + psychroStatePoints
+ *   state.project.systemDesign.adp                  → apparatus dew point in airQuantities + psychro
+ *   state.project.systemDesign.adpMode              → 'manual' | 'calculated' — read by rdsSelector ADP chain
+ *   state.project.systemDesign.fanHeat              → supply fan heat fraction in rdsSelector
  *   state.project.systemDesign.humidificationTarget → winter RH target in heatingHumid
  *
  * ── SYSTEM DESIGN DEFAULTS — INLINED ─────────────────────────────────────────
  *
- *   Previous version referenced ASHRAE.DEFAULT_SAFETY_FACTOR_PCT etc.
- *   These constants may not exist in all versions of ashrae.js and would
- *   silently produce undefined → NaN defaults at startup.
- *
- *   All defaults are now inlined here as named constants.
- *   If ashrae.js is updated, update these constants to match.
+ *   All defaults are inlined here as named constants to avoid silent undefined
+ *   when ashrae.js constant names differ between versions.
  *
  *   DEFAULT_SAFETY_FACTOR_PCT  = 10  (%)  — ASHRAE allows 5–15%; 10% is common practice
  *   DEFAULT_BYPASS_FACTOR      = 0.10     — typical for chilled-water AHUs; use 0.08–0.12
@@ -49,35 +46,37 @@
  *
  * ── BOUNDS CLAMPING ──────────────────────────────────────────────────────────
  *
- *   Both updateAmbient and updateSystemDesign clamp inputs to physically realistic
- *   ranges. Out-of-bounds values are clamped silently with a console.warn.
- *   This prevents a single bad UI input from producing nonsensical cascade results.
+ *   Both updateAmbient and updateSystemDesign clamp numeric inputs to physically
+ *   realistic ranges. String fields (adpMode) bypass numeric parsing entirely.
+ *   Out-of-bounds numeric values are clamped silently with a console.warn.
  *
- * -- CHANGELOG v2.1 -----------------------------------------------------------
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-SLICE-06 FIX — updateSystemDesign: string fields bypass parseFloat.
+ *
+ *     Previous code applied parseFloat(value) universally to all systemDesign
+ *     fields. For string fields like adpMode:
+ *       parseFloat('calculated') = NaN
+ *       safe = isNaN(NaN) ? (state.systemDesign['adpMode'] ?? 0) : NaN
+ *            = current value ('manual')     ← NOT the new value
+ *       state.systemDesign['adpMode'] = 'manual'   ← writes old value back
+ *
+ *     adpMode was permanently stuck at 'manual' regardless of UI dispatch.
+ *     The rdsSelector ADP chain reads adpMode to decide between calculated
+ *     and manual ADP resolution — this bug silently disabled 'calculated' mode
+ *     at the project level for every project.
+ *
+ *     Fix: fields not in SYSTEM_DESIGN_BOUNDS (no numeric bounds defined)
+ *     are treated as string fields and written directly without parseFloat.
+ *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   BUG-SLICE-05 FIX — updateSystemDesign: adp < 38°F now triggers a warning.
  *
- *     The hard lower bound for adp is 32°F (freezing) — physically correct as
- *     a hard limit (ADP cannot be below the freezing point of water on a
- *     standard coil without icing). However, 32°F is not achievable by a
- *     standard chilled-water coil: typical CHW supply 6–8°C (43–46°F) yields
- *     ADP in the 44–50°F range. Values below 38°F require DX refrigerant or
- *     glycol coils.
- *
- *     Engineers setting adp = 32–37°F are either:
- *       (a) making a data-entry error (intended 52°F or 47°F), or
- *       (b) designing a DX/glycol system intentionally.
- *
- *     A warning (not a clamp) allows both cases. Case (b) is legitimate —
- *     the calculation proceeds correctly; the engineer is informed.
- *
- *     Impact of an accidentally low ADP:
- *       supplyDT = (1 - BF) × (dbRoom - ADP) → larger ΔT → lower thermalCFM
- *       Lower supply CFM → smaller AHU selected → undersized for the room.
- *       For a 1000 BTU/hr room at ADP=32°F vs ADP=52°F:
- *         thermalCFM(32°F): 1000 / (1.08 × 0.90 × (72-32)) = 25.7 CFM
- *         thermalCFM(52°F): 1000 / (1.08 × 0.90 × (72-52)) = 51.4 CFM
- *       50% undersizing of supply air — non-conservative for critical facilities.
+ *     Standard CHW coils achieve ADP 44–55°F. Below 38°F requires DX or glycol.
+ *     A data-entry error (e.g. 32 instead of 52) halves thermalCFM, undersizing
+ *     the AHU by up to 50%. A warning (not a clamp) fires for 32–37°F to make
+ *     the engineer's intent explicit without blocking legitimate DX designs.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
@@ -90,6 +89,9 @@ const DEFAULT_FAN_HEAT_PCT       = 5;     // %
 const DEFAULT_HUMID_TARGET       = 45;    // %RH
 
 // ── Bounds definitions ────────────────────────────────────────────────────────
+// Only NUMERIC fields appear here. String fields (adpMode) are intentionally
+// absent — updateSystemDesign uses this absence to identify string fields and
+// bypass parseFloat, writing the value directly.
 const SYSTEM_DESIGN_BOUNDS = {
   safetyFactor:         { min: 0,    max: 50   },
   bypassFactor:         { min: 0.01, max: 0.30 },
@@ -133,7 +135,7 @@ const initialState = {
     safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,
     bypassFactor:         DEFAULT_BYPASS_FACTOR,
     adp:                  DEFAULT_ADP,
-    adpMode: 'manual',
+    adpMode:              'manual',   // 'manual' | 'calculated' — string field, no bounds
     fanHeat:              DEFAULT_FAN_HEAT_PCT,
     humidificationTarget: DEFAULT_HUMID_TARGET,
   },
@@ -178,12 +180,16 @@ const projectSlice = createSlice({
 
     /**
      * updateSystemDesign
-     * { field, value }  —  numeric fields, clamped to SYSTEM_DESIGN_BOUNDS.
+     * { field, value }
      *
-     * BUG-SLICE-05 FIX: adp < 38°F now triggers a warning (not a clamp).
-     *   Standard CHW coils achieve ADP 44–55°F. Below 38°F requires DX or glycol.
-     *   A data-entry error (e.g. 32 instead of 52) halves thermalCFM → 50%
-     *   undersized AHU. The warning makes the engineer's intent explicit.
+     * String fields (adpMode): written directly — no parseFloat, no bounds clamping.
+     *   Fields not present in SYSTEM_DESIGN_BOUNDS are treated as string fields.
+     *
+     * Numeric fields: parsed, clamped to SYSTEM_DESIGN_BOUNDS, and field-specific
+     *   warnings applied (adp below CHW range, safetyFactor = 0).
+     *
+     * BUG-SLICE-06 FIX: the string-field bypass corrects adpMode being permanently
+     *   stuck at 'manual'. See CHANGELOG v2.2 in the file header for full detail.
      */
     updateSystemDesign: (state, action) => {
       const { field, value } = action.payload;
@@ -191,46 +197,49 @@ const projectSlice = createSlice({
         console.warn(`updateSystemDesign: unknown field "${field}"`);
         return;
       }
-      const parsed = parseFloat(value);
-      const safe   = isNaN(parsed) ? (state.systemDesign[field] ?? 0) : parsed;
+
       const bounds = SYSTEM_DESIGN_BOUNDS[field];
-      if (bounds) {
-        const clamped = clamp(safe, bounds.min, bounds.max);
-        if (clamped !== safe) {
-          console.warn(
-            `updateSystemDesign: "${field}" = ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
-          );
-        }
 
-        // ── Field-specific warnings ──────────────────────────────────────────
-
-        if (field === 'safetyFactor' && clamped === 0) {
-          console.warn(
-            'updateSystemDesign: safetyFactor = 0 — no safety margin will be applied. ' +
-            'ASHRAE recommends 5–15% for cooling load calculations.'
-          );
-        }
-
-        // BUG-SLICE-05 FIX: warn when ADP is below typical CHW coil range.
-        // Hard lower bound (32°F) is retained — ADP physically cannot be below
-        // the freezing point on a standard coil without icing the coil surface.
-        // The warning fires for 32–37°F, which requires DX refrigerant or glycol.
-        if (field === 'adp' && clamped < 38) {
-          console.warn(
-            `updateSystemDesign: adp = ${clamped}°F is below the typical chilled-water ` +
-            `coil range (38–55°F). Standard CHW supply at 6–8°C (43–46°F) achieves ` +
-            `ADP ≈ 44–50°F. Values below 38°F require DX refrigerant or glycol coils. ` +
-            `If this is intentional (DX/glycol system), this warning can be disregarded. ` +
-            `If this is a data-entry error (e.g. intended 52°F), correct the value — ` +
-            `an ADP that is too low understates thermalCFM and undersizes the AHU ` +
-            `by up to 50% for typical room conditions.`
-          );
-        }
-
-        state.systemDesign[field] = clamped;
-      } else {
-        state.systemDesign[field] = safe;
+      // BUG-SLICE-06 FIX: string fields have no entry in SYSTEM_DESIGN_BOUNDS.
+      // Bypass numeric parsing entirely — write the value directly.
+      if (!bounds) {
+        state.systemDesign[field] = value;
+        return;
       }
+
+      const parsed  = parseFloat(value);
+      const safe    = isNaN(parsed) ? (state.systemDesign[field] ?? 0) : parsed;
+      const clamped = clamp(safe, bounds.min, bounds.max);
+
+      if (clamped !== safe) {
+        console.warn(
+          `updateSystemDesign: "${field}" = ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
+        );
+      }
+
+      if (field === 'safetyFactor' && clamped === 0) {
+        console.warn(
+          'updateSystemDesign: safetyFactor = 0 — no safety margin will be applied. ' +
+          'ASHRAE recommends 5–15% for cooling load calculations.'
+        );
+      }
+
+      // Warn when ADP is below typical CHW coil range (38–55°F).
+      // Hard lower bound (32°F) is retained — ADP cannot be below the freezing
+      // point on a standard coil without icing. The warning fires for 32–37°F,
+      // which requires DX refrigerant or glycol — legitimate but rare.
+      // An accidental low ADP (e.g. 32 instead of 52) halves thermalCFM,
+      // undersizing the AHU by up to 50% for typical room conditions.
+      if (field === 'adp' && clamped < 38) {
+        console.warn(
+          `updateSystemDesign: adp = ${clamped}°F is below the typical chilled-water ` +
+          `coil range (38–55°F). Standard CHW supply at 6–8°C (43–46°F) achieves ` +
+          `ADP ≈ 44–50°F. Values below 38°F require DX refrigerant or glycol coils. ` +
+          `If this is intentional (DX/glycol system), this warning can be disregarded.`
+        );
+      }
+
+      state.systemDesign[field] = clamped;
     },
 
     resetProject: () => initialState,
