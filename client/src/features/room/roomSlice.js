@@ -11,28 +11,17 @@
  *   FIX-ROOM-DB-01 — designDB field added to room shape.
  *
  *     psychroValidation.validateRoomHumidity() reads room.designDB (°F).
- *     roomSlice previously stored only designTemp (°C) and had no designDB field.
- *
- *     Effect: parseFloat(room.designDB) === parseFloat(undefined) === NaN.
- *     validateRoomHumidity immediately hit:
- *       if (isNaN(rh) || isNaN(db)) {
- *         errors.push('Invalid design conditions...');
- *         return makeResult(errors, warnings);   ← exits before any real check
- *       }
- *     Every room failed humidity validation with an invalid-input error.
- *     No actual humidity standard checks ever ran.
+ *     roomSlice previously stored only designTemp (°C) with no designDB field.
+ *     parseFloat(undefined) = NaN caused every room to fail humidity validation
+ *     with an invalid-input error before any real humidity check could run.
  *
  *     Fix:
- *       1. makeRoom() now includes designDB (°F) derived from designTemp (°C).
+ *       1. makeRoom() includes designDB (°F) derived from designTemp (°C).
  *       2. updateRoom() keeps designDB in sync when designTemp changes.
  *
- *     designDB is a derived/display field — it is NOT the source of truth.
- *     designTemp (°C) remains the canonical storage field, used by:
- *       seasonalLoads.js (cToF conversion), airQuantities.js (cToF).
- *     designDB (°F) is the convenience field for psychroValidation and any
- *     UI components that work in °F (ASHRAE psychrometric display).
- *
- *     Conversion: designDB = designTemp × 9/5 + 32  (exact, no rounding error)
+ *     designDB is a derived/display field — designTemp (°C) remains the canonical
+ *     storage field used by seasonalLoads.js and airQuantities.js (cToF conversion).
+ *     Conversion: designDB = designTemp × 9/5 + 32  (exact)
  *
  * ── FIELD CONTRACT WITH THE LOGIC LAYER ──────────────────────────────────────
  *
@@ -111,15 +100,10 @@ const cToF_inline = (c) => {
 // ── Room factory ──────────────────────────────────────────────────────────────
 /**
  * makeRoom(id, index, overrides)
- *
  * Single source of truth for the default room shape.
- *
- * FIX-ROOM-DB-01: designDB (°F) added — derived from designTemp (°C).
- * psychroValidation.validateRoomHumidity() reads room.designDB.
+ * designDB (°F) is derived from designTemp (°C) for psychroValidation.
  */
 const makeRoom = (id, index = 0, overrides = {}) => {
-  // Build base object first so we can derive designDB from designTemp,
-  // accounting for any designTemp override passed in.
   const base = {
     // ── Identity ──────────────────────────────────────────────────────────────
     id,
@@ -136,24 +120,22 @@ const makeRoom = (id, index = 0, overrides = {}) => {
     volume: 300,
 
     // ── Environmental design targets ──────────────────────────────────────────
-    designTemp: 22,          // °C — source of truth
-    // FIX-ROOM-DB-01: designDB is the °F equivalent, kept in sync by updateRoom.
-    // psychroValidation reads designDB; calc modules convert designTemp themselves.
-    designDB: 71.6,        // °F — derived: 22 × 9/5 + 32 = 71.6
-    designRH: 50,          // % (0 is valid for dry rooms — keep as number)
-    pressure: 15,          // Pa
+    designTemp: 22,    // °C — source of truth; calc modules convert via cToF()
+    designDB:   71.6,  // °F — derived: 22 × 9/5 + 32 = 71.6; for psychroValidation
+    designRH:   50,    // % (0 is valid for dry rooms — keep as number, never null)
+    pressure:   15,    // Pa
 
     // ── Classification ────────────────────────────────────────────────────────
-    classInOp: 'ISO 8',
+    classInOp:   'ISO 8',
     atRestClass: 'ISO 8',
-    recOt: 'REC',
-    flpType: 'NFLP',
+    recOt:       'REC',
+    flpType:     'NFLP',
 
     // ── ASHRAE 62.1-2022 ventilation category ────────────────────────────────
     ventCategory: 'general',
 
     // ── Airflow constraints (ACH) ─────────────────────────────────────────────
-    minAcph: 10,
+    minAcph:    10,
     designAcph: 20,
 
     // ── Fresh air override ────────────────────────────────────────────────────
@@ -162,19 +144,18 @@ const makeRoom = (id, index = 0, overrides = {}) => {
     // ── Exhaust air breakdown ─────────────────────────────────────────────────
     exhaustAir: {
       general: 0,
-      bibo: 0,
+      bibo:    0,
       machine: 0,
     },
 
     // ── AHU assignment ────────────────────────────────────────────────────────
+    // rdsSelector reads assignedAhuIds[0] only — single AHU per room.
     assignedAhuIds: [],
   };
 
-  // Apply overrides, then re-derive designDB if designTemp was overridden.
   const merged = { ...base, ...overrides };
 
-  // FIX-ROOM-DB-01: If the override included a designTemp, recalculate designDB
-  // unless the override also explicitly set designDB (engineer override takes precedence).
+  // If the override included designTemp but not designDB, re-derive designDB.
   if (overrides.designTemp !== undefined && overrides.designDB === undefined) {
     const derivedDB = cToF_inline(overrides.designTemp);
     if (derivedDB !== null) merged.designDB = derivedDB;
@@ -188,21 +169,20 @@ const initialState = {
   activeRoomId: 'room_default_1',
   list: [
     makeRoom('room_default_1', 0, {
-      name: 'Production Hall',
-      length: 20,
-      width: 15,
-      height: 4,
-      floorArea: 300,
-      volume: 1200,
-      designTemp: 22,       // °C
-      // designDB derived automatically by makeRoom: 22 × 9/5 + 32 = 71.6 °F
-      designRH: 50,
-      pressure: 15,
-      classInOp: 'ISO 8',
+      name:        'Production Hall',
+      length:      20,
+      width:       15,
+      height:      4,
+      floorArea:   300,
+      volume:      1200,
+      designTemp:  22,
+      designRH:    50,
+      pressure:    15,
+      classInOp:   'ISO 8',
       atRestClass: 'ISO 8',
       ventCategory: 'general',
-      minAcph: 10,
-      designAcph: 20,
+      minAcph:     10,
+      designAcph:  20,
       assignedAhuIds: ['ahu1'],
     }),
   ],
@@ -219,9 +199,9 @@ const roomSlice = createSlice({
     },
 
     addRoom: (state, action) => {
-      const payload = action.payload;
+      const payload  = action.payload;
       const isLegacy = typeof payload === 'string';
-      const id = isLegacy ? payload : (payload.id ?? generateRoomId());
+      const id       = isLegacy ? payload : (payload.id ?? generateRoomId());
       const overrides = isLegacy ? {} : (() => {
         const o = { ...payload };
         delete o.id;
@@ -237,7 +217,8 @@ const roomSlice = createSlice({
      * updateRoom
      * { id, field, value }  —  field supports dot-notation paths.
      *
-     * FIX-ROOM-DB-01: When designTemp changes, designDB is updated automatically.
+     * When designTemp changes, designDB is updated automatically so
+     * psychroValidation always receives a valid °F value.
      * Auto-derives floorArea and volume when geometry dimensions change.
      */
     updateRoom: (state, action) => {
@@ -247,35 +228,31 @@ const roomSlice = createSlice({
 
       setNestedValue(room, field, value);
 
-      // FIX-ROOM-DB-01: keep designDB (°F) in sync with designTemp (°C).
-      // This ensures psychroValidation.validateRoomHumidity always has a valid °F value.
-      // Only update designDB when designTemp changes — not on direct designDB edits
-      // (which would allow an engineer to override for special conditions).
+      // Keep designDB (°F) in sync with designTemp (°C).
+      // Only update when designTemp changes — direct designDB edits are
+      // preserved as engineer overrides for special conditions.
+      // If value is '' or NaN, leave existing designDB rather than nulling it.
       if (field === 'designTemp') {
         const derivedDB = cToF_inline(value);
-        if (derivedDB !== null) {
-          room.designDB = derivedDB;
-        }
-        // If value is '' or NaN (user cleared field), leave existing designDB
-        // in place rather than setting it to null — preserves last valid value.
+        if (derivedDB !== null) room.designDB = derivedDB;
       }
 
       if (field === 'classInOp') {
         const acph = ACPH_RANGES[value];
         if (acph) {
-          room.minAcph = acph.min;
+          room.minAcph    = acph.min;
           room.designAcph = acph.design;
         }
       }
 
       // Keep derived geometry consistent
-      const l = parseFloat(room.length) || 0;
-      const w = parseFloat(room.width) || 0;
-      const h = parseFloat(room.height) || 0;
+      const l = parseFloat(room.length)    || 0;
+      const w = parseFloat(room.width)     || 0;
+      const h = parseFloat(room.height)    || 0;
 
       if (field === 'length' || field === 'width') {
         room.floorArea = parseFloat((l * w).toFixed(1));
-        room.volume = parseFloat((room.floorArea * h).toFixed(1));
+        room.volume    = parseFloat((room.floorArea * h).toFixed(1));
       }
       if (field === 'height') {
         room.volume = parseFloat((room.floorArea * h).toFixed(1));
@@ -285,12 +262,32 @@ const roomSlice = createSlice({
       }
     },
 
+    /**
+     * setRoomAhu
+     * { roomId, ahuId }  —  assigns a single AHU to a room (radio-button model).
+     * Pass ahuId: null to clear the assignment.
+     *
+     * This is the correct action for all UI AHU assignment. rdsSelector reads
+     * assignedAhuIds[0] only — multi-AHU per room is not supported.
+     */
     setRoomAhu: (state, action) => {
       const { roomId, ahuId } = action.payload;
       const room = state.list.find(r => r.id === roomId);
       if (room) room.assignedAhuIds = ahuId ? [ahuId] : [];
     },
 
+    /**
+     * toggleRoomAhu
+     * ⚠️  DEPRECATED — DO NOT USE IN UI CODE.
+     *
+     * This reducer toggles AHU membership in assignedAhuIds, which can create
+     * multi-AHU-per-room state. rdsSelector reads assignedAhuIds[0] ONLY —
+     * any additional AHU IDs are silently ignored.
+     *
+     * AhuAssignment.jsx already uses setRoomAhu (radio-button model) correctly.
+     * This reducer is retained only to avoid breaking any legacy dispatch calls
+     * that may exist outside the audited UI files. New code must use setRoomAhu.
+     */
     toggleRoomAhu: (state, action) => {
       const { roomId, ahuId } = action.payload;
       const room = state.list.find(r => r.id === roomId);
@@ -311,7 +308,7 @@ const roomSlice = createSlice({
      */
     deleteRoom: (state, action) => {
       if (state.list.length <= 1) return;
-      const id = action.payload;
+      const id   = action.payload;
       state.list = state.list.filter(r => r.id !== id);
       if (state.activeRoomId === id) {
         state.activeRoomId = state.list[0].id;
