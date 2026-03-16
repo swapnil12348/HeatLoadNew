@@ -1,4 +1,3 @@
-import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 
 // Layout Components
@@ -6,7 +5,7 @@ import Header from './components/Layout/Header';
 import TabNav  from './components/Layout/TabNav';
 
 // Page Components
-import Home          from './pages/Home';
+import Home           from './pages/Home';
 import ProjectDetails from './pages/ProjectDetails';
 import AHUConfig      from './pages/AHUConfig';
 import RDSPage        from './pages/RDSPage';
@@ -15,25 +14,29 @@ import ClimateConfig  from './pages/ClimateConfig';
 import EnvelopeConfig from './pages/EnvelopeConfig';
 import ResultsPage    from './pages/ResultsPage';
 
-// ── Layout Wrapper ─────────────────────────────────────────────────────────
+// ── AppLayout ──────────────────────────────────────────────────────────────
 //
-// BUG-16 FIX: the previous layout used min-h-screen on the outer div and
-// py-6 padding on <main>. Pages that needed full-height layouts subtracted
-// only the header height (64px) from 100vh, ignoring:
-//   - TabNav height   (~44px)
-//   - main py-6       (24px top padding)
-// This caused those pages to overflow their container by ~68px, breaking
-// sticky sidebars and internal scroll areas.
+// CHANGELOG
 //
-// Fix: make the outer wrapper a FIXED-HEIGHT flex column (h-screen, not
-// min-h-screen). Header and TabNav shrink to their natural content height.
-// <main> takes flex-1 and overflow-hidden — it fills exactly the remaining
-// viewport height regardless of what Header/TabNav actually measure.
+//   v2.0 — Fixed full-height layout overflow (was: min-h-screen + py-6 padding).
 //
-// Pages that need full-height internal scroll (AHU, Envelope, RDS, Room)
-// use h-full instead of calc(100vh - Npx). Pages that scroll naturally
-// (Project, Climate, Results) work unchanged since main overflow-auto
-// lets them scroll within the flex-1 container.
+//     The previous layout used min-h-screen on the outer div and py-6 padding
+//     on <main>. Pages needing full-height layouts subtracted only the header
+//     height (64px) from 100vh, ignoring:
+//       - TabNav height  (~44px)
+//       - main py-6      (24px top padding)
+//     This caused those pages to overflow by ~68px, breaking sticky sidebars
+//     and internal scroll areas.
+//
+//     Fix: outer wrapper is h-screen (fixed height, not min-h-screen).
+//     Header and TabNav shrink to natural content height. <main> takes flex-1
+//     and overflow-hidden — fills exactly the remaining viewport height
+//     regardless of what Header/TabNav actually measure.
+//
+//     Pages needing full-height internal scroll (AHU, Envelope, RDS, Room)
+//     use h-full and manage their own internal overflow.
+//     Naturally-scrolling pages (Project, Climate, Results) work unchanged —
+//     overflow-auto on <main> lets them scroll within the flex-1 container.
 //
 const AppLayout = () => (
   <div className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">

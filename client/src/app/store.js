@@ -7,11 +7,15 @@ export const store = configureStore({
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializabilityCheck: {
-        // Ignore paths where ASHRAE calcs may produce NaN/Infinity
-        ignoredPaths: ['climate', 'results'],
+        // climate slice can hold transient NaN while the user is typing
+        // a numeric field before blurring. All other slices are safe.
+        // Note: calculation results (features/results/*) are pure selectors
+        // and never enter Redux state — no path for them is needed here.
+        ignoredPaths: ['climate'],
       },
     }),
 });
 
 export default store;
+
 if (import.meta.env.DEV) window.__store = store;
