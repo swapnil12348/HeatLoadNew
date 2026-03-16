@@ -8,7 +8,7 @@
  *
  *     Two related bugs fixed together:
  *
- *     BUG A — Missing designDB field (root cause in roomSlice):
+ *     BUG A — Missing designDB field:
  *       roomSlice stored only designTemp (°C). validateRoomHumidity read
  *       room.designDB (°F), which was always undefined → parseFloat(undefined)
  *       = NaN → the isNaN(db) guard fired immediately, returning an
@@ -18,36 +18,31 @@
  *       Primary fix: roomSlice.js now derives and stores designDB (°F) from
  *       designTemp (°C) and keeps it in sync via updateRoom().
  *
- *       Secondary fix here: if designDB is still absent (e.g. legacy persisted
+ *       Secondary fix here: if designDB is still absent (legacy persisted
  *       state, unit tests that don't include designDB), fall back to converting
  *       room.designTemp (°C) to °F. This makes validateRoomHumidity robust
- *       against incomplete room objects regardless of the roomSlice version.
+ *       against incomplete room objects regardless of roomSlice version.
  *
  *     BUG B — calculateDewPoint(NaN, rh) returns 0 (not null):
- *       psychro.js calculateDewPoint() returns 0 (not null) when db is NaN
- *       (the isNaN guard uses `return 0` for non-numeric input — legacy-safe).
- *       If Bug A occurred, db = NaN reached calculateDewPoint and returned 0.
- *       Then (0 − 32) × 5/9 = −17.8°C was used as a dew point:
- *         dpRaw = 0  →  dpC = −17.8  →  compared against dpCMax = −40
- *         Result: dpC (−17.8) > dpCMax (−40) → error fires for any dpCMax room
- *         even though the root cause was invalid input, not a real humidity violation.
+ *       psychro.js calculateDewPoint() returns 0 for non-numeric input (legacy-safe).
+ *       If Bug A occurred, db = NaN → calculateDewPoint returned 0 → dpC = −17.8°C
+ *       → compared against dpCMax = −40 → false positives for every dry room.
  *
- *       Fix: the `rawDB` derivation below ensures db is always a valid number
- *       before calculateDewPoint is called when room data is well-formed.
- *       An explicit NaN check on db before calculateDewPoint is also added as
- *       a secondary guard for belt-and-suspenders protection.
+ *       Fix: the rawDB derivation ensures db is always a valid number before
+ *       calculateDewPoint is called. An explicit NaN check on db before
+ *       calculateDewPoint is added as secondary belt-and-suspenders protection.
  *
  * CHANGELOG v2.2:
  *
- *   BUG-TIER1-02 FIX — validateSupplyAirState(): elevFt now passed to
+ *   BUG-TIER1-02 — validateSupplyAirState(): elevFt now passed to
  *   calculateGrains() and calculateRH().
  *
  * CHANGELOG v2.1:
  *
- *   CRITICAL-01 FIX — Removed import of saturationPressure from psychro.js.
- *   HIGH-05 FIX — HUMIDITY_STANDARDS updated for current industry practice.
- *   MEDIUM-01 FIX — validateSupplyAirState() now accepts elevFt parameter.
- *   MEDIUM-02 FIX (in psychro.js) — calculateDewPoint returns null for out-of-range.
+ *   CRITICAL-01 — Removed import of saturationPressure from psychro.js.
+ *   HIGH-05     — HUMIDITY_STANDARDS updated for current industry practice.
+ *   MEDIUM-01   — validateSupplyAirState() now accepts elevFt parameter.
+ *   MEDIUM-02 (in psychro.js) — calculateDewPoint returns null for out-of-range.
  */
 
 import {
@@ -194,8 +189,8 @@ export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
   if (isNaN(rhNum))  errors.push('Relative humidity is not a valid number.');
   if (errors.length) return makeResult(errors, warnings);
 
-  if (rhNum < 0)   errors.push(`RH cannot be negative (got ${rhNum}%).`);
-  if (rhNum > 100) errors.push(`RH exceeds 100% (got ${rhNum.toFixed(1)}%).`);
+  if (rhNum < 0)     errors.push(`RH cannot be negative (got ${rhNum}%).`);
+  if (rhNum > 100)   errors.push(`RH exceeds 100% (got ${rhNum.toFixed(1)}%).`);
   if (dbFNum < -100) errors.push(`DB temperature ${dbFNum}°F is below psychrometric model range.`);
   if (dbFNum >  250) errors.push(`DB temperature ${dbFNum}°F is above psychrometric model range.`);
 
@@ -263,11 +258,9 @@ export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
 /**
  * validateRoomHumidity(room, standardKey)
  *
- * FIX-PVAL-DB-01: designDB fallback added.
- *
- * roomSlice (v2.1+) stores designDB (°F) derived from designTemp (°C).
- * For legacy persisted state or unit tests that omit designDB, this function
- * falls back to converting room.designTemp (°C) → °F automatically.
+ * roomSlice v2.1+ stores designDB (°F) derived from designTemp (°C).
+ * For legacy persisted state or unit tests that omit designDB, falls back
+ * to converting room.designTemp (°C) → °F automatically.
  *
  * Without this fallback, parseFloat(undefined) = NaN causes the isNaN guard
  * to fire before any humidity check runs, producing a misleading
@@ -283,16 +276,11 @@ export const validateRoomHumidity = (room, standardKey) => {
     return makeResult([], warnings);
   }
 
-  const rh = parseFloat(room.designRH);
+  const rh       = parseFloat(room.designRH);
   const roomName = room.name || 'Room';
 
-  // FIX-PVAL-DB-01: Accept designDB (°F) first; fall back to converting designTemp (°C).
-  //
-  // roomSlice v2.1+ stores designDB derived from designTemp and keeps it in sync.
-  // For older persisted state or test objects lacking designDB, we derive it here.
-  // This prevents every room from hitting the isNaN(db) guard below.
-  //
-  // Conversion: designDB = designTemp × 9/5 + 32  (exact per ASHRAE IP units)
+  // Accept designDB (°F) first; fall back to converting designTemp (°C).
+  // Conversion: designTemp × 9/5 + 32 (exact per ASHRAE IP units).
   const rawDB = room.designDB != null
     ? parseFloat(room.designDB)
     : room.designTemp != null
@@ -332,10 +320,9 @@ export const validateRoomHumidity = (room, standardKey) => {
   }
 
   if (standard.dpCMax !== undefined) {
-    // FIX-PVAL-DB-01 secondary guard: db is now guaranteed valid above.
-    // calculateDewPoint(NaN, rh) returns 0 (not null) — the 0 sentinel would
-    // then produce dpC = −17.8°C, firing false positives for dpCMax rooms.
-    // This guard is moot when db is valid, but retained as belt-and-suspenders.
+    // db is guaranteed valid at this point (isNaN guard above).
+    // Secondary belt-and-suspenders: calculateDewPoint(NaN, rh) returns 0,
+    // not null — the explicit isNaN(db) check prevents that path.
     if (isNaN(db)) {
       warnings.push(
         `${roomName}: cannot validate frost point — design DB temperature is invalid.`
@@ -373,8 +360,9 @@ export const validateRoomHumidity = (room, standardKey) => {
 /**
  * validateSupplyAirState(supply, room, elevFt?)
  *
- * BUG-TIER1-02 FIX (v2.2): elevFt now passed to calculateGrains() and calculateRH().
- * MEDIUM-01 FIX (v2.1): sensibleFactor(elevFt) replaces hardcoded 1.08.
+ * elevFt passed to calculateGrains() and calculateRH() for altitude correction.
+ * sensibleFactor(elevFt) replaces hardcoded 1.08.
+ * Mirrors the designDB fallback from validateRoomHumidity for legacy room objects.
  */
 export const validateSupplyAirState = (supply, room, elevFt = 0) => {
   const errors   = [];
@@ -384,9 +372,7 @@ export const validateSupplyAirState = (supply, room, elevFt = 0) => {
   const supplyDB     = parseFloat(supply.dbF);
   const supplyCFM    = parseFloat(supply.cfm);
 
-  // FIX-PVAL-DB-02: mirror the FIX-PVAL-DB-01 fallback from validateRoomHumidity.
-  // roomSlice v2.1+ stores designDB (°F). For legacy persisted state that only
-  // has designTemp (°C), derive designDB here to prevent a false NaN failure.
+  // Accept designDB (°F) first; fall back to converting designTemp (°C).
   const rawRoomDB = room.designDB != null
     ? parseFloat(room.designDB)
     : room.designTemp != null

@@ -12,65 +12,38 @@
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   LOW-TIER1-05 FIX — GLASS_CLTD lookup made safe against undefined season.
+ *   LOW-TIER1-05 — GLASS_CLTD lookup made safe against undefined season.
  *
- *     The previous pattern:
- *       const glassBaseCLTD = GLASS_CLTD[season] ?? 15;
+ *     The previous `GLASS_CLTD[season] ?? 15` fallback would silently apply
+ *     a 15°F CLTD to any unrecognised season — an order-of-magnitude error
+ *     in winter. The HIGH-04 fix intentionally removed the winter key from
+ *     GLASS_CLTD; winter glass conduction must use U×A×ΔT, not CLTD.
  *
- *     The `?? 15` fallback silently fires if an unrecognised season string is
- *     passed, or if a future element type reaches this lookup in winter (the
- *     winter key was intentionally removed from GLASS_CLTD by the HIGH-04 fix).
- *     15°F CLTD in winter is an order-of-magnitude error — winter glass
- *     conduction must use U×A×ΔT, not CLTD.
- *
- *     Fix: the lookup now calls a guard that logs a console.error and returns
- *     a zero result object rather than silently applying a wrong CLTD value.
- *     This turns a silent wrong-number bug into a visible developer error.
- *
- *     The existing winter short-circuit (before the CLTD lookup) remains in
- *     place — this guard is a second line of defence for future code additions.
+ *     Fix: the lookup now calls getGlassCLTD() which logs console.error and
+ *     returns null instead of a wrong value. Callers return a zero conduction
+ *     result on null — making the failure visible rather than silent.
  *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
  *   BUG-GL-02 [HIGH]: Winter solar credit used incorrect CLF for shaded glass.
  *
- *     The clf variable was computed once (before the season branch) using the
- *     summer CLF table for shaded glass. In winter, clf was then applied to
- *     the solar credit calculation:
- *       solar = shgc × shgf × area × clf   ← clf = summer shaded value (e.g. 0.47)
+ *     The CLF table (ASHRAE CHLCM 2nd Ed., Table 13) is a cooling-load concept:
+ *     it accounts for radiant heat storage in room mass, reducing the instantaneous
+ *     cooling load below peak solar gain. This concept does not apply to heating —
+ *     in winter any solar gain immediately offsets the heating requirement,
+ *     regardless of room thermal mass. Applying a summer CLF in winter was
+ *     understating the solar heating credit.
  *
- *     Problem: for shaded glass in winter, this UNDERSTATES the solar credit
- *     by the CLF factor (0.47–0.75). A smaller credit means the calculated
- *     heating load is LARGER than it should be — the heating plant is
- *     oversized, which is non-conservative from a first-cost standpoint but
- *     operationally safe.
+ *     Fix: CLF = 1.0 for all glass in winter.
  *
- *     More critically: the CLF table (ASHRAE CHLCM 2nd Ed., Table 13) is
- *     defined for COOLING load calculations at peak summer hour. It accounts
- *     for radiant heat storage in the room mass — some solar gain is absorbed
- *     by the structure and released later, so the instantaneous cooling load
- *     is less than the peak solar gain. This concept does not apply to heating:
- *     in winter, any solar gain is immediately beneficial (reduces heating
- *     load) regardless of room mass. CLF < 1 in winter is physically wrong.
- *
- *     Fix: for winter season, always use CLF = 1.0 for solar (both shaded and
- *     unshaded). This correctly represents the full instantaneous solar credit
- *     against the winter heating load.
- *
- *     Impact for 1%RH critical facilities:
- *       South-facing glass (S orientation, 32°N, winter): SHGF = 118 BTU/hr·ft²
- *       For a shaded window (CLF_medium = 0.55), this fix changes:
- *         Old credit: 0.86 × 118 × 100ft² × 0.55 = 5,580 BTU/hr
- *         New credit: 0.86 × 118 × 100ft² × 1.00 = 10,148 BTU/hr
- *       Difference: 4,568 BTU/hr per 100ft² of south-facing shaded glass.
- *       For a pharma facility with significant south glazing, winter heating
- *       load was being overstated by this amount.
+ *     Impact example (S-facing shaded glass, CLF_medium = 0.55, 100 ft²):
+ *       Old credit: 0.86 × 118 × 100 × 0.55 = 5,580 BTU/hr
+ *       New credit: 0.86 × 118 × 100 × 1.00 = 10,148 BTU/hr  (+4,568 BTU/hr)
  *
  *   BUG-GL-04 [LOW]: Guard added for u=0 glass conduction path.
- *     calcWallGain / calcRoofGain both guard: if (area === 0 || u === 0) return 0
- *     calcGlassGain only guarded area === 0. If u=0 (custom glass with unset
- *     U-value), conduction = 0 mathematically, but the guard makes the intent
- *     explicit and consistent with all opaque element functions.
+ *     Consistent with calcWallGain / calcRoofGain — if (area === 0 || u === 0)
+ *     the function returns zero rather than computing mathematically-zero
+ *     values through the full calculation path.
  *
  * RETAINED FIXES (v1.x):
  *   FIX-05 — Solar gain: SHGC preferred over legacy SC.
@@ -99,19 +72,14 @@ import {
 /**
  * getGlassCLTD(season)
  *
- * LOW-TIER1-05 FIX: replaces `GLASS_CLTD[season] ?? 15` pattern.
+ * Returns the base glass CLTD for a season, or null if the key is not found.
  *
- * The HIGH-04 fix intentionally removed the winter key from GLASS_CLTD.
- * The previous `?? 15` fallback would silently apply 15°F CLTD to any
- * unrecognised season — including winter if a future element type reaches
- * this lookup without the correct short-circuit in place.
+ * The winter key is intentionally absent from GLASS_CLTD — winter glass
+ * conduction uses U×A×ΔT (handled by the season branch in calcGlassGain
+ * before this function is ever called). This guard is a second line of
+ * defence against future code additions reaching the CLTD path in winter.
  *
- * 15°F CLTD in winter is an order-of-magnitude error. Winter glass
- * conduction must use U×A×ΔT (already handled above this call in
- * calcGlassGain). This guard is a second line of defence.
- *
- * Returns null if the season key is not found. Callers must check for null
- * and return a zero result — the error is logged so developers can see it.
+ * Returns null on failure so callers return zero rather than a phantom load.
  *
  * @param {string} season
  * @returns {number|null}
@@ -149,10 +117,8 @@ const getGlassCLTD = (season) => {
  *     glass.shaded absent  → treat as unshaded (conservative for cooling)
  *
  *   Winter (heating credit):
- *     CLF = 1.0 always (BUG-GL-02 FIX).
- *     Summer CLF accounts for radiant storage in room mass — this concept
- *     does not apply when solar is a heating credit. Any solar gain immediately
- *     offsets the heating load regardless of room thermal mass.
+ *     CLF = 1.0 always — solar gain directly offsets heating load with no
+ *     radiant storage delay. See BUG-GL-02 in the CHANGELOG.
  *
  * @param {object} glass      - glass element from envelopeSlice
  * @param {object} climate    - climate state from climateSlice
@@ -173,7 +139,6 @@ export const calcGlassGain = (
   const area = parseFloat(glass.area)   || 0;
   const u    = parseFloat(glass.uValue) || 0;
 
-  // BUG-GL-04 FIX: guard u=0 consistently with calcWallGain / calcRoofGain.
   if (area === 0 || u === 0) return { conduction: 0, solar: 0, total: 0 };
 
   const orientation = glass.orientation || 'E';
@@ -184,24 +149,13 @@ export const calcGlassGain = (
 
   // ── Winter: steady-state conduction + full solar credit ───────────────────
   if (season === 'winter') {
-    // Conduction: negative when dbOut < tRoom (heat loss through glass)
+    // Conduction: negative when dbOut < tRoom (heat loss through glass).
     const conduction = u * area * (dbOut - tRoom);
 
-    // BUG-GL-02 FIX: CLF = 1.0 for all glass in winter.
-    //
-    // The summer CLF table is a COOLING LOAD concept — it accounts for
-    // radiant heat storage delaying the cooling load. In winter, solar
-    // gain directly reduces the heating requirement with no storage delay.
-    // Applying a summer CLF here was understating the heating credit.
-    //
-    // winter SHGF values (e.g. S at 32°N: 118 BTU/hr·ft²) are already
-    // lower than summer values — the season is correctly represented
-    // through getCorrectedSHGF(). CLF should not further reduce it.
-    const clfWinter = 1.0;
-    const solar     = shgc * shgf * area * clfWinter;
+    // CLF = 1.0 in winter — solar gain is an immediate heating credit,
+    // not subject to radiant storage delay. See BUG-GL-02 in CHANGELOG.
+    const solar = shgc * shgf * area * 1.0;
 
-    // solar is positive (heat INTO space from sun) — reduces heating load.
-    // total = conduction (negative, heat loss) + solar (positive, credit).
     return {
       conduction: Math.round(conduction),
       solar:      Math.round(solar),
@@ -211,13 +165,8 @@ export const calcGlassGain = (
 
   // ── Summer / Monsoon: CLTD conduction + CLF-weighted solar ────────────────
 
-  // FIX MED-09: CLF selection based on interior shading presence.
-  //   glass.shaded = true  → CLF (interior blind/drape table)
-  //   glass.shaded = false/absent → CLF_UNSHADED = 1.0
-  //
-  // Conservative default: unshaded (higher solar load). If a window has
-  // blinds, the engineer must explicitly set glass.shaded = true in the
-  // envelope config to receive the CLF reduction.
+  // CLF selection: shaded glass uses the interior-shading table;
+  // unshaded defaults to CLF_UNSHADED = 1.0 (conservative for cooling).
   const isShaded = glass.shaded === true;
   const clf      = isShaded
     ? (CLF[orientation]?.[roomMass] ?? CLF['N']['medium'])
@@ -225,15 +174,13 @@ export const calcGlassGain = (
 
   const solar = shgc * shgf * area * clf;
 
-  // Glass conduction via CLTD method (ASHRAE CHLCM §3).
-  // No orientation LM correction for glass — CLTD is position-independent.
-  // Glass conduction is driven by DB difference, not solar position.
-
-  // LOW-TIER1-05 FIX: use getGlassCLTD() instead of GLASS_CLTD[season] ?? 15.
-  // If null is returned (should never happen here — winter is already handled
-  // above), return a zero result rather than applying a wrong CLTD value.
+  // Glass CLTD method (ASHRAE CHLCM §3).
+  // lm = 0: no orientation correction for glass — conduction is driven by
+  // DB temperature difference, not solar position.
   const glassBaseCLTD = getGlassCLTD(season);
   if (glassBaseCLTD === null) {
+    // Should not be reachable in normal operation (winter is handled above).
+    // Return solar component intact; suppress only the failed conduction path.
     return { conduction: 0, solar: Math.round(solar), total: Math.round(solar) };
   }
 
@@ -258,13 +205,12 @@ export const calcGlassGain = (
  *
  * Skylights treated as horizontal glass (orientation = 'Horizontal').
  * All fixes from calcGlassGain apply — including BUG-GL-02 (winter CLF=1.0)
- * and LOW-TIER1-05 (safe GLASS_CLTD lookup via getGlassCLTD).
+ * and the safe GLASS_CLTD lookup via getGlassCLTD().
  *
  * Note: horizontal skylights have the highest summer SHGF (290 BTU/hr·ft²
  * at sea level, 32°N) and the highest winter solar credit. Correct CLF
  * treatment is particularly important for skylit pharma facilities where
- * skylights are used for circadian lighting and contribute meaningfully to
- * the winter heating credit balance.
+ * skylights contribute meaningfully to the winter heating credit balance.
  *
  * @param {object} skylight   - skylight element from envelopeSlice
  * @param {object} climate    - climate state

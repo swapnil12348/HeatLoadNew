@@ -3,6 +3,20 @@
  * Responsibility: Master project overview — rooms grouped by AHU system,
  *                 with click-to-edit side panel.
  *
+ * -- CHANGELOG v2.3 -----------------------------------------------------------
+ *
+ *   _calculationFailed surfaced in SummaryRow.
+ *
+ *     rdsSelector wraps each room's calculation in a try/catch. On failure it
+ *     returns { _calculationFailed: true, _error: msg } with all numeric
+ *     fields set to 0. Without this fix, a failed room was visually identical
+ *     to a correctly-calculated zero-load room — an engineer could read the
+ *     zeros as valid results.
+ *
+ *     Fix: SummaryRow checks roomData._calculationFailed. If true, the row
+ *     renders a red error banner instead of zeros, and clicking it opens the
+ *     detail panel so the engineer can inspect inputs.
+ *
  * -- CHANGELOG v2.2 -----------------------------------------------------------
  *
  *   BUG-UI-12 [MEDIUM — FALSY GUARD] — RSH / ERSH / GTSH conditionals in
@@ -23,7 +37,7 @@
 
 import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, AlertTriangle } from 'lucide-react';
 import { addNewRoom } from '../features/room/roomActions';
 import { selectAllAHUs, addAHU } from '../features/ahu/ahuSlice';
 import { selectAllRooms } from '../features/room/roomSlice';
@@ -45,6 +59,41 @@ const ISO_BADGE = {
 
 const SummaryRow = ({ roomData, ahus, onClick }) => {
   const ahu = ahus.find((a) => a.id === roomData.ahuId);
+
+  // If rdsSelector's catch block fired, _calculationFailed is true and all
+  // numeric fields are 0. Render an explicit error row so the engineer knows
+  // the zeros are not valid results — clicking still opens the detail panel.
+  if (roomData._calculationFailed) {
+    return (
+      <tr
+        onClick={onClick}
+        className="group hover:bg-red-50 cursor-pointer border-b border-red-100 bg-red-50/40 transition-all duration-200"
+      >
+        <td className="px-6 py-3 whitespace-nowrap" colSpan={7}>
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" aria-hidden="true" />
+            <div>
+              <div className="text-sm font-bold text-red-800">
+                {roomData.name || <span className="italic text-red-400">Unnamed</span>}
+                <span className="ml-2 text-xs font-normal text-red-600">
+                  — Calculation failed. Check inputs and console for details.
+                </span>
+              </div>
+              {roomData._error && (
+                <div className="text-[10px] font-mono text-red-500 mt-0.5 truncate max-w-xl">
+                  {roomData._error}
+                </div>
+              )}
+            </div>
+            <ChevronRight
+              className="w-5 h-5 text-red-300 group-hover:text-red-500 transition-colors ml-auto shrink-0"
+              aria-hidden="true"
+            />
+          </div>
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <tr
@@ -79,7 +128,7 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
         </span>
       </td>
 
-      {/* Area — BUG-UI-03 FIX: rdsRow.floorArea is ft² (CRIT-RDS-01). */}
+      {/* Area — rdsRow.floorArea is ft² (converted by rdsSelector). */}
       <td className="px-6 py-3 text-sm text-slate-600 font-mono">
         {roomData.floorArea
           ? parseFloat(roomData.floorArea).toLocaleString(undefined, { maximumFractionDigits: 0 })
@@ -96,11 +145,9 @@ const SummaryRow = ({ roomData, ahus, onClick }) => {
       </td>
 
       {/* Sensible heat — ERSH / RSH / GTSH
-          BUG-UI-12 FIX: null + NaN guard replaces plain truthy check.
-          0 is a valid sensible load (e.g. room with only latent gains from
-          people in a cold space). A plain `roomData.ersh ?` check would show
-          '—' for 0, which is incorrect. `!= null` passes 0 through correctly
-          while still guarding against undefined and NaN from missing calc fields. */}
+          null + NaN guard: 0 is a valid sensible load (e.g. room with only
+          latent gains). A plain `roomData.ersh ?` check shows '—' for 0.
+          `!= null` passes 0 correctly while guarding against undefined/NaN. */}
       <td className="px-6 py-3 text-right">
         <div className="text-sm font-bold text-violet-600">
           {roomData.ersh != null && !isNaN(roomData.ersh)
@@ -168,6 +215,9 @@ export default function RDSPage() {
   const selectedRawRoom = rawRooms.find((r) => r.id === selectedRoomId) ?? null;
   const selectedRdsRow  = allRdsRows.find((r) => r.id === selectedRoomId) ?? null;
 
+  // Count rooms with failed calculations for the header indicator.
+  const failedRoomCount = allRdsRows.filter((r) => r._calculationFailed).length;
+
   return (
     <div className="flex h-full bg-slate-50 relative overflow-hidden">
 
@@ -197,6 +247,15 @@ export default function RDSPage() {
                   <span className="text-slate-200">·</span>
                   <span className="text-sm font-medium text-slate-500">
                     {totalCFM.toLocaleString()} CFM total
+                  </span>
+                </>
+              )}
+              {failedRoomCount > 0 && (
+                <>
+                  <span className="text-slate-200">·</span>
+                  <span className="text-sm font-bold text-red-600 flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5" aria-hidden="true" />
+                    {failedRoomCount} calculation error{failedRoomCount !== 1 ? 's' : ''}
                   </span>
                 </>
               )}
@@ -235,6 +294,23 @@ export default function RDSPage() {
         {/* Scrollable content */}
         <div className="flex-1 overflow-auto p-8">
           <div className="max-w-6xl mx-auto space-y-6">
+
+            {/* Calculation failure banner — shown when any room's rdsSelector catch fired */}
+            {failedRoomCount > 0 && (
+              <div className="bg-red-50 border border-red-400 rounded-xl p-4 flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="text-sm font-bold text-red-900">
+                    {failedRoomCount} room{failedRoomCount !== 1 ? 's' : ''} failed to calculate
+                  </p>
+                  <p className="text-xs text-red-700 mt-1 leading-relaxed">
+                    All values for these rooms are 0 — results are NOT valid.
+                    Open the room detail panel and check that all required inputs are set.
+                    Error details are shown in the row and in the browser console.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* High humidification warning banner */}
             {highHumidRooms.length > 0 && (

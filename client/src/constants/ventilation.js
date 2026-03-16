@@ -2,7 +2,7 @@
  * ventilation.js
  * ASHRAE 62.1-2022 Ventilation Rate Procedure — Table 6-1
  *
- * CHANGELOG v2.1:
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   MEDIUM-03 FIX — Added battery-leadacid ventilation category.
  *
@@ -22,10 +22,6 @@
  *       Li-ion category:     0.18 cfm/ft² → 1,800 CFM OA minimum
  *       Lead-acid category:  1.0  cfm/ft² → 10,000 CFM OA minimum
  *       Difference: 8,200 CFM — a 5.6× error in OA sizing.
- *
- *     Additionally, H₂SO₄ mist from electrolyte agitation requires a separate
- *     acid-resistant exhaust system — distinct from the NMP/HF exhaust
- *     required for Li-ion electrode/electrolyte processes.
  *
  * Reference: ANSI/ASHRAE Standard 62.1-2022, Section 6.2 — VRP
  */
@@ -91,57 +87,44 @@ export const VENTILATION_CATEGORIES = {
   },
 
   /**
-   * battery-leadacid — MEDIUM-03 FIX: NEW category.
+   * battery-leadacid — Lead-acid battery formation / charging rooms.
    *
-   * Lead-acid battery formation / charging rooms require fundamentally
-   * different ventilation from Li-ion due to H₂ gas evolution.
+   * Require fundamentally different ventilation from Li-ion due to H₂ gas evolution.
    *
    * REGULATORY BASIS:
    *   OSHA 29 CFR 1926.403(i) — Battery Charging:
-   *     "Adequate ventilation shall be provided for all battery-charging
-   *      installations to prevent the accumulation of explosive gases."
-   *     Practical interpretation: minimum 1 CFM/ft² continuous supply,
-   *     or engineered ventilation to keep H₂ < 1% by volume (25% LEL).
+   *     Minimum 1 CFM/ft² continuous supply, or engineered ventilation to keep
+   *     H₂ < 1% by volume (25% LEL).
+   *   IEEE 1184-2006 §6.8: size exhaust from H₂ evolution rate per cell
+   *     (0.04 ft³/hr per Ah per cell during formation cycling).
+   *   NFPA 70 Article 480.9(A): ventilation per manufacturer spec or AHJ.
    *
-   *   IEEE 1184-2006 — Guide for Batteries for Uninterruptible Power Systems:
-   *     Section 6.8: ventilation calculation for H₂ evolution rate per cell.
-   *     For formation cycling (high charge rate): 0.04 ft³/hr per Ah per cell.
-   *     Process engineer must size actual exhaust from H₂ evolution calc.
-   *
-   *   NFPA 70 Article 480 — Storage Batteries:
-   *     Section 480.9(A): ventilation per manufacturer spec or local authority.
-   *
-   * ra: 1.0 CFM/ft² — OSHA minimum for battery charging areas.
-   * This greatly exceeds the ASHRAE 62.1 minimum of 0.18 CFM/ft² for labs.
-   * The OSHA basis governs and must be applied to comply with 1926.403(i).
+   * ra: 1.0 CFM/ft² — OSHA 29 CFR 1926.403(i) minimum for battery charging areas.
+   *   Greatly exceeds ASHRAE 62.1 minimum of 0.18 CFM/ft² for labs.
+   *   OSHA basis governs — must be applied to comply with 1926.403(i).
    *
    * minAch: 12 — conservative basis for high-bay formation areas.
-   * For a 40-ft ceiling bay (typical Exide formation hall):
-   *   12 ACPH × (area × 40 ft) / 60 = 8 cfm/ft²
-   *   vs OSHA 1 CFM/ft² minimum → 12 ACPH provides 8× the minimum
-   * This correctly ensures adequate H₂ dilution in high-bay spaces where
-   * H₂ (lighter than air) stratifies near the ceiling if ventilation is poor.
+   *   For a 40-ft ceiling bay (typical Exide formation hall):
+   *   12 ACPH × (area × 40 ft) / 60 = 8 cfm/ft² vs OSHA 1 CFM/ft² minimum.
+   *   H₂ (lighter than air) stratifies near the ceiling — high-bay spaces
+   *   require elevated ACH to ensure adequate dilution near the roof.
    *
    * EXHAUST SYSTEM NOTE:
-   *   H₂SO₄ mist from electrolyte agitation requires a SEPARATE acid-resistant
-   *   exhaust system with a wet scrubber. Do NOT combine with general exhaust.
-   *   Duct material: Type 316L SS or FRP (fibreglass reinforced plastic).
-   *   This is NOT the same exhaust as Li-ion NMP/HF scrubber systems.
+   *   H₂SO₄ mist requires a SEPARATE acid-resistant exhaust system with wet scrubber.
+   *   Duct material: Type 316L SS or FRP. Do NOT combine with general exhaust.
+   *   Not the same as Li-ion NMP/HF scrubber systems.
    */
   'battery-leadacid': {
-    label:     'Battery — Lead-Acid Formation / Charging (Exide / EnerSys)',
+    label:     'Battery — Lead-Acid Formation / Charging',
     rp:        5,
     ra:        1.0,      // OSHA 29 CFR 1926.403(i): 1 CFM/ft² minimum supply
     defaultEz: 1.0,
     minAch:    12,       // H₂ dilution in high-bay — conservative basis
     note:      'OSHA 29 CFR 1926.403(i): minimum 1 CFM/ft² for battery charging rooms. '
-             + 'IEEE 1184-2006 §6.8: size exhaust from H₂ evolution rate per cell '
-             + '(0.04 ft³/hr per Ah per cell during formation cycling). '
-             + 'ra:1.0 is the OSHA minimum — higher required for fast-charge / formation. '
+             + 'IEEE 1184-2006 §6.8: size exhaust from H₂ evolution rate per cell. '
              + 'H₂SO₄ mist requires acid-resistant (316L SS or FRP) exhaust + wet scrubber. '
              + 'Do NOT combine H₂SO₄ exhaust with general building exhaust system. '
-             + 'Humidity target: 30–60%RH (condensation on terminals must be prevented). '
-             + 'Sub-10%RH desiccant conditioning is NOT required and NOT appropriate.',
+             + 'Humidity target: 30–60%RH. Sub-10%RH desiccant is NOT required here.',
   },
 
   // ── Solar / PV Manufacturing ───────────────────────────────────────────────
@@ -165,10 +148,9 @@ export const VENTILATION_CATEGORIES = {
   },
 
   // ── Corridor / Lobby ──────────────────────────────────────────────────────
-  // FIX HIGH-01: Rp = 0 (non-occupiable transitional spaces — ASHRAE 62.1 Table 6-1)
   corridor: {
     label:     'Corridor / Lobby',
-    rp:        0,
+    rp:        0,        // Non-occupiable transitional space — ASHRAE 62.1 Table 6-1
     ra:        0.06,
     defaultEz: 1.0,
     minAch:    0,
@@ -176,10 +158,9 @@ export const VENTILATION_CATEGORIES = {
   },
 
   // ── Utility / Mechanical Room ──────────────────────────────────────────────
-  // FIX HIGH-02: Rp = 0 (no regular occupancy per ASHRAE 62.1)
   utility: {
     label:     'Utility / Mechanical Room',
-    rp:        0,
+    rp:        0,        // No regular occupancy — ASHRAE 62.1 Table 6-1
     ra:        0.06,
     defaultEz: 1.0,
     minAch:    0,
@@ -233,14 +214,13 @@ export const getRpRa = (ventCategory) => {
  * calculateVbz(ventCategory, pplCount, floorAreaFt2, ezOverride?)
  *
  * Vbz = Rp × Pz + Ra × Az
- * Voz = Vbz / Ez
- *
- * FIX LOW-01: Returns raw float. Rounding is the caller's responsibility.
+ * Returns Voz = Vbz / Ez — the zone OA intake rate (CFM).
+ * Rounding is the caller's responsibility.
  */
 export const calculateVbz = (ventCategory, pplCount, floorAreaFt2, ezOverride) => {
   const { rp, ra, ez } = getRpRa(ventCategory);
   const effectiveEz = ezOverride ?? ez;
-  const vbz = (rp * (parseFloat(pplCount) || 0))
+  const vbz = (rp * (parseFloat(pplCount)    || 0))
             + (ra * (parseFloat(floorAreaFt2) || 0));
   return vbz / effectiveEz;
 };
@@ -248,8 +228,9 @@ export const calculateVbz = (ventCategory, pplCount, floorAreaFt2, ezOverride) =
 /**
  * calculateMinAchCfm(ventCategory, volumeFt3)
  *
- * Returns the minimum OA CFM from the regulatory ACH floor.
- * airQuantities.js must take max(calculateVbz, calculateMinAchCfm, exhaustMakeup).
+ * Returns the minimum supply CFM from the regulatory ACH floor for this
+ * ventilation category (NFPA 855, OSHA, GMP Annex 1 etc.).
+ * airQuantities.js takes max(calculateVbz, calculateMinAchCfm, exhaustMakeup).
  */
 export const calculateMinAchCfm = (ventCategory, volumeFt3) => {
   const { minAch } = getRpRa(ventCategory);
@@ -258,6 +239,9 @@ export const calculateMinAchCfm = (ventCategory, volumeFt3) => {
 };
 
 // ── UI option list ────────────────────────────────────────────────────────────
+// Auto-generated from VENTILATION_CATEGORIES — always in sync.
+// Import this in any component that needs a ventilation category dropdown
+// rather than defining a local copy.
 export const VENTILATION_CATEGORY_OPTIONS = Object.entries(VENTILATION_CATEGORIES)
   .map(([value, cat]) => ({ value, label: cat.label }));
 

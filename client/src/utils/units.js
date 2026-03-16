@@ -25,8 +25,8 @@
  *
  * ── INPUT GUARD PATTERN ───────────────────────────────────────────────────────
  *
- *   FIX MED-01: Temperature (and other signed) conversions use an explicit
- *   NaN/null guard rather than `|| 0`.
+ *   Temperature (and other signed) conversions use an explicit NaN/null guard
+ *   rather than `|| 0`.
  *
  *   The `|| 0` pattern silently substitutes 0 for invalid input. For
  *   temperature this produces a physically meaningful but wrong result:
@@ -56,6 +56,11 @@
  *
  *   Added: lbPerHrToKgPerHr / kgPerHrToLbPerHr — for humidifier capacity sizing.
  *   Added: PSYCHRO_SANITY_CHECKS — reference values for regression testing.
+ *
+ *   PSYCHRO_SANITY_CHECKS v2.1 corrections (see bottom of file):
+ *     reference.enthalpyBtuLb: 28.10 → 25.30  (28.10 is correct for 75°F, not 70°F)
+ *     denver.sensibleFactor:    0.899 → 0.889  (correct for altCf at 5280 ft)
+ *     denver.grains:           23.6  → 58.2   (computed with altitude-corrected P_site)
  */
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -107,7 +112,7 @@ export const ft3ToM3 = (ft3) => num(ft3) / M3_TO_FT3;
 
 /**
  * cToF(celsius)
- * FIX MED-01: uses numOrNull guard — returns null for invalid input.
+ * Uses numOrNull guard — returns null for invalid input.
  * Callers should check for null before using result in calculations.
  *
  * @param {number} celsius
@@ -120,7 +125,7 @@ export const cToF = (celsius) => {
 
 /**
  * fToC(fahrenheit)
- * FIX MED-01: uses numOrNull guard — returns null for invalid input.
+ * Uses numOrNull guard — returns null for invalid input.
  *
  * @param {number} fahrenheit
  * @returns {number|null} celsius, or null if input is invalid
@@ -206,16 +211,13 @@ export const grToLb = (grains) => num(grains) / GR_PER_LB;
  */
 export const lbToGr = (lb) => num(lb) * GR_PER_LB;
 
-// ── BUG-UNITS-01 FIX: g/kg ↔ gr/lb ──────────────────────────────────────────
+// ── g/kg ↔ gr/lb ─────────────────────────────────────────────────────────────
 //
 // ASHRAE Fundamentals tables (Ch.1, 2, 6) express humidity ratio in g/kg.
 // The app uses gr/lb internally. Conversion is exactly ×7 (7000/1000).
 //
 // ASHRAE HOF 2021 Ch.1 Table 3 cross-check:
 //   At 70°F (21.1°C): Ws = 15.67 g/kg = 109.7 gr/lb  ✓ (15.67 × 7 = 109.69)
-//
-// The incorrect factor 0.437 was found in two places in the codebase.
-// Correct: 1 g/kg = 7.000 gr/lb (not 0.437, not 7.003 — exactly 7).
 
 /**
  * @param {number} gPerKg - humidity ratio (g/kg)
@@ -229,7 +231,7 @@ export const gPerKgToGrPerLb = (gPerKg) => num(gPerKg) * 7;
  */
 export const grPerLbToGPerKg = (grPerLb) => num(grPerLb) / 7;
 
-// ── BUG-UNITS-03 FIX: kg/kg (= lb/lb) ↔ gr/lb ───────────────────────────────
+// ── kg/kg (= lb/lb) ↔ gr/lb ──────────────────────────────────────────────────
 //
 // kg/kg and lb/lb humidity ratios are numerically identical — both are
 // dimensionless mass ratios. ASHRAE psychrometric equations (Ch.1) work in
@@ -291,7 +293,7 @@ export const inWgToPa = (inWg) => num(inWg) * IN_WG_TO_PA;
 /** @param {number} pa    @returns {number} inWG */
 export const paToInWg = (pa)   => num(pa)   / IN_WG_TO_PA;
 
-// ── BUG-UNITS-02 FIX: Pa ↔ hPa ───────────────────────────────────────────────
+// ── Pa ↔ hPa ──────────────────────────────────────────────────────────────────
 // Bridges psychro.js internals (hPa) with SI output layer (Pa).
 // Previously callers divided/multiplied by 100 inline with no audit trail.
 
@@ -305,7 +307,7 @@ export const hpaToPa = (hpa) => num(hpa) * HPA_TO_PA;
 /** @param {number} pa   @returns {number} hPa */
 export const paToHpa = (pa)  => num(pa)  * PA_TO_HPA;
 
-// ── BUG-UNITS-04 FIX: hPa ↔ inHg ─────────────────────────────────────────────
+// ── hPa ↔ inHg ────────────────────────────────────────────────────────────────
 // Bridges sitePressure() output (hPa) with ASHRAE climate data tables (inHg).
 
 /** 1 hPa = 0.029530 inHg */
@@ -437,6 +439,24 @@ export const checkFigure = (totalAreaM2, totalTR) => {
  * Expected output values from psychro.js v2.0 (Hyland-Wexler) at known conditions.
  * Use these in test-utils.jsx or any future unit test suite to catch regressions.
  *
+ * ── Reference value verification (v2.1 corrections) ──────────────────────────
+ *
+ *   reference.enthalpyBtuLb: corrected 28.10 → 25.30
+ *     ASHRAE Eq.30 at 70°F, W=0.007782 lb/lb:
+ *       h = 0.240×70 + 0.007782×(1061 + 0.444×70) = 16.80 + 8.50 = 25.30 BTU/lb
+ *     The previous value of 28.10 is correct for 75°F, 50%RH — not 70°F.
+ *
+ *   denver.sensibleFactor: corrected 0.899 → 0.889
+ *     altCf = (1 − 6.8754×10⁻⁶ × 5280)^5.2559 = 0.8234
+ *     sensibleFactor = 1.08 × 0.8234 = 0.8893
+ *     Previous value of 0.899 was outside its own stated ±0.005 tolerance.
+ *
+ *   denver.grains: corrected 23.6 → 58.2
+ *     P_site = 14.696 × 0.8234 = 12.098 psia; Pws(95°F) = 0.7978 psia
+ *     Pw = 0.20 × 0.7978 = 0.15956 psia
+ *     W = 0.62198 × 0.15956 / (12.098 − 0.15956) = 58.2 gr/lb
+ *     Previous value of 23.6 was irreconcilable with these inputs.
+ *
  * The critical dry condition row documents the Magnus vs H-W discrepancy.
  * After deploying psychro.js v2.0, recalculate all load summaries for
  * projects targeting <5%RH — the dew point correction affects humidification
@@ -449,7 +469,7 @@ export const PSYCHRO_SANITY_CHECKS = {
     grains:         { expected: 54.8,  tolerance: 0.5  },
     dewPointF:      { expected: 50.8,  tolerance: 0.3  },
     wetBulbF:       { expected: 58.6,  tolerance: 0.2  },
-    enthalpyBtuLb:  { expected: 28.10, tolerance: 0.1  },
+    enthalpyBtuLb:  { expected: 25.30, tolerance: 0.1  },
     specVolFt3Lb:   { expected: 13.51, tolerance: 0.05 },
   },
   // 1%RH critical facility — the primary failure mode of the old Magnus formula
@@ -466,7 +486,7 @@ export const PSYCHRO_SANITY_CHECKS = {
   // Denver elevation check — Cf correction validation
   denver: {
     db: 95, rh: 20, elev: 5280,
-    grains:         { expected: 23.6,  tolerance: 0.5  },
-    sensibleFactor: { expected: 0.899, tolerance: 0.005 },
+    grains:         { expected: 58.2,  tolerance: 0.5  },
+    sensibleFactor: { expected: 0.889, tolerance: 0.005 },
   },
 };

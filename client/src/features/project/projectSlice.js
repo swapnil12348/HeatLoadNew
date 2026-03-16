@@ -20,12 +20,19 @@
  *   state.project.ambient.dailyRange  → CLTD mean-temp correction (°F swing).
  *                                       0 = use DIURNAL_RANGE_DEFAULTS by climate zone.
  *
- *   state.project.systemDesign.safetyFactor        → safety multiplier in seasonalLoads
- *   state.project.systemDesign.bypassFactor         → BF in airQuantities + psychroStatePoints
- *   state.project.systemDesign.adp                  → apparatus dew point in airQuantities + psychro
- *   state.project.systemDesign.adpMode              → 'manual' | 'calculated' — read by rdsSelector ADP chain
- *   state.project.systemDesign.fanHeat              → supply fan heat fraction in rdsSelector
- *   state.project.systemDesign.humidificationTarget → winter RH target in heatingHumid
+ *   state.project.systemDesign.safetyFactor         → safety multiplier in seasonalLoads
+ *   state.project.systemDesign.bypassFactor          → BF in airQuantities + psychroStatePoints
+ *   state.project.systemDesign.adp                   → apparatus dew point in airQuantities + psychro
+ *   state.project.systemDesign.adpMode               → 'manual' | 'calculated' — read by rdsSelector ADP chain
+ *   state.project.systemDesign.fanHeat               → supply fan heat fraction in rdsSelector
+ *   state.project.systemDesign.returnFanHeat         → return fan heat fraction in rdsSelector
+ *                                                      Applied upstream of coil — increases coilLoadBTU.
+ *                                                      Typical: 2–5% for small return fans; 10–20% for
+ *                                                      balanced supply/return systems.
+ *   state.project.systemDesign.humidificationTarget  → winter RH fallback in rdsSelector
+ *                                                      Used when room.designRH is not set. Rooms with
+ *                                                      an explicit designRH (including 0%RH dry rooms)
+ *                                                      always use room.designRH directly.
  *
  * ── SYSTEM DESIGN DEFAULTS — INLINED ─────────────────────────────────────────
  *
@@ -36,7 +43,8 @@
  *   DEFAULT_BYPASS_FACTOR      = 0.10     — typical for chilled-water AHUs; use 0.08–0.12
  *   DEFAULT_ADP                = 55  (°F) — CHW coil leaving air at ~13°C; DX: 45–50°F
  *   DEFAULT_FAN_HEAT_PCT       = 5   (%)  — supply fan heat as % of sensible room load
- *   DEFAULT_HUMID_TARGET       = 45  (%)  — winter humidification setpoint
+ *   DEFAULT_RETURN_FAN_HEAT    = 5   (%)  — return fan heat as % of supply fan heat
+ *   DEFAULT_HUMID_TARGET       = 45  (%)  — fallback winter humidification RH
  *
  * ── AMBIENT FIELDS NOTE ────────────────────────────────────────────────────────
  *
@@ -52,7 +60,7 @@
  *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
- *   BUG-SLICE-06 FIX — updateSystemDesign: string fields bypass parseFloat.
+ *   BUG-SLICE-06 — updateSystemDesign: string fields bypass parseFloat.
  *
  *     Previous code applied parseFloat(value) universally to all systemDesign
  *     fields. For string fields like adpMode:
@@ -62,21 +70,28 @@
  *       state.systemDesign['adpMode'] = 'manual'   ← writes old value back
  *
  *     adpMode was permanently stuck at 'manual' regardless of UI dispatch.
- *     The rdsSelector ADP chain reads adpMode to decide between calculated
- *     and manual ADP resolution — this bug silently disabled 'calculated' mode
- *     at the project level for every project.
  *
  *     Fix: fields not in SYSTEM_DESIGN_BOUNDS (no numeric bounds defined)
  *     are treated as string fields and written directly without parseFloat.
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   BUG-SLICE-05 FIX — updateSystemDesign: adp < 38°F now triggers a warning.
+ *   BUG-SLICE-05 — updateSystemDesign: adp < 38°F now triggers a warning.
  *
  *     Standard CHW coils achieve ADP 44–55°F. Below 38°F requires DX or glycol.
  *     A data-entry error (e.g. 32 instead of 52) halves thermalCFM, undersizing
- *     the AHU by up to 50%. A warning (not a clamp) fires for 32–37°F to make
- *     the engineer's intent explicit without blocking legitimate DX designs.
+ *     the AHU by up to 50%. A warning (not a clamp) fires for 32–37°F.
+ *
+ * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
+ *
+ *   returnFanHeat added to systemDesign.
+ *
+ *     The previous hardcoded 0.02 multiplier in rdsSelector (returnFanHeat =
+ *     supplyFanHeat × 2%) was non-configurable and likely too conservative for
+ *     most systems (typical return fans are 10–20% of supply fan power).
+ *     Now exposed as a project-level input (0–25%) defaulting to 5%.
+ *     Return fan heat is applied upstream of the cooling coil — it increases
+ *     coilLoadBTU and therefore CHW pipe sizing.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
@@ -85,8 +100,9 @@ import { createSlice } from '@reduxjs/toolkit';
 const DEFAULT_SAFETY_FACTOR_PCT  = 10;    // %
 const DEFAULT_BYPASS_FACTOR      = 0.10;  // dimensionless
 const DEFAULT_ADP                = 55;    // °F
-const DEFAULT_FAN_HEAT_PCT       = 5;     // %
-const DEFAULT_HUMID_TARGET       = 45;    // %RH
+const DEFAULT_FAN_HEAT_PCT       = 5;     // % of sensible room load
+const DEFAULT_RETURN_FAN_HEAT    = 5;     // % of supply fan heat
+const DEFAULT_HUMID_TARGET       = 45;    // %RH — fallback when room.designRH unset
 
 // ── Bounds definitions ────────────────────────────────────────────────────────
 // Only NUMERIC fields appear here. String fields (adpMode) are intentionally
@@ -97,6 +113,7 @@ const SYSTEM_DESIGN_BOUNDS = {
   bypassFactor:         { min: 0.01, max: 0.30 },
   adp:                  { min: 32,   max: 65   },  // °F — hard lower = freezing point
   fanHeat:              { min: 0,    max: 20   },
+  returnFanHeat:        { min: 0,    max: 25   },
   humidificationTarget: { min: 0,    max: 95   },
 };
 
@@ -123,9 +140,9 @@ const initialState = {
   },
 
   ambient: {
-    elevation:    0,
-    latitude:    28,
-    dailyRange:   0,
+    elevation:        0,
+    latitude:        28,
+    dailyRange:       0,
     dryBulbTemp:      35,
     wetBulbTemp:      24,
     relativeHumidity: 50,
@@ -135,8 +152,9 @@ const initialState = {
     safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,
     bypassFactor:         DEFAULT_BYPASS_FACTOR,
     adp:                  DEFAULT_ADP,
-    adpMode:              'manual',   // 'manual' | 'calculated' — string field, no bounds
+    adpMode:              'manual',               // 'manual' | 'calculated' — string field, no bounds
     fanHeat:              DEFAULT_FAN_HEAT_PCT,
+    returnFanHeat:        DEFAULT_RETURN_FAN_HEAT, // % of supply fan heat; applied upstream of coil
     humidificationTarget: DEFAULT_HUMID_TARGET,
   },
 };
@@ -187,9 +205,6 @@ const projectSlice = createSlice({
      *
      * Numeric fields: parsed, clamped to SYSTEM_DESIGN_BOUNDS, and field-specific
      *   warnings applied (adp below CHW range, safetyFactor = 0).
-     *
-     * BUG-SLICE-06 FIX: the string-field bypass corrects adpMode being permanently
-     *   stuck at 'manual'. See CHANGELOG v2.2 in the file header for full detail.
      */
     updateSystemDesign: (state, action) => {
       const { field, value } = action.payload;
@@ -200,7 +215,7 @@ const projectSlice = createSlice({
 
       const bounds = SYSTEM_DESIGN_BOUNDS[field];
 
-      // BUG-SLICE-06 FIX: string fields have no entry in SYSTEM_DESIGN_BOUNDS.
+      // String fields have no entry in SYSTEM_DESIGN_BOUNDS.
       // Bypass numeric parsing entirely — write the value directly.
       if (!bounds) {
         state.systemDesign[field] = value;
@@ -268,5 +283,6 @@ export const selectSafetyFactor  = (state) => state.project.systemDesign.safetyF
 export const selectBypassFactor  = (state) => state.project.systemDesign.bypassFactor;
 export const selectAdp           = (state) => state.project.systemDesign.adp;
 export const selectFanHeat       = (state) => state.project.systemDesign.fanHeat;
+export const selectReturnFanHeat = (state) => state.project.systemDesign.returnFanHeat;
 export const selectHumidTarget   = (state) => state.project.systemDesign.humidificationTarget;
 export const selectIndustry      = (state) => state.project.info.industry;

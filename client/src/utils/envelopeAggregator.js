@@ -6,9 +6,9 @@
  * should import from.
  *
  * Import map:
- *   seasonalLoads.js  → envelopeAggregator.js  (this file — ALL envelope imports via here)
- *   envelopeCalc.js   → opaque elements (walls, roofs, partitions, slabs, infiltration)
- *   glazingCalc.js    → transparent elements (glass, skylights)
+ *   seasonalLoads.js   → envelopeAggregator.js  (this file — ALL envelope imports via here)
+ *   envelopeCalc.js    → opaque elements (walls, roofs, partitions, slabs, infiltration)
+ *   glazingCalc.js     → transparent elements (glass, skylights)
  *   envelopeHelpers.js → internal helpers (not imported externally)
  *
  * SIGN CONVENTION:
@@ -19,18 +19,19 @@
  * and represent heating loads that must reach seasonalLoads.js intact.
  */
 
-// ── AFTER (fixed) ────────────────────────────────────────────────────────────
 import { calcWallGain, calcRoofGain, calcPartitionGain, calcSlabGain,
-         calcInfiltrationGain }           from './envelopeCalc';
+         calcInfiltrationGain }            from './envelopeCalc';
 import { calcGlassGain, calcSkylightGain } from './glazingCalc';
 
 // Re-export so external consumers (seasonalLoads.js etc.) can still import
 // individual functions directly from this aggregator if needed.
 export { calcWallGain, calcRoofGain, calcPartitionGain, calcSlabGain,
          calcInfiltrationGain, calcGlassGain, calcSkylightGain };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Total envelope gain — room level
 // ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * calcTotalEnvelopeGain(elements, climate, tRoom, season, latitude?, dailyRange?)
  *
@@ -75,16 +76,17 @@ export const calcTotalEnvelopeGain = (
     total += calcSkylightGain(s, climate, tRoom, season, latitude, dailyRange).total;
   });
 
-  // FIX MED-04: season passed through so tAdjSummer / tAdjWinter is selected
+  // season passed through so tAdjSummer / tAdjWinter is selected correctly.
   (elements.partitions || []).forEach(p => {
     total += calcPartitionGain(p, tRoom, season);
   });
 
+  // Floors between conditioned spaces treated as partitions.
   (elements.floors     || []).forEach(f => {
     total += calcPartitionGain(f, tRoom, season);
   });
 
-  // Slabs: optional array — slab elements carry { perimeterFt, insulationType, tGround }
+  // Slabs: optional array — elements carry { perimeterFt, insulationType, tGround }
   (elements.slabs      || []).forEach(s => {
     total += calcSlabGain(
       s.perimeterFt,
@@ -96,6 +98,10 @@ export const calcTotalEnvelopeGain = (
 
   return Math.round(total);
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Detailed envelope gain — per-category breakdown
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * calcDetailedEnvelopeGain(elements, climate, tRoom, season, latitude?, dailyRange?)
@@ -193,4 +199,3 @@ export const calcDetailedEnvelopeGain = (
     total,
   };
 };
-

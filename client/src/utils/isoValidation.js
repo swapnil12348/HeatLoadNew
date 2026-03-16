@@ -8,13 +8,13 @@
  *   minimum ACPH instead of IEST-RP-CC012.2 minimum.
  *
  *     PREVIOUS BEHAVIOUR (contradictory):
- *       validateAcph()         used ACPH_RANGES['ISO 7'].min = 60  (IEST)
+ *       validateAcph()          used ACPH_RANGES['ISO 7'].min = 60  (IEST)
  *       validateGmpCompliance() used GMP_GRADE_MAPPING['Grade C'].minAcph = 20 (GMP)
  *
  *       For a pharma ISO 7 / Grade C room at 30 ACPH:
- *         validateAcph()         → FAIL  (30 < 60 IEST minimum) → pass: false
+ *         validateAcph()          → FAIL  (30 < 60 IEST minimum) → pass: false
  *         validateGmpCompliance() → PASS  (30 ≥ 20 GMP minimum)  → pass: true
- *         validateRoom()         → pass: false (acphCheck dominated)
+ *         validateRoom()          → pass: false (acphCheck dominated)
  *
  *       Both values are correct for their respective standards. The bug was
  *       using IEST as the regulatory pass/fail threshold for pharma — IEST
@@ -32,22 +32,22 @@
  *     The IEST designAcph is retained as a warning-level design target.
  *
  *     RESULT for the above example (30 ACPH pharma ISO 7 / Grade C room):
- *       validateAcph()         → WARNING (30 ≥ 20 GMP min; 30 < 90 IEST design)
+ *       validateAcph()          → WARNING (30 ≥ 20 GMP min; 30 < 90 IEST design)
  *       validateGmpCompliance() → PASS
- *       validateRoom()         → pass: true, hasWarnings: true
+ *       validateRoom()          → pass: true, hasWarnings: true
  *
  *     A 'standardBasis' field is added to the validateAcph result object
  *     so UI components can cite the governing standard in reports.
  *
  * CHANGELOG v2.2:
  *
- *   MED-ISO-01 FIX — computeActualAcph() now uses rdsRow.supplyAcph as
+ *   MED-ISO-01 — computeActualAcph() now uses rdsRow.supplyAcph as
  *   primary source of truth (single ACPH computation path).
  *
  * CHANGELOG v2.1:
  *
- *   CRITICAL-02 FIX — validateGmpCompliance(): Grade D rooms now match correctly.
- *   MEDIUM-05 FIX — validateRoom() pass logic made explicit and readable.
+ *   CRITICAL-02 — validateGmpCompliance(): Grade D rooms now match correctly.
+ *   MEDIUM-05   — validateRoom() pass logic made explicit and readable.
  *
  * Reference: ISO 14644-1:2015, ISO 14644-4:2022, GMP Annex 1:2022
  */
@@ -70,8 +70,8 @@ const governingClass = (room) =>
 
 /**
  * computeActualAcph(rdsRow)
- *
- * MED-ISO-01 FIX: Uses rdsRow.supplyAcph as primary source of truth.
+ * Uses rdsRow.supplyAcph as primary source of truth.
+ * Fallback recomputes from raw fields if supplyAcph is absent.
  */
 const computeActualAcph = (rdsRow) => {
   if (rdsRow.supplyAcph != null && rdsRow.supplyAcph > 0) {
@@ -79,7 +79,7 @@ const computeActualAcph = (rdsRow) => {
   }
 
   // Fallback: recompute from raw fields.
-  // Requires rdsRow.volume to be in ft³ (guaranteed after CRIT-RDS-01 fix).
+  // Requires rdsRow.volume to be in ft³.
   const volumeFt3 = parseFloat(rdsRow.volume)    || 0;
   const supplyAir = parseFloat(rdsRow.supplyAir) || 0;
   if (volumeFt3 <= 0) return 0;
@@ -89,7 +89,7 @@ const computeActualAcph = (rdsRow) => {
 /**
  * resolveAcphThreshold(rdsRow, range)
  *
- * FIX-ACPH-STD-01: Determines the governing ACPH minimum and standard basis.
+ * Determines the governing ACPH minimum and standard basis.
  *
  * For pharma rooms: GMP Annex 1:2022 regulatory minimum governs pass/fail.
  * For all other rooms: IEST-RP-CC012.2 / ISO 14644-4 minimum governs.
@@ -110,7 +110,6 @@ const resolveAcphThreshold = (rdsRow, range) => {
 
   // For pharma rooms, check if a GMP grade applies and has a lower regulatory min.
   // GMP Annex 1:2022 §4.23 mandates ≥20 ACPH for Grade B, C, and D.
-  // This is the legally binding minimum — IEST targets are design recommendations.
   const atRest = rdsRow.atRestClass || 'Unclassified';
   const inOp   = rdsRow.classInOp   || 'Unclassified';
 
@@ -131,7 +130,6 @@ const resolveAcphThreshold = (rdsRow, range) => {
   }
 
   // Pharma room but no matching GMP grade — fall back to IEST.
-  // Engineer should review the ISO class combination.
   return {
     minAcph:       range.min,
     standardBasis: 'IEST-RP-CC012.2 (no GMP grade matched — review ISO classes)',
@@ -140,15 +138,15 @@ const resolveAcphThreshold = (rdsRow, range) => {
 
 // ── Minimum pressure requirements by ISO class ────────────────────────────────
 const ISO_MIN_PRESSURE_PA = {
-  'ISO 1':       25,
-  'ISO 2':       25,
-  'ISO 3':       20,
-  'ISO 4':       17.5,
-  'ISO 5':       15,
-  'ISO 6':       12.5,
-  'ISO 7':       10,
-  'ISO 8':       5,
-  'ISO 9':       0,
+  'ISO 1':        25,
+  'ISO 2':        25,
+  'ISO 3':        20,
+  'ISO 4':        17.5,
+  'ISO 5':        15,
+  'ISO 6':        12.5,
+  'ISO 7':        10,
+  'ISO 8':        5,
+  'ISO 9':        0,
   'CNC':          2,
   'Unclassified': 0,
 };
@@ -158,10 +156,8 @@ const ISO_MIN_PRESSURE_PA = {
 /**
  * validateAcph(rdsRow)
  *
- * FIX-ACPH-STD-01: Pharma rooms now use GMP Annex 1 regulatory minimum
- * instead of IEST-RP-CC012.2 minimum. See module-level CHANGELOG.
- *
- * Result object includes `standardBasis` field for UI citation.
+ * Pharma rooms use GMP Annex 1 regulatory minimum; all others use IEST.
+ * Result includes `standardBasis` field for UI citation in reports.
  */
 export const validateAcph = (rdsRow) => {
   const isoClass   = governingClass(rdsRow);
@@ -169,7 +165,6 @@ export const validateAcph = (rdsRow) => {
   const actualAcph = computeActualAcph(rdsRow);
   const designAcph = range.design;
 
-  // FIX-ACPH-STD-01: resolve governing standard and minimum for this room type.
   const { minAcph, standardBasis } = resolveAcphThreshold(rdsRow, range);
   const deficit = minAcph - actualAcph;
 
@@ -269,8 +264,8 @@ export const validatePressure = (rdsRow) => {
 /**
  * validateGmpCompliance(rdsRow)
  *
- * CRITICAL-02 FIX: Grade D rooms now match correctly.
- * MED-ISO-01 FIX: uses computeActualAcph() single source.
+ * Grade D rooms match correctly via isoInOp === null check.
+ * Uses computeActualAcph() as single ACPH source.
  */
 export const validateGmpCompliance = (rdsRow) => {
   if (rdsRow.ventCategory !== 'pharma') {
@@ -287,7 +282,9 @@ export const validateGmpCompliance = (rdsRow) => {
   const atRest = rdsRow.atRestClass || 'Unclassified';
   const inOp   = rdsRow.classInOp   || 'Unclassified';
 
-  // CRITICAL-02 FIX: Handle null isoInOp (Grade D) correctly.
+  // Grade D has isoInOp: null (in-operation limit defined by risk assessment,
+  // not a fixed ISO class per GMP Annex 1:2022 §4.7). The null check here is
+  // correct — it is not a data error.
   const matchedGrade = Object.entries(GMP_GRADE_MAPPING).find(([, mapping]) => {
     const atRestMatch = mapping.isoAtRest === atRest;
     const inOpMatch =
@@ -339,8 +336,8 @@ export const validateGmpCompliance = (rdsRow) => {
 /**
  * validateRoom(rdsRow)
  *
- * MEDIUM-05 FIX: pass logic explicit and readable.
  * pass = false ONLY when a check has severity='error' AND pass=false.
+ * Warnings do not fail the room — they set hasWarnings=true.
  */
 export const validateRoom = (rdsRow) => {
   const acphCheck     = validateAcph(rdsRow);

@@ -3,102 +3,59 @@
  * Psychrometric utilities.
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 1
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * REVISION v2.2 — BUG-TIER1-01 FIX: calculateDewPoint returns null for rh ≤ 0
- * ═══════════════════════════════════════════════════════════════════════════
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
- * BUG-TIER1-01 FIX: calculateDewPoint() previously returned integer 0 when
- * rhNum <= 0. This silently defeated the entire MEDIUM-02 null-guard
- * infrastructure: callers checking `if (dp === null)` would never trigger,
- * and 0°F would propagate as a physically valid frost point.
+ *   BUG-TIER1-01 FIX — calculateDewPoint returns null for rh ≤ 0.
  *
- * 0°F frost point implies ~3%RH at 70°F DB — a real, non-zero humidity ratio
- * that would corrupt humidification load calculations for solid-state battery
- * rooms, vacuum process tool environments, and any condition where the
- * engineer sets RH = 0 to represent a perfectly dry reference state.
+ *     The previous guard combined two semantically different cases:
+ *       if (isNaN(dbFNum) || isNaN(rhNum) || rhNum <= 0) return 0;
  *
- * Fix: the `isNaN` guard (returns 0 for non-numeric input — legacy-safe) is
- * separated from the `rhNum <= 0` guard (returns null — dew point undefined
- * for zero or negative RH, must be handled by caller).
+ *     Non-numeric input → return 0 is correct (no dew point possible).
+ *     rh = 0 (perfectly dry air) → dew point is physically undefined (−∞),
+ *     must return null so callers can handle it explicitly.
  *
- * All callers already handle null from the MEDIUM-02 fix:
- *   psychroValidation.js — validateStatePoint, validateRoomHumidity
- *   psychroStatePoints.js — any state point displaying dew point
- *   rdsSelector.js — RDS row dew point display field
- *   heatingHumid.js — humidification load (grainsFromDewPoint path)
+ *     With return 0, callers checking `if (dp === null)` never triggered, and
+ *     0°F (−17.8°C) propagated as a valid frost point. At 70°F DB, a 0°F
+ *     frost point implies ~3%RH — a phantom humidity ratio that corrupted
+ *     humidification loads in solid-state battery rooms and vacuum process
+ *     environments where the engineer sets RH = 0 as a dry reference.
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * REVISION v2.1 — MEDIUM-02 FIX: calculateDewPoint returns null for out-of-range
- * ═══════════════════════════════════════════════════════════════════════════
+ *     Fix: separate the two guards.
+ *       isNaN(input) → return 0   (no dew point possible)
+ *       rhNum ≤ 0    → return null (dew point physically undefined)
  *
- * MEDIUM-02 FIX: calculateDewPoint() previously returned −148 (a numeric
- * sentinel for "frost point below −100°C"). No caller in the codebase checked
- * for this sentinel, causing heatingHumid.js and rdsSelector.js to silently
- * use −148°F as a real design temperature. grainsFromDewPoint(−148) returns
- * a non-zero value, so humidification loads were computed from a physically
- * undefined condition.
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- * The function now returns null for out-of-range conditions. All callers must
- * check:  const dp = calculateDewPoint(db, rh);
- //* if (dp === null) { /* handle out-of-range */ 
- /* Affected callers to update:
- *   psychroValidation.js — validateStatePoint, validateRoomHumidity
- *   psychroStatePoints.js — any state point that displays dew point
- *   rdsSelector.js — RDS row dew point display field
- *   heatingHumid.js — humidification load (grainsFromDewPoint path)
+ *   MEDIUM-02 FIX — calculateDewPoint returns null instead of −148 sentinel.
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * REVISION v2.0 — ASHRAE Hyland-Wexler Saturation Pressure
- * ═══════════════════════════════════════════════════════════════════════════
+ *     The previous sentinel value was never checked by any caller (psychroValidation,
+ *     heatingHumid, rdsSelector) and silently propagated into load calculations
+ *     as a real temperature. null forces callers to handle the out-of-range case.
  *
- * BUG-PSYCH-01 (CRITICAL): Magnus formula replaced with ASHRAE Hyland-Wexler.
+ *     Callers must check:
+ *       const dp = calculateDewPoint(db, rh);
+ *       if (dp === null) { ... handle out-of-range ... }
  *
- *   OLD: Magnus (Alduchov & Eskridge 1996)
- *     Es(T) = 6.112 × exp(17.67·T / (T + 243.5))
- *     Valid: −40°C to +60°C per paper.
- *     Error at −37°C: ±0.28 hPa  ← PROBLEM ZONE
+ *     This only triggers below −100°C frost point (RH < 0.00056% at 70°F DB) —
+ *     solid-state battery and sub-ppm moisture applications only.
  *
- *   NEW: ASHRAE HOF 2021, Ch.1, Eq.3 (ice) & Eq.5 (liquid)
- *     Ice branch  (T < 0°C):  Hyland-Wexler ice-surface equation
- *     Liquid branch (T ≥ 0°C): Hyland-Wexler liquid-surface equation
- *     Valid: −100°C to +200°C. Error < 0.001% across full range.
+ * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
- *   WHY THIS MATTERS for 1%RH critical facilities:
- *     At 1%RH / 70°F DB, dew point ≈ −37°C (−35°F).
- *     The error in saturation pressure at −37°C propagates directly into:
- *       • Humidification capacity sizing: ±10–15% error
- *       • Dew point setpoint verification: ±0.5–1.0°C
- *       • Moisture balance in controlled-humidity cleanrooms: ±8%
+ *   BUG-PSYCH-01 [CRITICAL] — Magnus formula replaced with ASHRAE Hyland-Wexler.
  *
- *   FACILITY EXAMPLES where this fix is non-negotiable:
- *     Taiwan Semiconductor (TSMC) AMHS corridors: 35–45%RH
- *     TSMC lithography bays: <1%RH in some tool environments
- *     Cipla pharma dry powder filling: <2%RH
- *     Exide battery formation: <5%RH
- *     Li-ion cell assembly: <0.1% dew point control (chilled mirror, −50°C DP)
+ *     Old: Magnus (Alduchov & Eskridge 1996) — valid to −40°C, ±0.28 hPa at −37°C.
+ *     New: ASHRAE HOF 2021 Ch.1, Eq.3 (ice) & Eq.5 (liquid) — valid −100°C to +200°C,
+ *          error < 0.001% across full range.
  *
- * BUG-PSYCH-02: calculateDewPoint() analytical Magnus inverse replaced with
- *   bisection on Hyland-Wexler curve. Previous formula returned wrong results
- *   below −30°C (exactly the range critical for sub-1%RH facilities).
+ *     Why this matters at 1%RH: dew point ≈ −37°C. Magnus error at this point
+ *     propagates ±10–15% into humidification capacity sizing — non-acceptable for
+ *     Li-ion cell assembly, TSMC lithography bays, and pharma dry powder filling.
  *
- *   Note: dew points below 0°C are physically frost points (ice surface
- *   equilibrium). calculateDewPoint() correctly uses the ice branch of
- *   H-W below 0°C. Calibrated chilled-mirror instruments at fabs report
- *   frost point, not dew point, below 0°C — this function matches that.
+ *   BUG-PSYCH-02 — calculateDewPoint analytical Magnus inverse replaced with
+ *     bisection on Hyland-Wexler curve. Previous formula was wrong below −30°C
+ *     — exactly the range critical for sub-1%RH critical facilities.
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * NEW EXPORTS in v2.0
- * ═══════════════════════════════════════════════════════════════════════════
- *
- *   calculateRH(dbF, grains, elevFt)      → % RH — reverse of calculateGrains
- *   grainsFromDewPoint(dpF, elevFt)       → gr/lb — for dew-point setpoint control
- *    calculateSpecificVolume(dbF, grains, elevFt) → ft³/lb dry air
- *   calculateAdpFromLoads(dbInF, peakErsh, supplyAir, bf, elevFt?) → °F ADP
- *     ⚠️  Cooling-coil systems ONLY — do not use for desiccant dry rooms.
- *
- * ═══════════════════════════════════════════════════════════════════════════
- * FULL PUBLIC API
- * ═══════════════════════════════════════════════════════════════════════════
+ * ── PUBLIC API ─────────────────────────────────────────────────────────────────
  *
  *   altitudeCorrectionFactor(elevFt)             → Cf scalar (dimensionless)
  *   sitePressure(elevFt)                         → hPa
@@ -112,11 +69,8 @@
  *   calculateEnthalpy(dbF, grains)               → BTU/lb dry air
  *   calculateWetBulb(dbF, rh, elevFt)            → °F
  *   calculateSpecificVolume(dbF, grains, elevFt) → ft³/lb dry air
- *
- * RETAINED FROM v1.x:
- *   BUG-18 FIX: calculateWetBulb() ASHRAE Eq.35 bisection — unchanged, correct.
- *   Altitude correction: ASHRAE HOF 2021 Ch.1 Eq.3 — unchanged, correct.
- *   calculateEnthalpy: ASHRAE HOF 2021 Ch.1 Eq.30 — unchanged, correct.
+ *   calculateAdpFromLoads(dbInF, peakErsh, supplyAir, bf, elevFt?) → °F ADP
+ *     ⚠️  Cooling-coil systems ONLY — do not use for desiccant dry rooms.
  */
 
 import ASHRAE from '../constants/ashrae';
@@ -162,14 +116,9 @@ const HW_LIQ = {
 /**
  * saturationPressure(dbC) → hPa
  *
- * BUG-PSYCH-01 FIX: ASHRAE Hyland-Wexler replaces Magnus formula.
+ * ⚠️  INTERNAL — NOT exported. Other modules must not import this directly.
  *
- * ⚠️  INTERNAL HELPER — NOT exported. Do not import this function from
- *     other modules. Use grainsFromDewPoint() for dew-point-based
- *     humidity ratio calculations. psychroValidation.js previously tried
- *     to import this function (CRITICAL-01) — that import is now removed.
- *
- * Automatically selects the correct branch:
+ * Selects the correct Hyland-Wexler branch automatically:
  *   T < 0°C  → ice surface (Eq.3) — frost point conditions
  *   T ≥ 0°C  → liquid surface (Eq.5) — dew point conditions
  *
@@ -177,7 +126,7 @@ const HW_LIQ = {
  * @returns {number} saturation vapour pressure (hPa)
  */
 const saturationPressure = (dbC) => {
-  const T = dbC + 273.15; // Kelvin
+  const T = dbC + 273.15;
   let lnPws;
 
   if (T < 273.15) {
@@ -193,7 +142,7 @@ const saturationPressure = (dbC) => {
     lnPws = C8 / T + C9 + C10 * T + C11 * T2 + C12 * T3 + C13 * Math.log(T);
   }
 
-  return Math.exp(lnPws) / 100;
+  return Math.exp(lnPws) / 100; // Pa → hPa
 };
 
 /**
@@ -207,17 +156,16 @@ const saturatedW = (tC, Patm) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Altitude & psychrometric correction factors (exported)
+// Altitude & psychrometric correction factors
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * altitudeCorrectionFactor(elevFt)
  *
  * Pressure ratio: Patm_site / Patm_sea-level.
- * Source: ASHRAE Fundamentals 2021, Ch.1, Eq.3.
- * Cf = (1 − 6.8754×10⁻⁶ × elev_ft)^5.2559
+ * ASHRAE HOF 2021 Ch.1:  Cf = (1 − 6.8754×10⁻⁶ × elev_ft)^5.2559
  *
- * @param {number} elevFt - site elevation in feet (≥ 0)
+ * @param {number} elevFt - site elevation (ft, ≥ 0)
  * @returns {number} Cf — dimensionless, (0, 1]
  */
 export const altitudeCorrectionFactor = (elevFt = 0) => {
@@ -228,7 +176,6 @@ export const altitudeCorrectionFactor = (elevFt = 0) => {
 
 /**
  * sitePressure(elevFt) → hPa
- * @param {number} elevFt - site elevation (ft)
  */
 export const sitePressure = (elevFt = 0) =>
   1013.25 * altitudeCorrectionFactor(elevFt);
@@ -252,7 +199,7 @@ export const latentFactor = (elevFt = 0) =>
 /**
  * latentFactorLb(elevFt)
  * Ql [BTU/hr] = latentFactorLb(elev) × CFM × Δlb/lb
- * Sea-level basis: 4775 (hfg at 60°F dewpoint reference)
+ * Sea-level basis: 4775 (hfg at 60°F dew-point reference)
  */
 export const latentFactorLb = (elevFt = 0) =>
   ASHRAE.LATENT_FACTOR_LB * altitudeCorrectionFactor(elevFt);
@@ -265,6 +212,8 @@ export const latentFactorLb = (elevFt = 0) =>
  * calculateGrains(dbF, rh, elevFt?)
  *
  * Humidity ratio in gr/lb dry air.
+ * W = 0.62198 × E / (Patm − E)   where E = (rh/100) × Es
+ * ASHRAE HOF 2021 Ch.1, Eq.20 (SI) adapted to IP with site pressure correction.
  *
  * @param {number} dbF    - dry-bulb temperature (°F)
  * @param {number} rh     - relative humidity (%)
@@ -300,7 +249,7 @@ export const calculateGrains = (dbF, rh, elevFt = 0) => {
 /**
  * calculateRH(dbF, grains, elevFt?)
  *
- * Reverse of calculateGrains. Computes relative humidity (%) from
+ * Reverse of calculateGrains — computes relative humidity (%) from
  * dry-bulb temperature and humidity ratio.
  *
  * @param {number} dbF    - dry-bulb temperature (°F)
@@ -319,9 +268,8 @@ export const calculateRH = (dbF, grains, elevFt = 0) => {
 
   const Patm = sitePressure(elevFt);
   const W    = grNum / ASHRAE.GR_PER_LB;
-
-  const E  = (W * Patm) / (0.62198 + W);
-  const rh = (E / Es) * 100;
+  const E    = (W * Patm) / (0.62198 + W);
+  const rh   = (E / Es) * 100;
 
   return isNaN(rh) ? 0 : Math.min(100, Math.max(0, rh));
 };
@@ -329,63 +277,43 @@ export const calculateRH = (dbF, grains, elevFt = 0) => {
 /**
  * calculateDewPoint(dbF, rh)
  *
- * BUG-PSYCH-02 FIX: Bisection on ASHRAE Hyland-Wexler saturation pressure.
- *
- * MEDIUM-02 FIX (v2.1): Returns null instead of −148 sentinel for conditions
- * below −100°C. Previous −148 value was never checked by any caller and
- * silently propagated into load calculations as a real temperature.
- *
- * BUG-TIER1-01 FIX (v2.2): Returns null (not integer 0) for rh ≤ 0.
- *
- *   The previous guard:
- *     if (isNaN(dbFNum) || isNaN(rhNum) || rhNum <= 0) return 0;
- *   combined two semantically different cases:
- *     • Invalid/non-numeric input → return 0 is appropriate (no dew point)
- *     • rh = 0 (perfectly dry air) → dew point is undefined (−∞), must return null
- *
- *   When rh = 0, callers checking `if (dp === null)` correctly trigger the
- *   out-of-range handler. With return 0, they would receive 0°F = −17.8°C
- *   as a valid frost point, producing ~3%RH at 70°F in grainsFromDewPoint —
- *   a phantom humidity ratio that corrupts humidification load calculations
- *   in solid-state battery rooms and vacuum process tool environments.
+ * Dew/frost point by bisection on ASHRAE Hyland-Wexler saturation pressure.
+ * Results below 32°F are frost points (ice deposition conditions) — do NOT
+ * clamp to 32°F. Label as "Dew/Frost Point" in UI.
  *
  * ⚠️  CALLERS MUST CHECK FOR NULL:
  *   const dp = calculateDewPoint(db, rh);
  *   if (dp === null) {
- *     // Frost point is below −100°C OR rh is 0/negative.
+ *     // rh ≤ 0 (dew point undefined) OR frost point below −100°C.
  *     // For sub-ppm / solid-state battery: use specialist desiccant tool.
- *     // For rh=0: dew point is physically undefined.
  *   }
  *
- * ⚠️  SUB-ZERO RESULTS ARE FROST POINTS, NOT DEW POINTS.
- *   Results below 32°F represent frost points (ice deposition conditions).
- *   Label as "Dew/Frost Point" in UI. Do NOT clamp to 32°F.
+ * Returns null for:
+ *   • rh ≤ 0  — dew point is physically undefined for perfectly dry air
+ *   • frost point below −100°C — outside H-W equation range
+ *     (only triggers at RH < 0.00056% at 70°F — solid-state battery / sub-ppm only)
  *
- * Design condition reference values (H-W corrected):
+ * Reference values (H-W corrected):
  *   1.0%RH @ 70°F  →  −35.1°F (−37.3°C) frost point
  *   2.0%RH @ 72°F  →  −26.4°F (−32.4°C) frost point
  *   5.0%RH @ 72°F  →  −13.3°F (−25.2°C) frost point
- *   35%RH  @ 70°F  →   41.2°F (  5.1°C) dew point
- *   50%RH  @ 75°F  →   55.0°F ( 12.8°C) dew point
+ *   35%RH  @ 70°F  →   41.2°F  ( 5.1°C) dew point
+ *   50%RH  @ 75°F  →   55.0°F  (12.8°C) dew point
  *
  * @param {number} dbF - dry-bulb temperature (°F)
  * @param {number} rh  - relative humidity (%)
- * @returns {number|null} dew/frost point (°F); null if rh ≤ 0 or below −100°C range.
- *   Do NOT clamp sub-zero results to 32°F — those are valid frost points.
+ * @returns {number|null} dew/frost point (°F) or null
  */
 export const calculateDewPoint = (dbF, rh) => {
   const dbFNum = parseFloat(dbF);
   const rhNum  = parseFloat(rh);
 
-  // BUG-TIER1-01 FIX: separate the two guard cases.
-  // Non-numeric input → return 0 (legacy-safe: no dew point possible)
+  // Non-numeric input → 0 (no dew point possible)
   if (isNaN(dbFNum) || isNaN(rhNum)) return 0;
-  // rh ≤ 0 → return null (dew point is physically undefined for perfectly dry air)
-  // Callers must check for null — do NOT use 0 as a temperature here.
+  // rh ≤ 0 → null (dew point physically undefined for dry air)
   if (rhNum <= 0) return null;
 
   const rhClamped = Math.min(100, Math.max(0.001, rhNum));
-
   if (rhClamped >= 100) return Math.round(dbFNum * 10) / 10;
 
   const dbC = (dbFNum - 32) * 5 / 9;
@@ -395,24 +323,15 @@ export const calculateDewPoint = (dbF, rh) => {
   let lo = -100;
   let hi = dbC;
 
-  // MEDIUM-02 FIX: Return null instead of the −148 numeric sentinel.
-  // The previous value was never checked by any caller (psychroValidation.js,
-  // heatingHumid.js, rdsSelector.js) and silently corrupted load calculations
-  // when used as a real temperature. null forces callers to handle the case.
-  //
-  // When does this trigger?
-  //   saturationPressure(−100°C) ≈ 0.000138 hPa
-  //   At 70°F DB: Es(70°F) ≈ 24.8 hPa
-  //   For Epw < 0.000138 hPa: RH < 0.000138/24.8 × 100 = 0.00056%
-  //   → Only solid-state battery and sub-ppm moisture applications reach this.
+  // Below −100°C: outside H-W range — return null.
+  // Only triggered at sub-ppm moisture levels (solid-state battery, vacuum tools).
   if (saturationPressure(lo) > Epw) {
     console.warn(
       `calculateDewPoint: RH=${rh}% at DB=${dbF}°F yields frost point below −100°C. ` +
-      `Returning null — this is outside the Hyland-Wexler equation range. ` +
-      `For solid-state battery / sub-ppm moisture applications, use a specialist ` +
-      `desiccant simulation tool. Caller must check for null.`
+      `Returning null — outside Hyland-Wexler range. ` +
+      `For solid-state battery / sub-ppm moisture, use a specialist desiccant tool.`
     );
-    return null; // MEDIUM-02 FIX: was return -148 — see JSDoc above
+    return null;
   }
 
   for (let i = 0; i < 80; i++) {
@@ -434,7 +353,7 @@ export const calculateDewPoint = (dbF, rh) => {
  * grainsFromDewPoint(dpF, elevFt?)
  *
  * Humidity ratio from dew/frost point temperature.
- * The primary function for dew-point-controlled spaces (semiconductor fabs,
+ * Primary function for dew-point-controlled spaces (semiconductor fabs,
  * battery dry rooms, pharma filling suites).
  *
  * @param {number} dpF    - dew/frost point temperature (°F) — may be below 32°F
@@ -448,12 +367,10 @@ export const grainsFromDewPoint = (dpF, elevFt = 0) => {
   const dpC  = (dpFNum - 32) * 5 / 9;
   const Edp  = saturationPressure(dpC);
   const Patm = sitePressure(elevFt);
-
   if (Patm <= Edp) return 0;
 
   const W_kg = 0.62198 * Edp / (Patm - Edp);
   const gr   = W_kg * ASHRAE.GR_PER_LB;
-
   return isNaN(gr) || gr < 0 ? 0 : gr;
 };
 
@@ -461,8 +378,9 @@ export const grainsFromDewPoint = (dpF, elevFt = 0) => {
  * calculateEnthalpy(dbF, grains)
  *
  * Specific enthalpy of moist air (BTU/lb dry air).
- * ASHRAE Fundamentals 2021, Ch.1, Eq.30:
+ * ASHRAE HOF 2021 Ch.1, Eq.30 (IP):
  *   h = 0.240·t + W·(hfg₀ + 0.444·t)
+ *   where hfg₀ = 1061 BTU/lb (latent heat of vaporisation at 32°F)
  *
  * @param {number} dbF    - dry-bulb temperature (°F)
  * @param {number} grains - humidity ratio (gr/lb)
@@ -478,12 +396,15 @@ export const calculateEnthalpy = (dbF, grains) => {
 /**
  * calculateWetBulb(dbF, rh, elevFt?)
  *
- * Solves ASHRAE Fundamentals 2021, Ch.1, Eq.35 by bisection.
+ * Solves ASHRAE HOF 2021 Ch.1, Eq.35 by bisection (SI coefficients, kg system).
  * Accuracy: ±0.01°C. Converges in ≤60 iterations.
+ *
+ * Equation: (2501 − 2.381·wb)·Ws_wb − 1.006·(db − wb) − W·(2501 + 1.805·db − 4.186·wb) = 0
+ * All temperatures in °C; W in kg/kg. Result converted to °F on return.
  *
  * @param {number} dbF    - dry-bulb temperature (°F)
  * @param {number} rh     - relative humidity (%)
- * @param {number} elevFt - site elevation (ft) for Patm correction
+ * @param {number} elevFt - site elevation (ft)
  * @returns {number} wet-bulb temperature (°F), rounded to 0.1°F
  */
 export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
@@ -492,7 +413,6 @@ export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
   if (isNaN(dbFNum) || isNaN(rhNum)) return dbFNum || 0;
 
   const rhClamped = Math.min(100, Math.max(0, rhNum));
-
   if (rhClamped >= 100) return Math.round(dbFNum * 10) / 10;
 
   const db   = (dbFNum - 32) * 5 / 9;
@@ -514,7 +434,6 @@ export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
 
   let lo = -40;
   let hi = db;
-
   if (f(lo) * f(hi) > 0) return Math.round(dbFNum * 10) / 10;
 
   for (let i = 0; i < 60; i++) {
@@ -536,7 +455,9 @@ export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
  * calculateSpecificVolume(dbF, grains, elevFt?)
  *
  * Specific volume of moist air (ft³/lb dry air).
- * ASHRAE Fundamentals 2021, Ch.1, Eq.28 in IP units.
+ * ASHRAE HOF 2021 Ch.1, Eq.28 (IP):
+ *   v = 0.370486 × T_R / Patm_psia × (1 + 1.607858·W)
+ *   T_R = dbF + 459.67 (Rankine);  1 hPa = 0.014504 psi
  *
  * @param {number} dbF    - dry-bulb temperature (°F)
  * @param {number} grains - humidity ratio (gr/lb)
@@ -544,62 +465,46 @@ export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
  * @returns {number} specific volume (ft³/lb dry air)
  */
 export const calculateSpecificVolume = (dbF, grains, elevFt = 0) => {
-  const T    = (parseFloat(dbF) || 0) + 459.67;
-  const W    = (parseFloat(grains) || 0) / ASHRAE.GR_PER_LB;
+  const T         = (parseFloat(dbF)    || 0) + 459.67;
+  const W         = (parseFloat(grains) || 0) / ASHRAE.GR_PER_LB;
   const Patm_psia = sitePressure(elevFt) * 0.014504;
-
   if (Patm_psia <= 0) return 0;
 
   const v = 0.370486 * (T / Patm_psia) * (1 + 1.607858 * W);
   return isNaN(v) ? 0 : v;
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// ADP back-calculation  (ADD TO BOTTOM OF psychro.js)
+// ADP back-calculation
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * calculateAdpFromLoads(dbInF, peakErsh, supplyAir, bf, elevFt?)
  *
  * Back-calculates the Apparatus Dew Point (ADP) from room sensible load.
+ * ASHRAE HOF 2021, Ch.18 — ADP-bypass model:
  *
- * ASHRAE HOF 2021, Ch.18 — ADP-bypass model derivation:
- *
- *   Qs = Cs × CFM_supply × ΔT_supply
- *   ΔT_supply = T_room − T_supply
- *
- *   ADP-bypass blend:
- *     T_supply = T_ADP × (1 − BF) + T_room × BF
- *   ∴ ΔT_supply = (T_room − T_ADP) × (1 − BF)
- *
- *   Substituting:
- *     Qs = Cs × supplyAir × (T_room − T_ADP) × (1 − BF)
- *        = Cs × coilAir × (T_room − T_ADP)
- *
- *   Solving for T_ADP:
- *     T_ADP = T_room − Qs / (Cs × coilAir)
+ *   Qs = Cs × supplyAir × ΔT_supply
+ *   ΔT_supply = (T_room − T_ADP) × (1 − BF)   [ADP-bypass blend]
+ *   ∴ T_ADP = T_room − Qs / (Cs × coilAir)
+ *   where coilAir = supplyAir × (1 − BF)
  *
  * Physical constraints:
- *   ADP must be below room DB (coil must cool below room temperature).
- *   ADP floored at 35°F — minimum achievable chilled-water coil leaving temp.
- *   ADP must be at least 2°F below room DB — coil cannot operate at zero ΔT.
+ *   Lower bound 35°F — minimum achievable CHW coil leaving air temp.
+ *   Upper bound dbInF − 2°F — ADP must be meaningfully below room DB.
  *
- * ⚠️  THIS IS A COOLING-COIL CONCEPT ONLY.
+ * ⚠️  COOLING-COIL CONCEPT ONLY.
  *   Do NOT use for desiccant dry rooms (battery Li-ion, sub-10%RH pharma).
- *   For those systems, ADP has no physical meaning — the dehumidification is
- *   achieved by adsorption, not coil condensation. See ASHRAE.DEFAULT_ADP notes
- *   in ashrae.js and heatingHumid.js for the correct desiccant sizing path.
+ *   For those systems ADP has no physical meaning — dehumidification is
+ *   achieved by adsorption, not coil condensation.
  *
- * @param {number} dbInF      - room design dry-bulb (°F)
- * @param {number} peakErsh   - peak effective room sensible heat (BTU/hr)
- * @param {number} supplyAir  - total supply air CFM (from airQuantities first pass)
- * @param {number} bf         - bypass factor (0–1)
- * @param {number} elevFt     - site elevation (ft)
- * @returns {number} ADP dry-bulb (°F)
- *   Returns ASHRAE.DEFAULT_ADP (55°F) if inputs are invalid or coilAir = 0.
- *   Returns ASHRAE.DEFAULT_ADP (55°F) if peakErsh ≤ 0 (no cooling load).
- *   Result is clamped: max(35, min(result, dbInF − 2)).
+ * @param {number} dbInF     - room design dry-bulb (°F)
+ * @param {number} peakErsh  - peak effective room sensible heat (BTU/hr)
+ * @param {number} supplyAir - total supply air CFM
+ * @param {number} bf        - bypass factor (0–1)
+ * @param {number} elevFt    - site elevation (ft)
+ * @returns {number} ADP (°F), clamped [35, dbInF−2].
+ *   Returns ASHRAE.DEFAULT_ADP on invalid inputs, zero load, or zero coilAir.
  */
 export const calculateAdpFromLoads = (
   dbInF,
@@ -608,36 +513,23 @@ export const calculateAdpFromLoads = (
   bf,
   elevFt = 0,
 ) => {
-  const dbNum   = parseFloat(dbInF);
-  const ersh    = parseFloat(peakErsh);
-  const cfm     = parseFloat(supplyAir);
-  const bfNum   = parseFloat(bf);
+  const dbNum = parseFloat(dbInF);
+  const ersh  = parseFloat(peakErsh);
+  const cfm   = parseFloat(supplyAir);
+  const bfNum = parseFloat(bf);
 
-  // Guard: invalid inputs → project default
   if (isNaN(dbNum) || isNaN(ersh) || isNaN(cfm) || isNaN(bfNum)) {
     return ASHRAE.DEFAULT_ADP;
   }
-
-  // Guard: no cooling load or no supply air → project default
   if (ersh <= 0 || cfm <= 0) return ASHRAE.DEFAULT_ADP;
 
-  // coilAir = air that actually passes through the coil (non-bypass portion)
   const coilAir = cfm * (1 - Math.min(0.99, Math.max(0, bfNum)));
   if (coilAir <= 0) return ASHRAE.DEFAULT_ADP;
 
-  // Altitude-corrected sensible factor
   const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
   if (Cs <= 0) return ASHRAE.DEFAULT_ADP;
 
-  // T_ADP = T_room − ERSH / (Cs × coilAir)
-  const adpRaw = dbNum - ersh / (Cs * coilAir);
-
-  // Physical clamp:
-  //   Lower bound 35°F: minimum CHW coil leaving air temp in practice
-  //     (CHW supply typically 42–46°F; coil approach ΔT ≈ 5–7°F)
-  //   Upper bound dbInF − 2°F: ADP must be meaningfully below room DB
-  //     for the coil to perform dehumidification
+  const adpRaw     = dbNum - ersh / (Cs * coilAir);
   const adpClamped = Math.max(35, Math.min(adpRaw, dbNum - 2));
-
   return Math.round(adpClamped * 10) / 10;
 };

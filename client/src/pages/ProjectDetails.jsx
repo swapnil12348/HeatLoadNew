@@ -29,7 +29,7 @@ export default function ProjectDetails() {
   const safetyDisp = (1 + systemDesign.safetyFactor / 100).toFixed(2);
   const fanDisp    = (1 + systemDesign.fanHeat       / 100).toFixed(2);
 
-  // BUG-09: live diurnal range label helper
+  // Live diurnal range label helper
   const getDiurnalLabel = (val) => {
     const v = parseFloat(val) || 0;
     if (v === 0)  return 'Using seasonal defaults (18°F summer / 12°F monsoon / 20°F winter)';
@@ -117,7 +117,7 @@ export default function ProjectDetails() {
               </p>
             </div>
 
-            {/* BUG-07 FIX: Latitude — now actively used in CLTD/SHGF corrections */}
+            {/* Latitude — used in CLTD/SHGF corrections */}
             <div className="mb-4 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
               <p className="text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-2">
                 ↳ Used in CLTD + SHGF calculations
@@ -137,7 +137,7 @@ export default function ProjectDetails() {
               </p>
             </div>
 
-            {/* BUG-09 FIX: Daily Temperature Range */}
+            {/* Daily Temperature Range — CLTD mean-temp correction */}
             <div className="mb-5 p-3 bg-amber-50 border border-amber-100 rounded-lg">
               <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide mb-2">
                 ↳ Used in CLTD mean-temp correction
@@ -236,12 +236,33 @@ export default function ProjectDetails() {
                 step={0.01}
               />
               <NumberControl
-                label="Fan Heat Allowance"
+                label="Supply Fan Heat Allowance"
                 value={systemDesign.fanHeat}
                 onChange={(val) => handleSystemDesignChange('fanHeat', val)}
                 unit="%"
                 min={0}
                 max={15}
+              />
+              {/*
+                Return fan heat — separate from supply fan heat.
+                Supply fan heat (above) is added to room load downstream of the coil
+                (draw-through). Return fan heat is added upstream of the coil and
+                increases coil load. Typical values: 2–5% of supply fan heat for
+                systems with a small return fan; 10–20% for balanced supply/return fans.
+                Default 5% is a conservative estimate for a cleanroom recirculation AHU.
+
+                ⚠ PENDING: projectSlice.systemDesign.initialState must include
+                returnFanHeat: 5 and SYSTEM_DESIGN_BOUNDS must include a
+                returnFanHeat entry. rdsSelector must read systemDesign.returnFanHeat
+                instead of the hardcoded 0.02 multiplier.
+              */}
+              <NumberControl
+                label="Return Fan Heat Allowance"
+                value={systemDesign.returnFanHeat ?? 5}
+                onChange={(val) => handleSystemDesignChange('returnFanHeat', val)}
+                unit="%"
+                min={0}
+                max={25}
               />
             </div>
 
@@ -255,13 +276,17 @@ export default function ProjectDetails() {
               </p>
               <p className="text-xs text-amber-800 font-medium">
                 Safety multiplier = <strong>{safetyDisp}×</strong>
-                &nbsp;· Fan heat multiplier = <strong>{fanDisp}×</strong>
+                &nbsp;· Supply fan heat multiplier = <strong>{fanDisp}×</strong>
               </p>
-              {/* BUG-14 note: safety and fan heat are applied independently */}
+              {/*
+                Safety and fan heat are applied independently — not compounded.
+                Grand total = (ERSH + ERLH) × safetyMult × fanHeatMult.
+                Return fan heat is applied upstream of the coil and increases coilLoadBTU.
+              */}
               <p className="text-[10px] text-amber-600 mt-1">
                 Safety factor applied to room loads only.
-                Fan heat is added after — not compounded with safety factor.
-                Grand total = (ERSH + ERLH) × safetyMult × fanHeatMult.
+                Supply fan heat is added after — not compounded with safety factor.
+                Return fan heat increases coil load (upstream of coil — affects CHW sizing).
               </p>
               <p className="text-[10px] text-amber-500 mt-1">
                 ΔT preview uses 72°F reference indoor temp (22.2°C).
@@ -312,7 +337,7 @@ export default function ProjectDetails() {
                 <span className="text-gray-500">Alt. Correction (Cf)</span>
                 <span className="font-bold text-blue-700 font-mono">
                   {(ambient.elevation > 0
-                    ? (29.921 * Math.pow(1 - 6.8754e-6 * ambient.elevation, 5.2559) / 29.921)
+                    ? Math.pow(1 - 6.8754e-6 * ambient.elevation, 5.2559)
                     : 1.0
                   ).toFixed(4)}
                 </span>

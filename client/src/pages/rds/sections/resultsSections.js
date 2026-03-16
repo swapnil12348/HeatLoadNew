@@ -2,8 +2,7 @@
  * resultsSections.js
  * RDS category: results
  * Sections: ACES Summary, Consultant Override, Equipment ON/OFF analysis,
- *           Room Grains, Humidification (NEW), Achieved Conditions,
- *           Terminal Heating
+ *           Room Grains, Humidification, Achieved Conditions, Terminal Heating
  */
 
 import { createSeasonColumns, createSeasonPairs } from '../rdsSeasons';
@@ -54,14 +53,20 @@ export const RESULTS_SECTIONS = [
       { key: 'preheatHwFlow',      label: 'Preheat HW Flow',        subLabel: 'USGPM', type: 'readOnly', derived: true },
       { key: 'preheatBranchSize',  label: 'Preheat Branch Size',    subLabel: 'DN mm', type: 'readOnly', derived: true },
 
-      // ── Pre-cooling coil (consultant-entered) ───────────────────────────────
-      { key: 'preCoolingAhuCap',   label: 'Pre-Cooling AHU Cap.',   subLabel: 'CFM',   type: 'readOnly', derived: true },
-      { key: 'preCoolChwFlow',     label: 'Pre-Cooling CHW Flow',   subLabel: 'USGPM', type: 'readOnly', derived: true },
-      { key: 'preCoolChwManifold', label: 'Pre-Cooling CHW Manifold',subLabel: 'DN mm', type: 'readOnly', derived: true },
+      // ── Pre-cooling coil ─────────────────────────────────────────────────────
+      // NOTE: preCoolingAhuCap / preCoolChwFlow / preCoolChwManifold are not
+      // computed by rdsSelector and will display 0 until the logic layer is
+      // extended to calculate pre-cooling coil values.
+      { key: 'preCoolingAhuCap',    label: 'Pre-Cooling AHU Cap.',    subLabel: 'CFM',   type: 'readOnly', derived: true },
+      { key: 'preCoolChwFlow',      label: 'Pre-Cooling CHW Flow',    subLabel: 'USGPM', type: 'readOnly', derived: true },
+      { key: 'preCoolChwManifold',  label: 'Pre-Cooling CHW Manifold',subLabel: 'DN mm', type: 'readOnly', derived: true },
     ],
   },
 
   // 12. Consultant AHU Summary (Override) ───────────────────────────────────
+  // These fields are editable engineer overrides stored as ad-hoc fields on
+  // the room state. They are not read by any calculation module — they exist
+  // for manual override documentation in the final deliverable.
   {
     id:       'consultantSummary',
     title:    'Consultant AHU Summary (Override)',
@@ -86,7 +91,8 @@ export const RESULTS_SECTIONS = [
   },
 
   // 13. Room Analysis — Equipment ON ────────────────────────────────────────
-  // ERLH columns added — latent load was computed but never displayed.
+  // ERLH columns included — latent load is computed by seasonalLoads.js
+  // and must be visible to the engineer for coil SHR verification.
   {
     id:       'analysisEquipOn',
     title:    'Room Analysis — Equipment ON',
@@ -123,9 +129,11 @@ export const RESULTS_SECTIONS = [
     ],
   },
 
-  // 16. Winter Humidification (NEW) ──────────────────────────────────────────
-  // Dominant load in pharma, semiconductor, battery dry rooms.
-  // Source: heatingHumid.js — isothermal steam basis, ASHRAE Ch.22
+  // 16. Winter Humidification ────────────────────────────────────────────────
+  // Dominant load in pharma, semiconductor, and battery dry rooms.
+  // Source: heatingHumid.js — isothermal steam basis, ASHRAE HVAC S&E Ch.22
+  // mixedAirGr included: mixed-air entering the humidifier — critical
+  // diagnostic for recirculation systems where grReturn > grOutdoor.
   {
     id:       'humidification',
     title:    'Winter Humidification',
@@ -133,6 +141,7 @@ export const RESULTS_SECTIONS = [
     color:    'blue',
     columns: [
       { key: 'winterGrOut',   label: 'Outdoor Winter Grains', subLabel: 'gr/lb',  type: 'readOnly', derived: true },
+      { key: 'mixedAirGr',    label: 'Mixed Air Grains',      subLabel: 'gr/lb',  type: 'readOnly', derived: true },
       { key: 'humidGrTarget', label: 'Target Indoor Grains',  subLabel: 'gr/lb',  type: 'readOnly', derived: true },
       { key: 'humidDeltaGr',  label: 'Δ Grains to Add',       subLabel: 'gr/lb',  type: 'readOnly', derived: true },
       { key: 'humidLbsPerHr', label: 'Water Mass Flow',       subLabel: 'lb/hr',  type: 'readOnly', derived: true },
@@ -147,7 +156,7 @@ export const RESULTS_SECTIONS = [
     title:    'Achieved Room Conditions — Equip ON',
     category: 'results',
     color:    'green',
-    columns: createSeasonPairs('achOn', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
+    columns:  createSeasonPairs('achOn', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
   },
 
   // 18. Achieved Room Conditions — Equipment OFF ────────────────────────────
@@ -156,7 +165,7 @@ export const RESULTS_SECTIONS = [
     title:    'Achieved Room Conditions — Equip OFF',
     category: 'results',
     color:    'rose',
-    columns: createSeasonPairs('achOff', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
+    columns:  createSeasonPairs('achOff', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
   },
 
   // 19. Terminal Heater KW — Equipment ON ───────────────────────────────────
@@ -165,7 +174,7 @@ export const RESULTS_SECTIONS = [
     title:    'Terminal Heater KW — Equip ON',
     category: 'results',
     color:    'purple',
-    columns: createSeasonColumns('termHeatOn', 'Terminal KW', 'KW', { readOnly: true, derived: true }),
+    columns:  createSeasonColumns('termHeatOn', 'Terminal KW', 'KW', { readOnly: true, derived: true }),
   },
 
   // 20. Achieved After Terminal Heating — Equipment ON ──────────────────────
@@ -174,7 +183,7 @@ export const RESULTS_SECTIONS = [
     title:    'Achieved after Terminal Heating — Equip ON',
     category: 'results',
     color:    'purple',
-    columns: createSeasonPairs('achTermOn', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
+    columns:  createSeasonPairs('achTermOn', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
   },
 
   // 21. Terminal Heater KW — Equipment OFF ──────────────────────────────────
@@ -183,7 +192,7 @@ export const RESULTS_SECTIONS = [
     title:    'Terminal Heater KW — Equip OFF',
     category: 'results',
     color:    'pink',
-    columns: createSeasonColumns('termHeatOff', 'Terminal KW', 'KW', { readOnly: true, derived: true }),
+    columns:  createSeasonColumns('termHeatOff', 'Terminal KW', 'KW', { readOnly: true, derived: true }),
   },
 
   // 22. Achieved After Terminal Heating — Equipment OFF ─────────────────────
@@ -192,6 +201,6 @@ export const RESULTS_SECTIONS = [
     title:    'Achieved after Terminal Heating — Equip OFF',
     category: 'results',
     color:    'pink',
-    columns: createSeasonPairs('achTermOff', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
+    columns:  createSeasonPairs('achTermOff', 'Temp', 'RH', '°F', '%', { readOnly: true, derived: true }),
   },
 ];

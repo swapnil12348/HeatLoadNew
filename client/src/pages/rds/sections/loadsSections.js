@@ -2,7 +2,7 @@
  * loadsSections.js
  * RDS category: loads
  * Sections: Internal Loads, Infiltration, Exhaust, Fan Heat,
- *           Fresh Air & Ventilation, Outdoor Air Coil Loads (NEW)
+ *           Fresh Air & Ventilation, Outdoor Air Coil Loads
  */
 
 import { createSeasonColumns } from '../rdsSeasons';
@@ -36,18 +36,20 @@ export const LOADS_SECTIONS = [
     ],
   },
 
-  // 6. Infiltration / Exfiltration ───────────────────────────────────────────
+  // 6. Infiltration ──────────────────────────────────────────────────────────
+  // totalInfil is the CFM computed by seasonalLoads.js (summer peak).
+  // totalExfil, infilWithinSystem etc. are not computed by the logic layer —
+  // these are placeholder columns retained for future implementation.
+  // NOTE: infilWithinSystem / infilSystem / infilOtherSystem are NOT in
+  // roomSlice's initial state and are not read by any calculation module.
+  // They are editable ghost fields until the logic layer is extended to use them.
   {
     id:       'infiltration',
-    title:    'Infiltration / Exfiltration',
+    title:    'Infiltration',
     category: 'loads',
     color:    'red',
     columns: [
-      { key: 'totalInfil',        label: 'Total Infil',              subLabel: 'CFM', type: 'readOnly', derived: true },
-      { key: 'totalExfil',        label: 'Total Exfil',              subLabel: 'CFM', type: 'readOnly', derived: true },
-      { key: 'infilWithinSystem', label: 'Infil/Exfil Within System',subLabel: 'CFM (-ve=Infil)' },
-      { key: 'infilSystem',       label: 'Infil/Exfil System',       subLabel: 'CFM (-ve=Infil)' },
-      { key: 'infilOtherSystem',  label: 'Infil/Exfil Other System', subLabel: 'CFM (-ve=Infil)' },
+      { key: 'totalInfil', label: 'Total Infiltration', subLabel: 'CFM', type: 'readOnly', derived: true },
     ],
   },
 
@@ -87,8 +89,6 @@ export const LOADS_SECTIONS = [
     columns: [
       { key: 'maxPurgeAir',      label: 'Max. Purge Air',                  subLabel: 'CFM', type: 'readOnly', derived: true },
       { key: 'faAshraeAcph',     label: 'FA as per ASHRAE/ACPH & Occ.',    subLabel: 'CFM', type: 'readOnly', derived: true },
-      // BUG-17 FIX: was 'fa25Acph' — renamed to 'minSupplyAcph'
-      // This is a minimum TOTAL supply floor, not a fresh air quantity.
       { key: 'minSupplyAcph',    label: 'Min Supply @ 2.5 ACPH',           subLabel: 'CFM', type: 'readOnly', derived: true },
       { key: 'freshAir',         label: 'Fresh Air',                       subLabel: 'CFM', type: 'readOnly', derived: true },
       { key: 'optimisedFreshAir',label: 'Optimised Fresh Air',             subLabel: 'CFM', type: 'readOnly', derived: true },
@@ -100,9 +100,9 @@ export const LOADS_SECTIONS = [
     ],
   },
 
-  // 10. Outdoor Air Coil Loads (NEW) ─────────────────────────────────────────
-  // These are the loads imposed on the AHU COIL by conditioning fresh air,
-  // distinct from room infiltration loads (which act on the room directly).
+  // 10. Outdoor Air Coil Loads ───────────────────────────────────────────────
+  // Loads imposed on the AHU COIL by conditioning fresh air.
+  // Distinct from room infiltration loads (which act on the room directly).
   // Source: outdoorAirLoad.js — enthalpy method, ASHRAE HOF Ch.18
   {
     id:       'oaCoilLoads',
