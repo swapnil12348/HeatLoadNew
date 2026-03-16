@@ -17,21 +17,14 @@
  *     In winter heating mode, the cooling coil is OFF. No bypass occurs. The
  *     Contact Factor (1 − BF) has no physical meaning in this mode.
  *
- *     Previous code:
- *       if (season === 'winter') {
- *         contactFactor = 1 - bf;   ← cooling-coil concept, coil is off
- *       }
- *
- *     This value did not corrupt any current output because coil_contactFactor
- *     is only exported for summer (the final assignment happens inside the
- *     'summer' branch of calculateAllSeasonStatePoints). However, if future
- *     code reads coilLeave_*_winter fields or calculates winter coil performance
- *     from the returned contactFactor, it will receive (1 - bf) instead of 1.0
- *     and silently apply a bypass reduction to a coil that is not running.
- *
  *     Fix: contactFactor = 1.0 in winter.
  *     Meaning: all supply air makes full "contact" with the heating coil
- *     (or more precisely: the bypass concept does not apply to the heating mode).
+ *     (or more precisely: the bypass concept does not apply to heating mode).
+ *
+ *     This does not affect current output — coil_contactFactor is only exported
+ *     for summer in calculateAllSeasonStatePoints. This fix prevents future code
+ *     that reads winter contactFactor from silently applying a bypass correction
+ *     to a non-operating coil.
  *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
@@ -60,7 +53,7 @@
  *     CL = RA (coil off, no dehumidification)
  *     SA = RA (supply = room setpoint, maintained by heating coil)
  *     shr = 1.0 (sensible-only heating mode)
- *     contactFactor = 1.0 (MED-PSP-01 FIX: was 1−bf, conceptually wrong)
+ *     contactFactor = 1.0 (bypass concept does not apply to heating mode)
  */
 
 import {
@@ -74,9 +67,7 @@ import {
 
 /**
  * Compute the full psychrometric state for one air point.
- *
- * FIX PSP-01: calculateRH(dbF, grains, elevFt) from psychro.js replaces
- * the previous local rhFromGrains(). Uses Hyland-Wexler saturation pressure
+ * calculateRH from psychro.js uses the Hyland-Wexler saturation pressure
  * equation — correct for sub-zero dew point conditions (1%RH critical facilities).
  *
  * @param {number} dbF       - dry-bulb temperature (°F)
@@ -147,42 +138,27 @@ export const calculatePsychroStatePoints = (
   const faCFM    = Math.min(freshAirCFM, totalCFM);
   const raCFM    = Math.max(0, totalCFM - faCFM);
 
-  const maDB = (raCFM * dbInF  + faCFM * ambDB) / totalCFM;
-  const maGr = (raCFM * raGr   + faCFM * ambGr) / totalCFM;
+  const maDB = (raCFM * dbInF + faCFM * ambDB) / totalCFM;
+  const maGr = (raCFM * raGr  + faCFM * ambGr) / totalCFM;
   const ma   = computeStatePoint(maDB, maGr, elevation);
 
   // ── 5 + 6: Season-aware coil leaving and supply air ───────────────────────
   let cl, sa, shr, contactFactor;
 
   if (season === 'winter') {
-    // FIX PSP-02: Winter heating mode — cooling coil is OFF.
+    // Winter heating mode — cooling coil is OFF.
     // CL = RA: coil passes air through unchanged (no dehumidification).
-    // SA = RA: supply air = room setpoint (heating coil maintains setpoint).
+    // SA = RA: supply air = room setpoint, maintained by heating coil.
     cl = { ...ra };
     sa = { ...ra };
 
     // shr = 1.0: sensible-only in heating mode (no latent exchange at coil).
     shr = 1.0;
 
-    // MED-PSP-01 FIX: contactFactor = 1.0, NOT (1 - bf).
-    //
-    // Bypass Factor (bf) is a COOLING coil concept — it represents the
-    // fraction of air that bypasses the chilled water coil surface without
-    // full heat/mass transfer contact (ASHRAE HOF 2021 Ch.18).
-    //
-    // In winter, the cooling coil is off. There is no coil surface to bypass.
-    // contactFactor = (1 - bf) implies 10% of air "bypasses" a coil that
-    // is not operating — physically meaningless.
-    //
-    // Setting contactFactor = 1.0 means all supply air is fully conditioned
-    // by the active heating coil (or: the bypass concept simply does not
-    // apply in this mode, which is the correct interpretation).
-    //
-    // This does not affect current output (coil_contactFactor is only
-    // exported for summer in calculateAllSeasonStatePoints). This fix
-    // prevents future code that reads winter contactFactor from silently
-    // applying a bypass correction to a non-operating coil.
-    contactFactor = 1.0;  // MED-PSP-01 FIX: was (1 - bf)
+    // contactFactor = 1.0: bypass concept does not apply when the cooling
+    // coil is off. Setting (1 - bf) in winter would imply 10% of air
+    // bypasses a coil that is not operating — physically meaningless.
+    contactFactor = 1.0;
 
   } else {
     // Cooling mode: summer and monsoon
@@ -208,8 +184,8 @@ export const calculatePsychroStatePoints = (
     const saGr = clGr * (1 - bf) + raGr  * bf;
     sa = computeStatePoint(saDB, saGr, elevation);
 
-    // ── Coil SHR ──────────────────────────────────────────────────────────────
-    // FIX PSP-03: Use moist-air Cp = 0.240 + 0.444×W
+    // Coil SHR — moist-air Cp = 0.240 + 0.444×W captures ~1.8% correction
+    // over dry-air Cp = 0.240 alone at typical HVAC conditions.
     const cpMoist  = 0.240 + 0.444 * (raGr / 7000);
     const enthDiff = ra.enth_num - sa.enth_num;
     const sensDiff = cpMoist * (dbInF - saDB);
@@ -238,7 +214,8 @@ export const calculatePsychroStatePoints = (
  * calculateAllSeasonStatePoints()
  *
  * Runs calculatePsychroStatePoints() for all three seasons.
- * coil_shr and coil_contactFactor are derived from SUMMER ONLY.
+ * coil_shr and coil_contactFactor are derived from SUMMER ONLY —
+ * these are cooling coil design parameters, not winter heating performance.
  */
 export const calculateAllSeasonStatePoints = (
   climate,
@@ -288,10 +265,6 @@ export const calculateAllSeasonStatePoints = (
     fields[`sa_gr_${season}`]    = pts.sa.gr;
     fields[`sa_enth_${season}`]  = pts.sa.enth;
 
-    // Coil performance metrics — summer (cooling mode) only.
-    // Winter contactFactor = 1.0 after MED-PSP-01 fix but is not exported
-    // here — this is intentional. coil_* fields represent cooling coil
-    // design parameters, not winter heating performance.
     if (season === 'summer') {
       fields['coil_shr']           = pts.sensibleHeatRatio;
       fields['coil_contactFactor'] = pts.contactFactor;

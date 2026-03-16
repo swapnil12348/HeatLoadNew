@@ -46,24 +46,26 @@
  *     Using minimum of ASHRAE main velocity range is conservative and
  *     appropriate for critical facility designs where noise/erosion limits apply.
  *
- * ── COIL LOAD VS GRAND TOTAL ─────────────────────────────────────────────────
+ * ── COIL LOAD BASIS FOR CHW SIZING ───────────────────────────────────────────
  *
-// calculatePipeSizing() receives coilLoadBTU for CHW sizing.
-// coilLoadBTU = ERSH + ERLH + OA enthalpy load + return fan heat.
-// Supply fan heat is EXCLUDED — draw-through arrangement: fan is
-// downstream of coil and does not contribute to coil heat transfer.
-// Source: ASHRAE HVAC S&E 2020 Ch.4 (fan arrangement), Ch.22 (pipe sizing).
-// Applies to: semiconductor fabs, pharma cleanrooms, battery manufacturing
-// (all draw-through per SEMI S2, ISPE Baseline Guide Vol.5, GMP Annex 1).
-
-
- *   BEFORE fan heat. Fan heat is a SENSIBLE allowance added to the air-side
- *   system heat balance; it does NOT flow through the chilled water coil.
- *   Sizing CHW pipes on grandTotal (which includes fan heat) would oversize
- *   the CHW plant by the fan heat fraction (~5%). See BUG-PIPE-01.
+ *   calculatePipeSizing() receives coilLoadBTU for CHW sizing.
+ *   coilLoadBTU = ERSH + ERLH + OA enthalpy load + return fan heat.
  *
- *   calculateProjectPipeSizing() (plant-level) must sum coilLoadBTU values,
- *   not grandTotal values, for the same reason. Fixed in this version.
+ *   Supply fan heat is EXCLUDED — draw-through arrangement: the supply fan is
+ *   downstream of the cooling coil and does not contribute to coil heat transfer.
+ *   Fan heat is a sensible allowance on the air-side system heat balance; it does
+ *   NOT flow through the chilled water coil.
+ *
+ *   Sizing CHW pipes on grandTotal (which includes supply fan heat) would
+ *   oversize the CHW plant by the fan heat fraction (~5%). For a 1000 TR
+ *   project this is ~50 TR excess plant cost.
+ *
+ *   calculateProjectPipeSizing() (plant-level) sums coilLoadBTU values —
+ *   not grandTotal — for the same reason.
+ *
+ *   Source: ASHRAE HVAC S&E 2020 Ch.4 (fan arrangement), Ch.22 (pipe sizing).
+ *   Applies to: semiconductor fabs, pharma cleanrooms, battery manufacturing
+ *   (all draw-through per SEMI S2, ISPE Baseline Guide Vol.5, GMP Annex 1).
  */
 
 // ── Standard nominal pipe sizes (DN, mm) ─────────────────────────────────────
@@ -74,12 +76,7 @@ const NOMINAL_PIPE_SIZES_MM = [
 // ── Velocity targets (ft/s) ───────────────────────────────────────────────────
 const VELOCITY_BRANCH_FT_S   = 3.0; // per-room branch — ASHRAE 2–4 ft/s midpoint
 const VELOCITY_MANIFOLD_FT_S = 1.5; // header/manifold — lower for reduced ΔP
-// FIX PIPE-02: VELOCITY_MAIN_FT_S added for project-level distribution mains.
-// ASHRAE Ch.22 recommends 4–8 ft/s for main headers. Using 4 ft/s (conservative
-// lower end) is appropriate for critical facilities with noise/erosion constraints.
-// The previous code used VELOCITY_BRANCH_FT_S (3 ft/s) for mains, oversizing
-// the main distribution header by ~29% on diameter.
-const VELOCITY_MAIN_FT_S     = 4.0; // FIX PIPE-02: main distribution — ASHRAE 4 ft/s
+const VELOCITY_MAIN_FT_S     = 4.0; // main distribution — ASHRAE 4 ft/s minimum
 
 // ── Hydronic constants ────────────────────────────────────────────────────────
 const HYDRONIC_CONSTANT = 500;   // 60 × 8.33 × 1  [BTU/hr per GPM per °F]
@@ -132,9 +129,9 @@ const sizePipe = (flowGPM, velocityFtS) => {
  * Sizes CHW branch, CHW manifold, HW branch, and HW manifold pipes
  * for a single room/AHU coil connection.
  *
- * @param {number} coolingLoadBTU  - room coil cooling load (BTU/hr)
+ * @param {number} coolingLoadBTU  - room coil cooling load (BTU/hr).
  *                                   MUST be coilLoadBTU, NOT grandTotal.
- *                                   Fan heat is NOT a coil heat-transfer load.
+ *                                   Supply fan heat is not a coil heat-transfer load.
  * @param {number} heatingLoadBTU  - room heating load (BTU/hr, positive magnitude)
  * @param {number} preheatLoadBTU  - OA preheat load (BTU/hr, positive magnitude)
  */
@@ -143,7 +140,6 @@ export const calculatePipeSizing = (
   heatingLoadBTU,
   preheatLoadBTU = 0,
 ) => {
-
   // ── CHW sizing ──────────────────────────────────────────────────────────────
   const chwGPM      = coolingLoadBTU > 0
     ? coolingLoadBTU / (HYDRONIC_CONSTANT * CHW_DELTA_T_F) : 0;
@@ -195,14 +191,10 @@ export const calculatePipeSizing = (
  * Aggregates all room pipe sizing results into project-level
  * main pipe sizing. Used by ResultsPage for plant room sizing.
  *
- * FIX PIPE-01: Uses r.coilLoadBTU (was r.grandTotal).
- *   grandTotal includes fan heat — a system allowance on the AIR side.
- *   Fan heat does NOT pass through the chilled water coil.
- *   Using grandTotal oversized the CHW main by the fan heat fraction (~5%).
- *   For a 1000 TR project: ~50 TR overstatement → significant excess plant cost.
- *
- * FIX PIPE-02: Uses VELOCITY_MAIN_FT_S (4 ft/s) for project-level mains.
- *   Was using VELOCITY_BRANCH_FT_S (3 ft/s) — oversized main header by ~29%.
+ * Uses r.coilLoadBTU (not r.grandTotal) — supply fan heat does not pass
+ * through the chilled water coil. See file header for full rationale.
+ * Uses VELOCITY_MAIN_FT_S (4 ft/s) for project-level distribution mains
+ * per ASHRAE Ch.22 — appropriate for critical facilities with noise/erosion limits.
  *
  * @param {Array} rdsRows - full selectRdsData output array
  */
@@ -218,11 +210,12 @@ export const calculateProjectPipeSizing = (rdsRows) => {
     };
   }
 
-// coilLoadBTU = room loads + OA enthalpy + return fan heat.
-// Supply fan heat excluded (draw-through: supply fan is downstream of coil).
-// Return fan heat included (return fan is upstream of coil — ASHRAE HVAC S&E 2020 Ch.4).
+  // coilLoadBTU = room loads + OA enthalpy + return fan heat.
+  // Supply fan heat excluded (draw-through: supply fan downstream of coil).
+  // Return fan heat included (return fan upstream of coil).
+  // Source: ASHRAE HVAC S&E 2020 Ch.4.
   const totalCoolingBTU = rdsRows.reduce(
-    (sum, r) => sum + (parseFloat(r.coilLoadBTU) || 0), 0  // FIX PIPE-01: was r.grandTotal
+    (sum, r) => sum + (parseFloat(r.coilLoadBTU) || 0), 0
   );
   const totalHeatingBTU = rdsRows.reduce(
     (sum, r) => sum + (parseFloat(r.heatingCapBTU) || 0), 0
@@ -234,10 +227,8 @@ export const calculateProjectPipeSizing = (rdsRows) => {
   const totalHWFlowGPM = totalHeatingBTU > 0
     ? totalHeatingBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F) : 0;
 
-  // FIX PIPE-02: VELOCITY_MAIN_FT_S (4 ft/s) for main distribution.
-  // Manifold sized at manifold velocity (1.5 ft/s) — unchanged.
-  const mainCHWBranch   = sizePipe(totalCHWFlowGPM, VELOCITY_MAIN_FT_S);     // FIX PIPE-02
-  const mainHWBranch    = sizePipe(totalHWFlowGPM,  VELOCITY_MAIN_FT_S);     // FIX PIPE-02
+  const mainCHWBranch   = sizePipe(totalCHWFlowGPM, VELOCITY_MAIN_FT_S);
+  const mainHWBranch    = sizePipe(totalHWFlowGPM,  VELOCITY_MAIN_FT_S);
   const mainCHWManifold = sizePipe(totalCHWFlowGPM, VELOCITY_MANIFOLD_FT_S);
   const mainHWManifold  = sizePipe(totalHWFlowGPM,  VELOCITY_MANIFOLD_FT_S);
 

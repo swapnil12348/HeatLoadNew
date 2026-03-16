@@ -10,39 +10,34 @@
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
-
+ *   BUG-HH-07 FIX — grReturn: roomDesignRH → humidificationTarget.
  *
- *     'roomDesignRH' is not a parameter of calculateHeatingHumid and was never
- *     assigned anywhere in the function body. At runtime this throws:
+ *     'roomDesignRH' was not a parameter of calculateHeatingHumid and was never
+ *     assigned anywhere in the function body. At runtime this threw:
  *       ReferenceError: roomDesignRH is not defined
- * const winterDbOut = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;   // BUG-HH-09 FIX
-const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09 FIX
  *
- *     The ReferenceError propagates through the rdsSelector createSelector call
- *     and crashes the entire selectRdsData output for any room on any
- *     recirculation AHU (recirculationFraction > 0). For 100% OA systems
- *     (rcFrac = 0) the mixed-air branch still executes but grReturn × 0 = 0
- *     so the NaN from roomDesignRH is multiplied by 0 — masking the bug
- *     in purely 100% OA projects like pharma/semiconductor fabs.
+ *     The ReferenceError propagated through rdsSelector createSelector and
+ *     crashed selectRdsData for any room on a recirculation AHU. For 100% OA
+ *     systems (rcFrac = 0) grReturn × 0 = 0, masking the bug silently in
+ *     purely 100% OA projects (pharma/semiconductor fabs).
  *
- *     Fix: roomDesignRH → humidificationTarget.
+ *     Fix: grReturn now uses humidificationTarget, which is already a parameter.
+ *     Basis: in steady state the return air leaving the room is at the room's
+ *     operating RH — which is the humidification target for winter sizing.
  *
- *     Basis: BUG-HH-04 comment documents "Return air grains ≈ room target
- *     grains (steady state assumption)." In steady state, the return air
- *     leaving the room is at the room's operating RH — which is the
- *     humidification target for winter sizing. humidificationTarget is
- *     already a parameter of this function.
+ *   BUG-HH-09 FIX — Safe null guard on winter outdoor DB and RH.
  *
+ *     parseFloat(undefined) = NaN propagated into all downstream humidity
+ *     ratio and preheat calculations when winter climate conditions were
+ *     not yet entered. Guards now default to 45°F / 30%RH.
  *
- *     The return object referenced chwFlowRate but the assignment line was
- *     missing from the function body (blank line where the computation
- *     should have been). rdsSelector.js doesn't destructure chwFlowRate from
- *     heatHumid (it uses pipes.chw.flowGPM from calculatePipeSizing instead),
- *     so this didn't crash — but the return contract was broken and the field
- *     was silently undefined for any consumer that did read it.
+ *   BUG-HH-08 FIX — chwFlowRate computed and returned.
  *
- *     Fix: chwFlowRate computed from grandTotal using the same hydronic
- *     constant and CHW_DELTA_T_F already defined in this module.
+ *     The return contract listed chwFlowRate but the assignment was missing.
+ *     Note: rdsSelector.js does not destructure chwFlowRate from this module
+ *     (it uses pipes.chw.flowGPM from calculatePipeSizing instead, which is
+ *     based on coilLoadBTU). The field is retained here for direct consumers
+ *     but the basis differs — see pipeSizing.js for the authoritative CHW flow.
  *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
@@ -111,8 +106,8 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
  *
  *   Method: Supply air humidification — isothermal steam (ASHRAE Ch.22)
  *
- *   FORMULA (v2.0 — BUG-HH-01 corrected):
- *   ──────────────────────────────────────
+ *   FORMULA:
+ *   ─────────
  *   ṁ_air  (lb_dry/hr) = CFM × 60 min/hr × ρ_site
  *                       = CFM × 60 × 0.075 × altCf       [lb_dry_air/hr]
  *   ṁ_water(lb/hr)     = ṁ_air × Δgr / 7000
@@ -209,6 +204,10 @@ const HIGH_HUMID_DELTA_GR = 40;
  *   extraHeatingCap:       string,   +10% safety on terminal heat (kW)
  *   hwFlowRate:            string,   hot water flow rate (USGPM), toFixed(1)
  *   chwFlowRate:           string,   chilled water flow rate (USGPM), toFixed(1)
+ *                                    NOTE: rdsSelector uses pipes.chw.flowGPM from
+ *                                    pipeSizing.js (coilLoadBTU basis) for output.
+ *                                    This field uses grandTotal basis — for direct
+ *                                    consumers only, not the RDS row.
  *   humidDeltaGr:          string,   gr/lb to add for humidification, toFixed(1)
  *   humidGrTarget:         string,   target indoor gr/lb, toFixed(1)
  *   winterGrOut:           string,   outdoor winter gr/lb, toFixed(1)
@@ -234,7 +233,6 @@ export const calculateHeatingHumid = (
   grandTotal             = 0,
   recirculationFraction  = 0,
 ) => {
-  // BUG-HH-02 FIX: Use psychro.js exported functions directly.
   const Cs = sensibleFactor(elevation);
   const Cl = latentFactor(elevation);
 
@@ -243,7 +241,6 @@ export const calculateHeatingHumid = (
   const heatingCapBTU  = Math.abs(winterSensLoss);
   const needsHeating   = heatingCapBTU > 0;
 
-  // BUG-HH-03 FIX: KW_TO_BTU_HR from units.js
   const heatingCap    = (heatingCapBTU / KW_TO_BTU_HR).toFixed(2);
   const heatingCapMBH = (heatingCapBTU / 1000).toFixed(2);
 
@@ -251,55 +248,50 @@ export const calculateHeatingHumid = (
   const extraHeatingCap    = (parseFloat(heatingCap) * 1.1).toFixed(2);
 
   // ── 2. OA preheat load ────────────────────────────────────────────────────
-  const winterOut     = climate?.outside?.winter || {};
+  const winterOut      = climate?.outside?.winter || {};
   const parsedWinterDb = parseFloat(winterOut.db);
-const winterDbOut = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;   // BUG-HH-09 FIX
-  const preheatDeltaT = Math.max(0, dbInF - winterDbOut);
-  const preheatCapBTU = Math.round(Cs * (freshAirCFM || 0) * preheatDeltaT);
-  const preheatCap    = (preheatCapBTU / KW_TO_BTU_HR).toFixed(2);
+  const winterDbOut    = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;
+  const preheatDeltaT  = Math.max(0, dbInF - winterDbOut);
+  const preheatCapBTU  = Math.round(Cs * (freshAirCFM || 0) * preheatDeltaT);
+  const preheatCap     = (preheatCapBTU / KW_TO_BTU_HR).toFixed(2);
 
   // ── 3. Hydronic flow rates ────────────────────────────────────────────────
   const hwFlowRate = heatingCapBTU > 0
     ? (heatingCapBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)).toFixed(1)
     : '0.0';
-  
+
+  // CHW flow based on grandTotal. rdsSelector uses pipeSizing.js (coilLoadBTU
+  // basis) for the authoritative RDS output — this field is for direct consumers.
   const chwFlowRate = grandTotal > 0
-  ? (grandTotal / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)).toFixed(1)
-  : '0.0';
-
-
+    ? (grandTotal / (HYDRONIC_CONSTANT * CHW_DELTA_T_F)).toFixed(1)
+    : '0.0';
 
   // ── 4. Humidification load ────────────────────────────────────────────────
 
   // Outdoor winter humidity ratio
   const parsedWinterRh = parseFloat(winterOut.rh);
-const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09 FIX
-  const winterGrOut = calculateGrains(winterDbOut, winterRhOut, elevation);
+  const winterRhOut    = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;
+  const winterGrOut    = calculateGrains(winterDbOut, winterRhOut, elevation);
 
   // Indoor target humidity ratio
   const humidGrTarget = calculateGrains(dbInF, humidificationTarget, elevation);
 
-  //
+  // Mixed-air grains entering the humidifier.
   // For a 100% OA system (recirculationFraction = 0, the default):
   //   gr_mixed = gr_outdoor  ← identical to v1.x behaviour
-  //
   // For a recirculation system (recirculationFraction > 0):
-  //   gr_mixed = gr_OA × (1 − recircFraction) + gr_return × recircFraction
-  //
-
-  //
-  // Basis: return air is at steady-state room conditions — the room's winter
-  // humidity target IS humidificationTarget. The BUG-HH-04 changelog comment
-  // documents this: "Return air grains ≈ room target grains (steady state)."
-  const rcFrac   = Math.min(1, Math.max(0, recirculationFraction || 0));
-  const grReturn = calculateGrains(dbInF, humidificationTarget, elevation); // BUG-HH-07 FIX
+  //   gr_mixed = gr_OA × (1 − rcFrac) + gr_return × rcFrac
+  // Return air is at steady-state room conditions — the humidification target
+  // IS the winter room RH setpoint (steady-state assumption).
+  const rcFrac     = Math.min(1, Math.max(0, recirculationFraction || 0));
+  const grReturn   = calculateGrains(dbInF, humidificationTarget, elevation);
   const mixedAirGr = winterGrOut * (1 - rcFrac) + grReturn * rcFrac;
 
   // Δgr: how many gr/lb the humidifier must add to the mixed-air stream
   const humidDeltaGr        = Math.max(0, humidGrTarget - mixedAirGr);
   const needsHumidification = humidDeltaGr > 0;
 
-  // BUG-HH-05: Flag high humidification load (sub-5%RH territory)
+  // Flag high humidification load (sub-5%RH territory)
   const highHumidificationLoad = humidDeltaGr > HIGH_HUMID_DELTA_GR;
   let humidWarning = null;
   if (highHumidificationLoad) {
@@ -312,19 +304,17 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
       `standard capacitive RH sensors are not accurate at these conditions.`;
   }
 
-  // BUG-HH-01 FIX: altCf now applied to AIR_MASS_FACTOR.
-  //
-  // ṁ_water (lb/hr) = CFM × 60 min/hr × ρ_site × Δgr / 7000
-  //                 = CFM × AIR_MASS_FACTOR × altCf × Δgr / GR_PER_LB
+  // ṁ_water (lb/hr) = CFM × AIR_MASS_FACTOR × altCf × Δgr / GR_PER_LB
+  // altCf corrects AIR_MASS_FACTOR (sea-level basis) to actual site air density.
+  // Reference: ASHRAE HOF 2021 Ch.1; HVAC S&E 2020 Ch.22
   const humidLbsPerHr = (supplyAir > 0 && needsHumidification)
     ? ((supplyAir * humidDeltaGr * AIR_MASS_FACTOR * altCf) / GR_PER_LB).toFixed(2)
     : '0.00';
 
-  // Humidifier power — isothermal steam basis.
+  // Humidifier power — isothermal steam basis
   const humidKw = (parseFloat(humidLbsPerHr) * STEAM_KW_PER_LB_HR).toFixed(2);
 
-  // Latent humidification load in BTU/hr
-  // Q_l = Cl × CFM_supply × Δgr
+  // Latent humidification load in BTU/hr: Q_l = Cl × CFM_supply × Δgr
   const humidLoadBTU = (supplyAir > 0 && needsHumidification)
     ? Math.round(Cl * supplyAir * humidDeltaGr)
     : 0;
@@ -343,11 +333,10 @@ const winterRhOut = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;   // BUG-HH-09
     // Hydronic flows
     hwFlowRate,
     chwFlowRate,
-   
 
     // Humidification
-    humidDeltaGr:       humidDeltaGr.toFixed(1),
-    humidGrTarget:        humidGrTarget.toFixed(1),
+    humidDeltaGr:          humidDeltaGr.toFixed(1),
+    humidGrTarget:         humidGrTarget.toFixed(1),
     winterGrOut:           winterGrOut.toFixed(1),
     mixedAirGr:            mixedAirGr.toFixed(1),
     humidLbsPerHr,

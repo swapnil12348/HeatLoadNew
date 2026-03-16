@@ -553,7 +553,7 @@ export const selectRdsData = createSelector(
           ...psychroFields,
 
           // ── Debug / audit trail ───────────────────────────────────────────────
-        _raw: { room, envelope, ahu },
+        
       };
 
     } catch (err) {  // ✅ FIX 1: Added (err) so it's available inside the block

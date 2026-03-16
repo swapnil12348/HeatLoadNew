@@ -9,32 +9,13 @@
  *
  *   MED-OA-01 FIX — altCf removed from public API; derived internally from elevation.
  *
- *     Previous signature:
- *       calculateOutdoorAirLoad(freshAirCFM, climate, season, dbInF, rhIn, altCf, elevation)
+ *     Previous signature accepted both altCf and elevation separately. Inside
+ *     the function, Cs/Cl used sensibleFactor(elevation) while oaTotal used
+ *     caller-supplied altCf — two separate density bases. If altCf was pre-
+ *     computed at a different elevation path, Cs/Cl and oaTotal diverged silently.
  *
- *     Both altCf and elevation were accepted separately. Inside the function:
- *       Cs/Cl = sensibleFactor(elevation)    ← used elevation
- *       oaTotal = CFM × 4.5 × altCf × Δh    ← used caller-supplied altCf
- *
- *     If a caller passed altCf computed at a DIFFERENT elevation than the
- *     elevation parameter (easy mistake — altCf might be pre-computed project-
- *     wide at project.elevation, while elevation is also project.elevation but
- *     accessed via a different path), Cs/Cl and oaTotal used different air
- *     density bases silently.
- *
- *     Fix: altCf is now derived internally from elevation:
- *       altCf = altitudeCorrectionFactor(elevation)
- *     This guarantees oaTotal uses the same density basis as Cs/Cl.
- *     The public API is now a single elevation parameter — single source of truth.
- *
- *     ⚠️  BREAKING CHANGE for callers passing altCf as 6th argument:
- *         Old: calculateOutdoorAirLoad(cfm, climate, season, dbF, rh, altCf, elev)
- *         New: calculateOutdoorAirLoad(cfm, climate, season, dbF, rh, elev)
- *         Remove the altCf argument. Both rdsSelector.js and heatingHumid.js
- *         already have elevation available — pass that instead.
- *
- *     Callers updated: rdsSelector.js (calculateAllSeasonOALoads call),
- *                      any direct calculateOutdoorAirLoad calls.
+ *     Fix: altCf is now derived internally via altitudeCorrectionFactor(elevation).
+ *     The public API takes a single elevation parameter — single source of truth.
  *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
@@ -78,7 +59,7 @@ import {
   calculateEnthalpy,
   sensibleFactor,
   latentFactor,
-  altitudeCorrectionFactor,  // MED-OA-01 FIX: added for internal altCf derivation
+  altitudeCorrectionFactor,
 } from '../../utils/psychro';
 import { AIR_MASS_FACTOR } from './heatingHumid';
 
@@ -90,16 +71,14 @@ import { AIR_MASS_FACTOR } from './heatingHumid';
  * Computes the sensible, latent, and total enthalpy load imposed on the
  * AHU coil by conditioning the required outdoor air quantity.
  *
- * @param {number} freshAirCFM   - outdoor air CFM (Ez-corrected, from airQuantities.js)
- * @param {object} climate       - full climate Redux state (state.climate)
- * @param {string} season        - 'summer' | 'monsoon' | 'winter'
- * @param {number} dbInF         - room design dry-bulb (°F)
- * @param {number} rhIn          - room design relative humidity (%)
- * @param {number} [elevation=0] - site elevation (ft).
- *                                 MED-OA-01 FIX: altCf removed from signature.
- *                                 altCf is now derived internally from elevation
- *                                 to guarantee Cs/Cl and oaTotal use the same
- *                                 air density basis.
+ * @param {number} freshAirCFM    - outdoor air CFM (Ez-corrected, from airQuantities.js)
+ * @param {object} climate        - full climate Redux state (state.climate)
+ * @param {string} season         - 'summer' | 'monsoon' | 'winter'
+ * @param {number} dbInF          - room design dry-bulb (°F)
+ * @param {number} rhIn           - room design relative humidity (%)
+ * @param {number} [elevation=0]  - site elevation (ft). altCf is derived internally
+ *                                  from elevation to guarantee Cs/Cl and oaTotal
+ *                                  use the same air density basis.
  *
  * @returns {{
  *   oaSensible:       number,  sensible OA coil load (BTU/hr), signed
@@ -123,11 +102,6 @@ export const calculateOutdoorAirLoad = (
   dbInF,
   rhIn,
   elevation = 0,
-  // MED-OA-01 FIX: altCf parameter REMOVED.
-  // altCf is now derived internally: altCf = altitudeCorrectionFactor(elevation).
-  // This eliminates the risk of Cs/Cl and oaTotal using different density bases
-  // when a caller passes altCf computed at a different elevation than elevation.
-  // ⚠️  Callers must remove the altCf argument from their call sites.
 ) => {
   // Guard — no fresh air means no OA load
   if (!freshAirCFM || freshAirCFM <= 0) {
@@ -147,15 +121,11 @@ export const calculateOutdoorAirLoad = (
     };
   }
 
-  // MED-OA-01 FIX: derive altCf internally — guarantees oaTotal and Cs/Cl
-  // use the same site pressure basis (sitePressure(elevation)).
-  // Previously: altCf was caller-supplied and could diverge from elevation.
-  const altCf = altitudeCorrectionFactor(elevation);  // MED-OA-01 FIX
-
-  // BUG-OA-02 FIX: Use psychro.js exported functions.
-  // sensibleFactor(elevation) already includes the altCf correction internally.
-  const Cs = sensibleFactor(elevation);
-  const Cl = latentFactor(elevation);
+  // altCf derived internally — guarantees oaTotal and Cs/Cl use the same
+  // site pressure basis. Passing elevation once is the single source of truth.
+  const altCf = altitudeCorrectionFactor(elevation);
+  const Cs    = sensibleFactor(elevation);
+  const Cl    = latentFactor(elevation);
 
   // ── Outdoor conditions ────────────────────────────────────────────────────
   const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
@@ -177,14 +147,11 @@ export const calculateOutdoorAirLoad = (
   const oaLatent       = Math.round(Math.max(0, rawLatent));
   const oaLatentSigned = Math.round(rawLatent);
 
-  // ── Total enthalpy-based OA load (authoritative) ──────────────────────────
-  // BUG-OA-01 FIX: AIR_MASS_FACTOR imported from heatingHumid.js (was magic 4.5).
-  // MED-OA-01 FIX: altCf derived above — guaranteed consistent with Cs/Cl.
-  //
-  // BUG-OA-03 NOTE: This value differs from (oaSensible + oaLatent) because
-  // Cs/Cl method linearises the latent contribution (0.68 × Δgr) while the
-  // enthalpy method uses h = 0.240t + W(1061 + 0.444t). Use oaTotal for coil
-  // selection; oaSensible + oaLatent are for display breakdown only.
+  // ── Total enthalpy-based OA load (authoritative for coil sizing) ──────────
+  // oaTotal differs from (oaSensible + oaLatent) because the Cs/Cl method
+  // linearises the latent contribution (0.68 × Δgr) while the enthalpy method
+  // uses h = 0.240t + W(1061 + 0.444t). Use oaTotal for coil selection;
+  // oaSensible + oaLatent are for display breakdown only.
   const oaEnthalpyDelta = hOut - hIn;
   const oaTotal = Math.round(freshAirCFM * AIR_MASS_FACTOR * altCf * oaEnthalpyDelta);
 
@@ -212,12 +179,10 @@ export const calculateOutdoorAirLoad = (
  * Runs calculateOutdoorAirLoad() for all three seasons in one call.
  * Consumed by rdsSelector.js.
  *
- * MED-OA-01 FIX: altCf parameter removed — elevation is the only density input.
- *
- * @param {number} freshAirCFM  - outdoor air CFM (Ez-corrected)
- * @param {object} climate      - full climate Redux state
- * @param {number} dbInF        - room design dry-bulb (°F)
- * @param {number} rhIn         - room design RH (%)
+ * @param {number} freshAirCFM   - outdoor air CFM (Ez-corrected)
+ * @param {object} climate       - full climate Redux state
+ * @param {number} dbInF         - room design dry-bulb (°F)
+ * @param {number} rhIn          - room design RH (%)
  * @param {number} [elevation=0] - site elevation (ft)
  *
  * @returns {{ summer: OAResult, monsoon: OAResult, winter: OAResult }}
@@ -228,17 +193,12 @@ export const calculateAllSeasonOALoads = (
   dbInF,
   rhIn,
   elevation = 0,
-  // MED-OA-01 FIX: altCf removed from signature — derived internally.
-  // ⚠️  rdsSelector.js must remove altCf from this call.
 ) => {
   const seasons = ['summer', 'monsoon', 'winter'];
   return Object.fromEntries(
     seasons.map(season => [
       season,
-      calculateOutdoorAirLoad(
-        freshAirCFM, climate, season, dbInF, rhIn, elevation,
-        // MED-OA-01 FIX: altCf removed from inner call too
-      ),
+      calculateOutdoorAirLoad(freshAirCFM, climate, season, dbInF, rhIn, elevation),
     ])
   );
 };

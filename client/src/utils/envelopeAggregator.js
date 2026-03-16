@@ -19,9 +19,15 @@
  * and represent heating loads that must reach seasonalLoads.js intact.
  */
 
+// ── AFTER (fixed) ────────────────────────────────────────────────────────────
+import { calcWallGain, calcRoofGain, calcPartitionGain, calcSlabGain,
+         calcInfiltrationGain }           from './envelopeCalc';
+import { calcGlassGain, calcSkylightGain } from './glazingCalc';
+
+// Re-export so external consumers (seasonalLoads.js etc.) can still import
+// individual functions directly from this aggregator if needed.
 export { calcWallGain, calcRoofGain, calcPartitionGain, calcSlabGain,
-         calcInfiltrationGain }                                        from './envelopeCalc';
-export { calcGlassGain, calcSkylightGain }                             from './glazingCalc';
+         calcInfiltrationGain, calcGlassGain, calcSkylightGain };
 // ─────────────────────────────────────────────────────────────────────────────
 // Total envelope gain — room level
 // ─────────────────────────────────────────────────────────────────────────────

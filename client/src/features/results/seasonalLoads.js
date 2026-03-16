@@ -228,14 +228,11 @@ export const calculateSeasonLoad = (
   //   Only null or undefined falls back to the 50%RH default.
   //   This is identical to the guard already used in rdsSelector.js (raRH).
   const parsedRhIn = parseFloat(room.designRH);
-  const rhIn = !isNaN(parsedRhIn) ? parsedRhIn : 50;                         // CRIT-SL-01 FIX: was: parseFloat(room.designRH) || 50
+  const rhIn = !isNaN(parsedRhIn) ? parsedRhIn : 50;                        
 
   const grIn = calculateGrains(dbInF, rhIn, elevation);
 
-  // ── Altitude-corrected psychrometric factors ────────────────────────────────
-  // BUG-SL-01 FIX: Import sensibleFactor() / latentFactor() from psychro.js.
-  // These functions return 1.08 × Cf and 0.68 × Cf respectively for the given
-  // elevation. They cannot return undefined or NaN on valid numeric input.
+
 
 
   // ── 1. Envelope gain ────────────────────────────────────────────────────────
@@ -280,8 +277,8 @@ export const calculateSeasonLoad = (
   const equipLatPct     = parseDef(int.equipment?.latentPct, 0) / 100;
   const diversityFactor = parseDef(int.equipment?.diversityFactor, ASHRAE.PROCESS_DIVERSITY_FACTOR);
 
-  const equipSens   = equipKW * KW_TO_BTU_HR * equipSensPct * diversityFactor;  // BUG-SL-02 FIX
-  const equipLatent = equipKW * KW_TO_BTU_HR * equipLatPct  * diversityFactor;  // BUG-SL-02 FIX
+  const equipSens   = equipKW * KW_TO_BTU_HR * equipSensPct * diversityFactor;  
+  const equipLatent = equipKW * KW_TO_BTU_HR * equipLatPct  * diversityFactor;  
 
   // ── 5. Infiltration ────────────────────────────────────────────────────────
   const { sensible: infilSens, latent: infilLat, cfm: infilCFM } = calcInfiltrationGain(

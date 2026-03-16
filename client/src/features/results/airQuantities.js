@@ -62,7 +62,6 @@
  *
  *   3. regulatoryAcphCFM = calculateMinAchCfm(ventCategory, volumeFt3)
  *                          REGULATORY floor from ventilation.js — OSHA / NFPA / SEMI
- *                          HIGH-AQ-01 FIX: this was never applied before.
  *
  *   4. minAcphCFM        = Volume_ft³ × minACPH / 60  (user-entered floor)
  *
@@ -84,7 +83,6 @@
 import ASHRAE                                           from '../../constants/ashrae';
 import { cToF }                                        from '../../utils/units';
 import { calculateVbz, calculateMinAchCfm }            from '../../constants/ventilation';
-//                     ^^^^^^^^^^^^^^^^^ HIGH-AQ-01 FIX: added import
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
@@ -108,7 +106,7 @@ import { calculateVbz, calculateMinAchCfm }            from '../../constants/ven
  *   supplyAirGoverned:      string,  'thermal' | 'designAcph' | 'regulatoryAcph' | 'minAcph'
  *   thermalCFM:             number,  supply air required by heat load alone
  *   supplyAirMinAcph:       number,  supply air from user minAcph constraint
- *   regulatoryAcphCFM:      number,  supply air from regulatory ACH floor (HIGH-AQ-01)
+ *   regulatoryAcphCFM:      number,  supply air from regulatory ACH floor
  *   vbz:                    number,  ASHRAE 62.1 breathing zone OA (CFM)
  *   freshAir:               number,  max(vbz, totalExhaust) — actual OA obligation
  *   optimisedFreshAir:      number,  max(freshAir, minSupplyAcph)
@@ -141,13 +139,11 @@ export const calculateAirQuantities = (
   floorAreaFt2,
   volumeFt3,
 ) => {
-  // BUG-AQ-01 FIX: ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL (exists) × altCf.
   const Cs  = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altCf;
   const bf  = parseFloat(effectiveSystemDesign.bypassFactor) || 0.10;
   const adp = parseFloat(effectiveSystemDesign.adp)          || 55;
 
   // ── Room design DB (°F) ───────────────────────────────────────────────────
-  // BUG-AQ-02 FIX: cToF() from units.js — null-safe.
   const dbInFRaw = cToF(room.designTemp);
   const dbInF    = dbInFRaw === null ? 72 : dbInFRaw;
 
@@ -157,56 +153,28 @@ export const calculateAirQuantities = (
     ? Math.ceil(peakErsh / (Cs * supplyDT))
     : 0;
 
-  console.log('[AQ debug]', {
-  dbInF, adp, bf, supplyDT,
-  peakErsh,
-  Cs,
-  thermalCFM,
-});
-
   // ── 2. ACPH-based CFM constraints ─────────────────────────────────────────
   const minAcphCFM    = Math.round(volumeFt3 * (parseFloat(room.minAcph)    || 0) / 60);
   const designAcphCFM = Math.round(volumeFt3 * (parseFloat(room.designAcph) || 0) / 60);
 
-  // HIGH-AQ-01 FIX: regulatory ACH floor from ventilation.js.
-  //
-  // calculateMinAchCfm(ventCategory, volumeFt3) returns:
-  //   (minAch × volumeFt3) / 60
-  // where minAch is the authority-having-jurisdiction minimum for the room type:
-  //   battery-liion:    10 ACPH — NFPA 855 §15 / IFC §1206
-  //   battery-leadacid: 12 ACPH — OSHA 29 CFR 1926.403(i)
-  //   pharma:           20 ACPH — GMP Annex 1:2022 §4.29
-  //   semicon:           6 ACPH — SEMI S2-0200 basis
-  //   general/others:    0      — no regulatory ACH floor
-  //
-  // This floor is INDEPENDENT of what the user enters in room.minAcph.
-  // A user entering minAcph=6 for a battery-liion room was previously
-  // allowed — producing a supply 40% below NFPA 855 minimum.
+  // Regulatory ACH floor from ventilation.js — independent of user-entered minAcph.
+  // battery-liion: 10 ACPH (NFPA 855 §15), battery-leadacid: 12 ACPH (OSHA 29 CFR
+  // 1926.403(i)), pharma: 20 ACPH (GMP Annex 1:2022 §4.29), semicon: 6 ACPH (SEMI S2).
   const regulatoryAcphCFM = Math.round(
-    calculateMinAchCfm(room.ventCategory, volumeFt3)  // HIGH-AQ-01 FIX
+    calculateMinAchCfm(room.ventCategory, volumeFt3)
   );
 
   // ── 3. Governing supply air ───────────────────────────────────────────────
   const supplyAir = Math.max(thermalCFM, minAcphCFM, designAcphCFM, regulatoryAcphCFM);
-  //                                                                  ^^^^^^^^^^^^^^^^
-  //                                                                  HIGH-AQ-01 FIX: added
 
-  // BUG-AQ-03 FIX: Explicit priority chain replaces fragile ternary.
-  //
-  // HIGH-AQ-01: 'regulatoryAcph' added as a governed state, ranked above thermal.
-  // Regulatory constraints (OSHA, NFPA 855) are hard floors.
-  //
-  // Priority when values are equal:
-  //   designAcph > regulatoryAcph > thermal > minAcph
-  //
-  // Rationale: designAcph is the most project-specific compliance driver (ISO/GMP
-  // class). regulatoryAcph is a statutory floor that overrides engineering thermal.
-  // thermal overrides the user-entered floor (minAcph).
+  // Priority when values are equal: designAcph > regulatoryAcph > thermal > minAcph.
+  // Regulatory constraints (OSHA, NFPA 855) are hard floors that rank above thermal.
+  // designAcph (ISO/GMP class) ranks highest as the most project-specific driver.
   let supplyAirGoverned;
   if (supplyAir === designAcphCFM && designAcphCFM > 0) {
     supplyAirGoverned = 'designAcph';
   } else if (supplyAir === regulatoryAcphCFM && regulatoryAcphCFM > 0) {
-    supplyAirGoverned = 'regulatoryAcph';   // HIGH-AQ-01 FIX: new governed state
+    supplyAirGoverned = 'regulatoryAcph';
   } else if (supplyAir === thermalCFM && thermalCFM > 0) {
     supplyAirGoverned = 'thermal';
   } else {
@@ -242,12 +210,11 @@ export const calculateAirQuantities = (
   // ── 7. AHU air balance ────────────────────────────────────────────────────
   const coilAir   = Math.round(supplyAir * (1 - bf));
   const bypassAir = Math.round(supplyAir * bf);
-  const returnAir = Math.max(0, supplyAir - freshAirCheck ); // FIX: Removed double-dip of 
+  const returnAir = Math.max(0, supplyAir - freshAirCheck);
 
   // ── 8. ACES nomenclature aliases ─────────────────────────────────────────
   const dehumidifiedAir = coilAir;
   const freshAirAces    = freshAirCheck;
-  // FIX: Bleed air (exfiltration) is the surplus fresh air not mechanically exhausted
   const bleedAir        = Math.max(0, freshAirCheck - totalExhaust);
 
   return {
@@ -256,7 +223,7 @@ export const calculateAirQuantities = (
     supplyAirGoverned,
     thermalCFM,
     supplyAirMinAcph:  minAcphCFM,
-    regulatoryAcphCFM,                // HIGH-AQ-01 FIX: exposed for RDS display
+    regulatoryAcphCFM,
 
     // Fresh air
     vbz,
