@@ -131,7 +131,7 @@ export default function ResultsPage() {
       project: 'HVAC Design',
       units:   { area: 'm²', airflow: 'CFM', load: 'TR', coilLoad: 'BTU/hr' },
       totals:  { totalTR, totalCFM, totalAreaM2, totalAreaFt2, totalCoilLoadBTU },
-      rooms: rdsRows,
+      rooms:   rdsRows,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -377,8 +377,6 @@ export default function ResultsPage() {
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">Thermal CFM</th>
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">Min ACPH CFM</th>
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">Design CFM</th>
-                      {/* BUG-UI-10 FIX: RSH / ERSH / GTSH columns — headers were present
-                          in v2.1 patch but tbody cells were never added. Fixed below. */}
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">RSH</th>
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">ERSH</th>
                       <th className="px-4 py-3 font-bold text-slate-400 uppercase text-right">GTSH</th>
@@ -399,12 +397,9 @@ export default function ResultsPage() {
                           {(r.supplyAir || 0).toLocaleString()}
                         </td>
 
-                        {/* BUG-UI-10 FIX: data cells added — were missing entirely.
-                            BUG-UI-11 FIX: null + NaN guard instead of falsy check.
-                            r.rsh / r.ersh / r.grandTotalSensible could legitimately
-                            be 0 for rooms with minimal sensible loads. A plain truthy
-                            check `r.ersh ? … : '—'` would show '—' for 0, which is
-                            wrong — 0 BTU/hr is a valid engineering result. */}
+                        {/* null + NaN guard: 0 is a valid engineering result for rooms
+                            with minimal sensible loads — a plain truthy check would show '—'
+                            for 0 BTU/hr which is incorrect. */}
                         <td className="px-4 py-2.5 text-right font-mono text-slate-500">
                           {r.rsh != null && !isNaN(r.rsh)
                             ? Math.round(r.rsh).toLocaleString()
@@ -458,8 +453,14 @@ export default function ResultsPage() {
                   <span className="font-bold text-slate-700">{systemDesign.adp} °F</span>
                 </li>
                 <li className="flex justify-between border-b border-slate-50 pb-2">
-                  <span className="text-slate-500">Fan Heat</span>
+                  <span className="text-slate-500">Supply Fan Heat</span>
                   <span className="font-bold text-slate-700">{systemDesign.fanHeat}%</span>
+                </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500">Return Fan Heat</span>
+                  <span className="font-bold text-slate-700">
+                    {systemDesign.returnFanHeat ?? 5}%
+                  </span>
                 </li>
                 <li className="flex justify-between border-b border-slate-50 pb-2">
                   <span className="text-slate-500">Site Elevation</span>
@@ -474,9 +475,9 @@ export default function ResultsPage() {
 
             {hasData && sqftPerTR !== '—' && (
               <div className={`rounded-xl border p-5 flex items-start gap-3
-                ${tipColor === 'red'    ? 'bg-red-50    border-red-200'      : ''}
-                ${tipColor === 'orange' ? 'bg-amber-50  border-amber-200'    : ''}
-                ${tipColor === 'green'  ? 'bg-emerald-50 border-emerald-200' : ''}
+                ${tipColor === 'red'    ? 'bg-red-50    border-red-200'       : ''}
+                ${tipColor === 'orange' ? 'bg-amber-50  border-amber-200'     : ''}
+                ${tipColor === 'green'  ? 'bg-emerald-50 border-emerald-200'  : ''}
               `}>
                 <div className="text-xl">
                   {tipColor === 'red' ? '⚠️' : tipColor === 'orange' ? '🔶' : '💡'}

@@ -5,31 +5,26 @@
  * Separates data concerns from rendering so RoomSidebarItem
  * stays a pure presentational component.
  *
- * -- CHANGELOG v2.1 -----------------------------------------------------------
+ * -- CHANGELOG ----------------------------------------------------------------
  *
- *   FIX-H08 [LOW] — totalAreaM2 source documented and aligned with useProjectTotals.
+ *   v2.0 — totalAreaM2 source documented and aligned with useProjectTotals.
  *
- *     This hook reads room.floorArea from roomSlice (m²) — correct and unchanged.
- *     useProjectTotals reads rdsRow.floorArea (ft², post CRIT-RDS-01 fix).
- *     Both hooks report a "total area" figure from different sources.
- *     They will NOT agree numerically — intentionally:
+ *     This hook reads room.floorArea from roomSlice (m²).
+ *     useProjectTotals reads rdsRow.floorArea (ft², converted back to m²).
+ *     Both report a "total area" figure — numerically they should agree within
+ *     floating-point precision. If they differ significantly, a room's floorArea
+ *     has been updated in roomSlice but the RDS row has not yet recomputed
+ *     (possible during a dispatch/selector batching edge case).
  *
- *       useRoomSidebar.totalAreaM2  → for sidebar footer stat (m²)
- *       useProjectTotals.totalAreaM2 → for results KPI (m², derived from ft²)
+ *     To keep all KPI figures self-consistent, UI components should read
+ *     totalAreaM2 from ONE source. Prefer useProjectTotals.totalAreaM2 for
+ *     results pages — it is derived from the same rdsRows that drive all other
+ *     KPI figures. useRoomSidebar.totalAreaM2 is acceptable for the sidebar
+ *     footer only — it shows a live estimate while the user edits rooms,
+ *     before the RDS selector has recomputed.
  *
- *     Numerically they should agree within floating-point precision.
- *     If they differ significantly, a room's floorArea has been updated in
- *     roomSlice but the RDS row has not yet recomputed — possible during a
- *     dispatch/selector batching edge case.
- *
- *     To avoid any drift, UI components should read totalAreaM2 from ONE source.
- *     Recommendation: use useProjectTotals.totalAreaM2 for all display — it is
- *     derived from the same rdsRows that drive all other KPI figures, so all
- *     numbers on a results page remain self-consistent.
- *
- *     The sidebar footer is the only place useRoomSidebar.totalAreaM2 is used.
- *     That is acceptable — it shows a live room-count × area estimate while
- *     the user is editing rooms, before the RDS has recomputed.
+ *   v2.1 — Duplicate roomActions import merged into single import statement.
+ *         — Stale inline fix-tag annotations removed; domain reasoning preserved.
  *
  * Returns:
  *   rooms         — full room list from roomSlice
@@ -40,25 +35,26 @@
  *   onDeleteRoom  — dispatch deleteRoomWithCleanup(id) with confirm
  */
 
-import { useCallback }             from 'react';
+import { useCallback }              from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import {
   selectAllRooms,
   selectActiveRoomId,
   setActiveRoom,
-}                                  from '../features/room/roomSlice';
-import { addNewRoom }              from '../features/room/roomActions';
-import { deleteRoomWithCleanup }   from '../features/room/roomActions';
+}                                   from '../features/room/roomSlice';
+import {
+  addNewRoom,
+  deleteRoomWithCleanup,
+}                                   from '../features/room/roomActions';
 
 const useRoomSidebar = () => {
   const dispatch     = useDispatch();
   const rooms        = useSelector(selectAllRooms);
   const activeRoomId = useSelector(selectActiveRoomId);
 
-  // totalAreaM2: read from roomSlice (m²) — correct.
-  // FIX-H08: documented why this source differs from useProjectTotals.
-  // roomSlice.floorArea is in m² (SI). rdsRow.floorArea is ft² (post CRIT-RDS-01).
-  // This accumulation is correct. Use for sidebar footer display only.
+  // totalAreaM2: live sum from roomSlice (m²).
+  // Use for sidebar footer display only — see changelog note on source alignment
+  // with useProjectTotals before using this value on a results page.
   const totalAreaM2 = rooms.reduce(
     (sum, r) => sum + (parseFloat(r.floorArea) || 0), 0
   );
@@ -71,8 +67,8 @@ const useRoomSidebar = () => {
     dispatch(setActiveRoom(id));
   }, [dispatch]);
 
-  // FLOW-05 FIX: deleteRoomWithCleanup removes from roomSlice AND
-  // envelopeSlice atomically — plain deleteRoom leaves envelope data behind.
+  // deleteRoomWithCleanup removes from roomSlice AND envelopeSlice atomically.
+  // Using deleteRoom() directly would leave orphaned envelope data behind.
   const onDeleteRoom = useCallback((id, name) => {
     if (window.confirm(`Delete "${name || 'this room'}"? This cannot be undone.`)) {
       dispatch(deleteRoomWithCleanup(id));

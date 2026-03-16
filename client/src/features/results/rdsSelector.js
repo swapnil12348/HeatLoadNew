@@ -17,103 +17,92 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
+ *
+ *   returnFanHeat wired from systemDesign.returnFanHeat.
+ *
+ *     Previous hardcoded 0.02 multiplier (returnFanHeat = supplyFanHeat × 2%)
+ *     was non-configurable and significantly underestimated return fan heat for
+ *     balanced supply/return systems. Now reads systemDesign.returnFanHeat (%)
+ *     added to projectSlice v2.3. Default 5% via projectSlice initialState.
+ *
+ *   humidificationTarget wired as raRH fallback.
+ *
+ *     raRH fell back to hardcoded 50 when room.designRH was missing/NaN.
+ *     Now falls back to systemDesign.humidificationTarget (project-level
+ *     winter RH default). Rooms with an explicit designRH — including 0%RH
+ *     dry rooms — always use room.designRH directly; the fallback only fires
+ *     when no designRH is set at all.
+ *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
  *   ADP-01 — Apparatus Dew Point mode: 'manual' | 'calculated' per AHU.
  *
- *     Each AHU now carries an adpMode field (added to ahuSlice.js makeAhu).
- *     rdsSelector resolves the effective ADP per room before STEP 2 so that
- *     airQuantities.js, psychroStatePoints.js, and all downstream calcs receive
- *     the same consistent value.
- *
  *     Priority chain (most specific wins):
  *       1. ahuAdpMode = 'calculated' → calculateAdpFromLoads() from psychro.js
- *          T_ADP = T_room − ERSH ÷ (Cs × coilAir)
- *          Two-pass approach breaks the supplyAir ↔ ADP circular dependency:
- *            Pass 1: preliminary airQuantities with project-default ADP
- *            Pass 2: calculateAdpFromLoads from preliminary supplyAir → adpF
- *            Final:  effectiveSystemDesign = { ...systemDesign, adp: adpF }
- *                    passed to the real airQuantities call in STEP 2.
- *       2. ahu.adp > 0 → per-AHU manual override (°F)
- *       3. systemDesign.adp → project-level default
- *       4. ASHRAE.DEFAULT_ADP → 55°F hardcoded fallback
+ *       2. ahu.adp > 0               → per-AHU manual override (°F)
+ *       3. systemDesign.adp          → project-level default
+ *       4. ASHRAE.DEFAULT_ADP        → 55°F hardcoded fallback
  *
- *     ADP resolution block is placed AFTER STEP 1 (seasonal loads) because
- *     'calculated' mode requires peakErsh and dbInF, which are only available
- *     after calculateSeasonLoad() completes. Placing the block before STEP 1
- *     would cause peakErsh = undefined → calculateAdpFromLoads returns
- *     DEFAULT_ADP silently, making 'calculated' mode a no-op.
+ *     Two-pass for 'calculated' mode breaks the supplyAir ↔ ADP circular dependency:
+ *       Pass 1: preliminary airQuantities with project-default ADP
+ *       Pass 2: calculateAdpFromLoads from preliminary supplyAir → adpF
+ *       Final:  effectiveSystemDesign = { ...systemDesign, adp: adpF }
  *
- *     coil_adp and coil_adpMode are exposed in the assembled return object
- *     for RDS display and AdpCalculatedReadout in AHUConfig.jsx.
- *
- *   BUG-RDS-ADP-01 FIX — ADP block ordering: moved after STEP 1.
- *
- *     Previous placement (before STEP 1) referenced peakErsh and dbInF before
- *     they were defined. In 'calculated' mode:
- *       calculateAdpFromLoads(dbInF=undefined, peakErsh=undefined, ...)
- *       → guard: peakErsh <= 0 → returns ASHRAE.DEFAULT_ADP every time
- *       → 'calculated' mode was silently identical to 'manual' mode
- *
- *   BUG-RDS-ADP-02 FIX — STEP 2 now passes effectiveSystemDesign.
- *
- *     Previous STEP 2 still passed raw systemDesign instead of
- *     effectiveSystemDesign, so the resolved adpF was never actually used
- *     by calculateAirQuantities (which reads systemDesign.adp internally).
- *     airQuantities always used the project-default ADP regardless of mode.
+ *     ⚠ The ADP block MUST come after STEP 1 — 'calculated' mode requires
+ *       peakErsh and dbInF, which are only available after calculateSeasonLoad().
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   CRIT-RDS-01 FIX — rdsRow.volume and rdsRow.floorArea now in ft³ / ft².
- *   CRIT-RDS-02 FIX — grandTotal and coilLoadBTU now use oaTotal (enthalpy method).
- *   HIGH-HH-01 FIX  — recirculationFraction now passed to calculateHeatingHumid.
+ *   CRIT-RDS-01 — rdsRow.volume and rdsRow.floorArea now in ft³ / ft².
+ *   CRIT-RDS-02 — grandTotal and coilLoadBTU now use oaTotal (enthalpy method).
+ *   HIGH-HH-01  — recirculationFraction now passed to calculateHeatingHumid.
  *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
- *   FIX CRIT-01: OA coil load included in grandTotal (was missing → 15–40% understatement)
- *   FIX MED-01:  Fan heat is SENSIBLE only
- *   FIX MED-02:  returnFanHeat included in grandTotal
- *   FIX RDS-01:  sensibleFactor(elevation) for Cs (was ASHRAE.SENSIBLE_FACTOR → undefined)
- *   FIX RDS-02:  altitudeCorrectionFactor from psychro.js (no local duplicate)
- *   FIX RDS-03:  KW_TO_BTU_HR from units.js (was ASHRAE.KW_TO_BTU, wrong name)
- *   FIX RDS-04:  supplyAcph computed and exposed for ISO 14644 audit
+ *   CRIT-01: OA coil load included in grandTotal (was missing → 15–40% understatement)
+ *   MED-01:  Fan heat is SENSIBLE only
+ *   MED-02:  returnFanHeat included in grandTotal
+ *   RDS-01:  sensibleFactor(elevation) for Cs (was ASHRAE.SENSIBLE_FACTOR → undefined)
+ *   RDS-02:  altitudeCorrectionFactor from psychro.js (no local duplicate)
+ *   RDS-03:  KW_TO_BTU_HR from units.js (was ASHRAE.KW_TO_BTU, wrong name)
+ *   RDS-04:  supplyAcph computed and exposed for ISO 14644 audit
  *
  * ── SUPPLY AIR FIELD CLARIFICATION ───────────────────────────────────────────
  *
- *   supplyAir = TOTAL supply CFM (recirculation + OA), from airQuantities.js
- *               Math.max(thermalCFM, designAcphCFM, regulatoryAcphCFM, minAcphCFM)
+ *   supplyAir     = TOTAL supply CFM (recirculation + OA), from airQuantities.js
+ *                   Math.max(thermalCFM, designAcphCFM, regulatoryAcphCFM, minAcphCFM)
  *   freshAirCheck = OA-only CFM component.
  *   ACPH uses supplyAir (total) — correct for ISO 14644 cleanroom ACH. ✓
  */
 
 import { createSelector } from '@reduxjs/toolkit';
 
-import { calculateSeasonLoad } from './seasonalLoads';
-import { calculateAirQuantities } from './airQuantities';
-import { calculateAllSeasonOALoads } from './outdoorAirLoad';
-import { calculateHeatingHumid } from './heatingHumid';
-import { calculatePipeSizing } from './pipeSizing';
+import { calculateSeasonLoad }           from './seasonalLoads';
+import { calculateAirQuantities }        from './airQuantities';
+import { calculateAllSeasonOALoads }     from './outdoorAirLoad';
+import { calculateHeatingHumid }         from './heatingHumid';
+import { calculatePipeSizing }           from './pipeSizing';
 import { calculateAllSeasonStatePoints } from './psychroStatePoints';
 
 import {
   altitudeCorrectionFactor,
   sensibleFactor,
-  calculateAdpFromLoads,   // ADP-01
+  calculateAdpFromLoads,
 } from '../../utils/psychro';
 
 import { KW_TO_BTU_HR, m2ToFt2, m3ToFt3 } from '../../utils/units';
 import ASHRAE from '../../constants/ashrae';
 
 // ── Input selectors ───────────────────────────────────────────────────────────
-const selectRooms = (state) => state.room.list;
-const selectEnvelopes = (state) => state.envelope.byRoomId;
-const selectAhus = (state) => state.ahu.list;
-const selectClimate = (state) => state.climate;
+const selectRooms        = (state) => state.room.list;
+const selectEnvelopes    = (state) => state.envelope.byRoomId;
+const selectAhus         = (state) => state.ahu.list;
+const selectClimate      = (state) => state.climate;
 const selectSystemDesign = (state) => state.project.systemDesign;
-const selectElevation = (state) => state.project.ambient.elevation || 0;
-const selectLatitude = (state) => state.project.ambient.latitude ?? 28;
-const selectDailyRange = (state) => state.project.ambient.dailyRange ?? 0;
-
+const selectElevation    = (state) => state.project.ambient.elevation || 0;
+const selectLatitude     = (state) => state.project.ambient.latitude ?? 28;
+const selectDailyRange   = (state) => state.project.ambient.dailyRange ?? 0;
 
 // ── Main memoized selector ────────────────────────────────────────────────────
 export const selectRdsData = createSelector(
@@ -121,41 +110,37 @@ export const selectRdsData = createSelector(
     selectRooms, selectEnvelopes, selectAhus,
     selectClimate, selectSystemDesign,
     selectElevation, selectLatitude, selectDailyRange,
-    
   ],
   (
     rooms, envelopes, ahus, climate, systemDesign,
     elevation, latitude, dailyRange
   ) => {
-    const altCf = altitudeCorrectionFactor(elevation);
+    const altCf       = altitudeCorrectionFactor(elevation);
     const SEASONS_LIST = ['summer', 'monsoon', 'winter'];
-    const Cs = sensibleFactor(elevation);
+    const Cs          = sensibleFactor(elevation);
 
     return rooms.map(room => {
-
       try {
 
-
-
-
-
-
         const envelope = envelopes[room.id] || null;
-        const ahu = ahus.find(a => a.id === room.assignedAhuIds?.[0]) || {};
+        const ahu      = ahus.find(a => a.id === room.assignedAhuIds?.[0]) || {};
 
         // Pre-convert units here — used throughout this room's calculations.
-        // CRIT-RDS-01 FIX: these converted values are now ALSO written into the
-        // assembled return object (see below), overriding the m²/m³ from ...room.
+        // rdsRow.volume and rdsRow.floorArea are written as ft³ / ft² in the
+        // assembled return object below, overriding the m³ / m² from ...room.
         const floorAreaFt2 = m2ToFt2(room.floorArea);
-        const volumeFt3 = m3ToFt3(room.volume);
+        const volumeFt3    = m3ToFt3(room.volume);
 
         const bf = parseFloat(systemDesign.bypassFactor) || 0.10;
 
-        // Null-coalescing guard: preserves 0%RH for battery dry rooms.
-        // 0 != null is true in JS → 0 passes through correctly.
-        // Safe guard: preserves 0%RH for battery dry rooms but catches empty strings.
+        // raRH: room's winter humidity target for heating/humidification sizing.
+        // Preserves 0%RH for battery dry rooms — 0 != null is true in JS, so
+        // 0 correctly passes through. Falls back to project humidificationTarget
+        // (not hardcoded 50) when the room has no designRH set at all.
         const parsedRaRh = parseFloat(room.designRH);
-        const raRH = !isNaN(parsedRaRh) ? parsedRaRh : 50;
+        const raRH = !isNaN(parsedRaRh)
+          ? parsedRaRh
+          : (systemDesign.humidificationTarget ?? 50);
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 1 — Seasonal loads
@@ -187,17 +172,17 @@ export const selectRdsData = createSelector(
 
         const peakErsh = seasonResults['ershOn_summer'];
         const peakErlh = seasonResults['erlhOn_summer'];
-        const dbInF = summerCalcs?.dbInF ?? 72;
+        const dbInF    = summerCalcs?.dbInF ?? 72;
 
         // ════════════════════════════════════════════════════════════════════════
         // ADP-01 — Resolve effective ADP
         //
-        // ⚠️  This block MUST come after STEP 1.
-        //     'calculated' mode requires peakErsh and dbInF, which are only
-        //     defined after calculateSeasonLoad() completes above.
-        //     BUG-RDS-ADP-01: placing this block before STEP 1 caused peakErsh
-        //     to be undefined → calculateAdpFromLoads returned DEFAULT_ADP every
-        //     time → 'calculated' mode was silently a no-op.
+        // ⚠ This block MUST come after STEP 1.
+        //   'calculated' mode requires peakErsh and dbInF, which are only
+        //   defined after calculateSeasonLoad() completes above. Placing this
+        //   block before STEP 1 causes calculateAdpFromLoads to receive
+        //   peakErsh=undefined → guard fires → returns DEFAULT_ADP every time
+        //   → 'calculated' mode becomes a silent no-op.
         //
         // Priority chain (most specific wins):
         //   1. ahuAdpMode = 'calculated' → calculateAdpFromLoads(dbInF, peakErsh, ...)
@@ -209,30 +194,21 @@ export const selectRdsData = createSelector(
         //   Pass 1: preliminaryAirQuantities with projectAdp → preliminary supplyAir
         //   Pass 2: calculateAdpFromLoads(dbInF, peakErsh, prelim.supplyAir, bf)
         //   Result: effectiveSystemDesign = { ...systemDesign, adp: adpF }
-        //           passed to STEP 2 so calculateAirQuantities and all downstream
-        //           calcs use the resolved ADP consistently.
+        //           passed to STEP 2 so calculateAirQuantities uses resolved ADP.
         //
-        // Convergence note:
-        //   For THERMALLY-GOVERNED rooms the two-pass is a strict mathematical
-        //   identity — calculated ADP equals the ADP used to size preliminary
-        //   supplyAir. For ACPH-GOVERNED rooms (cleanrooms), supplyAir > thermalCFM,
-        //   so the calculated ADP is lower than DEFAULT_ADP — the physically
-        //   correct result (the oversized airflow allows a lower coil leaving temp).
-        //
-        // ⚠️  'calculated' mode is only valid for cooling-coil AHUs.
-        //     Battery dry rooms and desiccant systems must remain 'manual'.
+        // ⚠ 'calculated' mode is only valid for cooling-coil AHUs.
+        //   Battery dry rooms and desiccant systems must remain 'manual'.
         // ════════════════════════════════════════════════════════════════════════
 
-        const projectAdpMode = systemDesign?.adpMode || 'manual';
-        const ahuAdpMode = ahu?.adpMode || projectAdpMode;
-        const projectAdp = parseFloat(systemDesign?.adp) || ASHRAE.DEFAULT_ADP;
-        const ahuAdpOverride = parseFloat(ahu?.adp) || 0;
+        const projectAdpMode  = systemDesign?.adpMode || 'manual';
+        const ahuAdpMode      = ahu?.adpMode || projectAdpMode;
+        const projectAdp      = parseFloat(systemDesign?.adp) || ASHRAE.DEFAULT_ADP;
+        const ahuAdpOverride  = parseFloat(ahu?.adp) || 0;
 
         let adpF;
 
         if (ahuAdpMode === 'calculated') {
           // Pass 1 — preliminary air quantities using project-default ADP.
-          // A synthetic systemDesign ensures airQuantities.js reads a valid adp.
           const prelimSystemDesign = { ...systemDesign, adp: projectAdp };
           const prelimAirQty = calculateAirQuantities(
             room, envelope, ahu, prelimSystemDesign,
@@ -255,9 +231,8 @@ export const selectRdsData = createSelector(
 
         // Build a room-local effective systemDesign with the resolved ADP.
         // Never mutates the shared systemDesign reference.
-        // BUG-RDS-ADP-02 FIX: STEP 2 must receive effectiveSystemDesign —
-        // the previous file passed raw systemDesign, so adpF was never used
-        // by calculateAirQuantities (it reads systemDesign.adp internally).
+        // STEP 2 must receive effectiveSystemDesign — raw systemDesign would
+        // ignore the resolved adpF since calculateAirQuantities reads adp internally.
         const effectiveSystemDesign = adpF !== projectAdp
           ? { ...systemDesign, adp: adpF }
           : systemDesign; // no allocation if ADP unchanged
@@ -265,16 +240,13 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // STEP 2 — Air quantities
         //
-        // BUG-RDS-ADP-02 FIX: effectiveSystemDesign replaces systemDesign.
+        // effectiveSystemDesign carries the resolved adpF.
         // calculateAirQuantities reads systemDesign.adp for thermalCFM:
         //   supplyDT   = (1 − bf) × (dbInF − adp)
         //   thermalCFM = ERSH / (Cs × supplyDT)
-        // Without this change, adpF was resolved above but never propagated
-        // into the airflow calculation — 'calculated' mode had no effect on
-        // supply air sizing.
         // ════════════════════════════════════════════════════════════════════════
         const airQty = calculateAirQuantities(
-          room, envelope, ahu, effectiveSystemDesign,   // BUG-RDS-ADP-02 FIX
+          room, envelope, ahu, effectiveSystemDesign,
           altCf, peakErsh,
           floorAreaFt2, volumeFt3,
         );
@@ -300,8 +272,7 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // STEP 3 — Outdoor air coil loads
         //
-        // MED-OA-01 FIX: altCf removed from calculateAllSeasonOALoads call.
-        // outdoorAirLoad.js now derives altCf internally from elevation.
+        // outdoorAirLoad.js derives altCf internally from elevation.
         // ════════════════════════════════════════════════════════════════════════
         const oaLoads = calculateAllSeasonOALoads(
           freshAirCheck, climate, dbInF, raRH,
@@ -311,24 +282,29 @@ export const selectRdsData = createSelector(
         const oaFields = {};
         SEASONS_LIST.forEach(season => {
           const oa = oaLoads[season];
-          oaFields[`oaSensible_${season}`] = oa.oaSensible;
-          oaFields[`oaLatent_${season}`] = oa.oaLatent;
-          oaFields[`oaTotal_${season}`] = oa.oaTotal;
-          oaFields[`oaGrDelta_${season}`] = (oa.grOut - oa.grIn).toFixed(1);
-          oaFields[`oaEnthDelta_${season}`] = oa.oaEnthalpyDelta.toFixed(2);
+          oaFields[`oaSensible_${season}`]    = oa.oaSensible;
+          oaFields[`oaLatent_${season}`]      = oa.oaLatent;
+          oaFields[`oaTotal_${season}`]       = oa.oaTotal;
+          oaFields[`oaGrDelta_${season}`]     = (oa.grOut - oa.grIn).toFixed(1);
+          oaFields[`oaEnthDelta_${season}`]   = oa.oaEnthalpyDelta.toFixed(2);
         });
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4 — Grand total cooling load
         //
-        // CRIT-RDS-02 FIX: oaSummer.oaTotal replaces (oaSensible + oaLatent).
-        // See changelog for full explanation.
+        // oaSummer.oaTotal (enthalpy method) is used for both grandTotal and
+        // coilLoadBTU — not the sum of oaSensible + oaLatent separately.
+        // fan heat: supply fan heat applied downstream of coil (draw-through).
+        //           return fan heat applied upstream of coil (increases coil load).
+        //           Neither is compounded with the safety factor.
         // ════════════════════════════════════════════════════════════════════════
         const oaSummer = oaLoads.summer;
 
-        const fanHeatFraction = (parseFloat(systemDesign.fanHeat) || 5) / 100;
-        const supplyFanHeatBTU = Math.round(Math.abs(peakErsh) * fanHeatFraction);
-        const returnFanHeatBTU = Math.round(supplyFanHeatBTU * 0.02);
+        const supplyFanHeatFraction = (parseFloat(systemDesign.fanHeat)       || 5) / 100;
+        const returnFanHeatFraction = (parseFloat(systemDesign.returnFanHeat) || 5) / 100;
+
+        const supplyFanHeatBTU = Math.round(Math.abs(peakErsh) * supplyFanHeatFraction);
+        const returnFanHeatBTU = Math.round(supplyFanHeatBTU   * returnFanHeatFraction);
 
         const grandTotal = (peakErsh + peakErlh)
           + oaSummer.oaTotal
@@ -340,21 +316,21 @@ export const selectRdsData = createSelector(
           peakErsh + oaSummer.oaSensible + supplyFanHeatBTU + returnFanHeatBTU
         );
 
+        // coilLoadBTU: basis for CHW pipe sizing — excludes supply fan heat
+        // (supply fan is downstream of coil in draw-through configuration).
         const coilLoadBTU = (peakErsh + peakErlh)
           + oaSummer.oaTotal
           + returnFanHeatBTU;
 
         const supplyFanHeatBlow = supplyFanHeatBTU;
         const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
-        const returnFanHeat = (returnFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
+        const returnFanHeat     = (returnFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
 
         const totalInfil = summerCalcs ? Math.round(summerCalcs.infilCFM) : 0;
-        const rsh = summerCalcs ? Math.round(summerCalcs.rawSensible) : 0;
+        const rsh        = summerCalcs ? Math.round(summerCalcs.rawSensible) : 0;
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 5 — Heating + humidification
-        //
-        // HIGH-HH-01 FIX — recirculationFraction passed to calculateHeatingHumid.
         // ════════════════════════════════════════════════════════════════════════
         const recircFraction = supplyAir > 0 ? returnAir / supplyAir : 0;
 
@@ -392,8 +368,7 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 7 — Psychrometric state points
-        // adpF is the fully resolved ADP from the block above — consistent with
-        // the effectiveSystemDesign passed to STEP 2.
+        // adpF is the fully resolved ADP — consistent with effectiveSystemDesign.
         // ════════════════════════════════════════════════════════════════════════
         const psychroFields = calculateAllSeasonStatePoints(
           climate, dbInF, raRH, adpF, bf,
@@ -403,30 +378,30 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // STEP 8 — Derived seasonal fields
         // ════════════════════════════════════════════════════════════════════════
-        const pickupFields = {};
-        const achFields = {};
+        const pickupFields   = {};
+        const achFields      = {};
         const termHeatFields = {};
 
         SEASONS_LIST.forEach(s => {
-          const e_on = seasonResults[`ershOn_${s}`] || 0;
+          const e_on  = seasonResults[`ershOn_${s}`]  || 0;
           const e_off = seasonResults[`ershOff_${s}`] || 0;
 
-          pickupFields[`pickupOn_${s}`] = supplyAir > 0
-            ? (e_on / (Cs * supplyAir)).toFixed(1) : '0.0';
+          pickupFields[`pickupOn_${s}`]  = supplyAir > 0
+            ? (e_on  / (Cs * supplyAir)).toFixed(1) : '0.0';
           pickupFields[`pickupOff_${s}`] = supplyAir > 0
             ? (e_off / (Cs * supplyAir)).toFixed(1) : '0.0';
 
-          achFields[`achOn_temp_${s}`] = dbInF.toFixed(1);
-          achFields[`achOn_rh_${s}`] = raRH.toFixed(1);
-          achFields[`achOff_temp_${s}`] = dbInF.toFixed(1);
-          achFields[`achOff_rh_${s}`] = raRH.toFixed(1);
+          achFields[`achOn_temp_${s}`]     = dbInF.toFixed(1);
+          achFields[`achOn_rh_${s}`]       = raRH.toFixed(1);
+          achFields[`achOff_temp_${s}`]    = dbInF.toFixed(1);
+          achFields[`achOff_rh_${s}`]      = raRH.toFixed(1);
           achFields[`achTermOn_temp_${s}`] = dbInF.toFixed(1);
-          achFields[`achTermOn_rh_${s}`] = raRH.toFixed(1);
-          achFields[`achTermOff_temp_${s}`] = dbInF.toFixed(1);
-          achFields[`achTermOff_rh_${s}`] = raRH.toFixed(1);
+          achFields[`achTermOn_rh_${s}`]   = raRH.toFixed(1);
+          achFields[`achTermOff_temp_${s}`]= dbInF.toFixed(1);
+          achFields[`achTermOff_rh_${s}`]  = raRH.toFixed(1);
 
-          termHeatFields[`termHeatOn_${s}`] = e_on < 0
-            ? (Math.abs(e_on) / KW_TO_BTU_HR).toFixed(2) : '0.00';
+          termHeatFields[`termHeatOn_${s}`]  = e_on  < 0
+            ? (Math.abs(e_on)  / KW_TO_BTU_HR).toFixed(2) : '0.00';
           termHeatFields[`termHeatOff_${s}`] = e_off < 0
             ? (Math.abs(e_off) / KW_TO_BTU_HR).toFixed(2) : '0.00';
         });
@@ -434,24 +409,24 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // ASSEMBLE — full RDS row
         //
-        // CRIT-RDS-01 FIX: volume and floorArea explicitly set as ft³ / ft²,
-        // overriding the m³ / m² values from the ...room spread.
+        // volume and floorArea explicitly set as ft³ / ft², overriding the
+        // m³ / m² values from the ...room spread.
         // ════════════════════════════════════════════════════════════════════════
         return {
-          // ── Identity ──────────────────────────────────────────────────────────
+          // ── Identity ────────────────────────────────────────────────────────
           ...room,
-          id: room.id,
-          ahuId: ahu.id || '',
-          typeOfUnit: ahu.type || '-',
+          id:            room.id,
+          ahuId:         ahu.id || '',
+          typeOfUnit:    ahu.type || '-',
           isDOAS,
-          people_count: pplCount,
-          equipment_kw: envelope?.internalLoads?.equipment?.kw || 0,
+          people_count:  pplCount,
+          equipment_kw:  envelope?.internalLoads?.equipment?.kw || 0,
 
-          // CRIT-RDS-01 FIX: override m³/m² from ...room spread with ft³/ft².
-          volume: volumeFt3,
-          floorArea: floorAreaFt2,
+          // ft³ / ft² — override m³ / m² from ...room spread.
+          volume:        volumeFt3,
+          floorArea:     floorAreaFt2,
 
-          // ── Core cooling outputs ───────────────────────────────────────────────
+          // ── Core cooling outputs ─────────────────────────────────────────────
           supplyAir,
           supplyAirGoverned,
           thermalCFM,
@@ -459,21 +434,21 @@ export const selectRdsData = createSelector(
           regulatoryAcphCFM,
           supplyAcph,
           coolingCapTR,
-          grandTotal: Math.round(grandTotal),
+          grandTotal:         Math.round(grandTotal),
           grandTotalSensible,
-          coilLoadBTU: Math.round(coilLoadBTU),
-          ersh: peakErsh,
+          coilLoadBTU:        Math.round(coilLoadBTU),
+          ersh:               peakErsh,
 
-          // ── Fan heat ──────────────────────────────────────────────────────────
+          // ── Fan heat ────────────────────────────────────────────────────────
           supplyFanHeatBlow,
           supplyFanHeatDraw,
           returnFanHeat,
 
-          // ── RSH + infiltration ─────────────────────────────────────────────────
+          // ── RSH + infiltration ───────────────────────────────────────────────
           rsh,
           totalInfil,
 
-          // ── Fresh air ─────────────────────────────────────────────────────────
+          // ── Fresh air ────────────────────────────────────────────────────────
           vbz,
           freshAir,
           exhaustCompensation,
@@ -483,26 +458,26 @@ export const selectRdsData = createSelector(
           freshAirCheck,
           maxPurgeAir,
 
-          // ── Exhaust ───────────────────────────────────────────────────────────
+          // ── Exhaust ──────────────────────────────────────────────────────────
           totalExhaust,
           exhaustGeneral,
           exhaustBibo,
           exhaustMachine,
 
-          // ── AHU air balance ───────────────────────────────────────────────────
+          // ── AHU air balance ──────────────────────────────────────────────────
           coilAir,
           bypassAir,
           returnAir,
           dehumidifiedAir,
           freshAirAces,
           bleedAir,
-          ahuCap: supplyAir,
-          coolingLoadHL: coolingCapTR,
+          ahuCap:         supplyAir,
+          coolingLoadHL:  coolingCapTR,
 
-          // ── OA coil loads ─────────────────────────────────────────────────────
+          // ── OA coil loads ────────────────────────────────────────────────────
           ...oaFields,
 
-          // ── Heating ───────────────────────────────────────────────────────────
+          // ── Heating ─────────────────────────────────────────────────────────
           heatingCapBTU,
           heatingCap,
           heatingCapMBH,
@@ -513,7 +488,7 @@ export const selectRdsData = createSelector(
           needsHeating,
           hwFlowRate,
 
-          // ── Humidification ────────────────────────────────────────────────────
+          // ── Humidification ───────────────────────────────────────────────────
           humidLoadBTU,
           humidLbsPerHr,
           humidKw,
@@ -525,46 +500,44 @@ export const selectRdsData = createSelector(
           highHumidificationLoad,
           humidWarning,
 
-          // ── Pipe sizing ───────────────────────────────────────────────────────
-          chwBranchSize: pipes.chw.branchDiamMm,
+          // ── Pipe sizing ──────────────────────────────────────────────────────
+          chwBranchSize:   pipes.chw.branchDiamMm,
           chwManifoldSize: pipes.chw.manifoldDiamMm,
-          chwFlowRate: pipes.chw.flowGPM,
-          hwBranchSize: pipes.hw.branchDiamMm,
-          hwManifoldSize: pipes.hw.manifoldDiamMm,
-          hwFlow: pipes.hw.flowGPM,
+          chwFlowRate:     pipes.chw.flowGPM,
+          hwBranchSize:    pipes.hw.branchDiamMm,
+          hwManifoldSize:  pipes.hw.manifoldDiamMm,
+          hwFlow:          pipes.hw.flowGPM,
           preheatBranchSize: pipes.preheat.branchDiamMm,
-          preheatHwFlow: pipes.preheat.flowGPM,
+          preheatHwFlow:     pipes.preheat.flowGPM,
 
-          // ── Coil performance ──────────────────────────────────────────────────
-          coil_shr: psychroFields['coil_shr'],
+          // ── Coil performance ─────────────────────────────────────────────────
+          coil_shr:           psychroFields['coil_shr'],
           coil_contactFactor: psychroFields['coil_contactFactor'],
-          coil_adp: adpF,        // ADP-01: resolved ADP (°F) for display
-          coil_adpMode: ahuAdpMode,  // ADP-01: 'manual' | 'calculated'
+          coil_adp:           adpF,        // resolved ADP (°F) for display
+          coil_adpMode:       ahuAdpMode,  // 'manual' | 'calculated'
 
-          // ── Seasonal load results ─────────────────────────────────────────────
+          // ── Seasonal load results ────────────────────────────────────────────
           ...seasonResults,
 
-          // ── Derived seasonal fields ───────────────────────────────────────────
+          // ── Derived seasonal fields ──────────────────────────────────────────
           ...pickupFields,
           ...achFields,
           ...termHeatFields,
 
-          // ── Psychrometric state points ────────────────────────────────────────
+          // ── Psychrometric state points ───────────────────────────────────────
           ...psychroFields,
+        };
 
-          // ── Debug / audit trail ───────────────────────────────────────────────
-        
-      };
-
-    } catch (err) {  // ✅ FIX 1: Added (err) so it's available inside the block
-      console.error(`[rdsSelector] Room ${room.id} failed:`, err);
-      return {
-        ...room,
-        volume:            0,   // SI value from ...room is wrong unit — zero is safer than misleading
-    floorArea:         0,
-        _error: err.message,
-        _calculationFailed: true,
-      }; // Added semicolon
-    }
-  });    // ✅ FIX 2: Closes rooms.map(room => { ... })
-});      // ✅ FIX 3: Closes createSelector(..., (...) => { ... })
+      } catch (err) {
+        console.error(`[rdsSelector] Room ${room.id} failed:`, err);
+        return {
+          ...room,
+          volume:             0,   // SI value from ...room is wrong unit — zero is safer
+          floorArea:          0,
+          _error:             err.message,
+          _calculationFailed: true,
+        };
+      }
+    });
+  }
+);

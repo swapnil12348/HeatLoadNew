@@ -2,13 +2,12 @@
  * AhuAssignment.jsx
  * Responsibility: Assign a single AHU to a room (RoomConfig right column).
  *
- * -- CHANGELOG v2.1 -----------------------------------------------------------
+ * -- CHANGELOG ----------------------------------------------------------------
  *
- *   BUG-UI-18 [CRITICAL — ARCHITECTURAL INCONSISTENCY] — multi-select checkbox
- *     UI replaced with single-select radio UI. Dispatches setRoomAhu (not
- *     toggleRoomAhu) to match the rest of the calculation chain.
+ *   v2.0 — Multi-select checkbox UI replaced with single-select radio UI.
+ *           Dispatches setRoomAhu (not toggleRoomAhu) to match the calc chain.
  *
- *     Root cause: AhuAssignment used toggleRoomAhu (adds/removes from
+ *     Root cause: the previous UI used toggleRoomAhu (adds/removes from
  *     assignedAhuIds array), implying a room can serve multiple AHUs. But
  *     every downstream consumer reads only index [0]:
  *
@@ -17,9 +16,9 @@
  *       RDSPage AHU grouping → row.ahuId (singular, from [0])
  *       useProjectTotals     → byAhu aggregation keyed to single ahuId
  *
- *     Consequence: if an engineer checked two AHUs in this panel, the second
- *     assignment was silently ignored by all calculations — no load, no CFM,
- *     no pipe sizing contribution, no error or warning shown.
+ *     Consequence: if an engineer checked two AHUs, the second assignment was
+ *     silently ignored by all calculations — no load, no CFM, no pipe sizing
+ *     contribution, no error or warning shown.
  *
  *     Fix: radio buttons + setRoomAhu (single replace, matches calc chain).
  *     An "Unassigned" option is surfaced explicitly so engineers can deliberately
@@ -27,24 +26,21 @@
  *     A small architectural note is shown below the header so the one-AHU-per-room
  *     constraint is visible in the UI, not just in the codebase.
  *
- *     toggleRoomAhu import removed. setRoomAhu import added.
- *
- *   BUG-UI-19 [LOW] — unused React import removed.
- *     Vite with React 17+ automatic JSX transform does not require explicit import.
+ *   v2.1 — Unused React import removed (Vite + React 17+ automatic JSX transform).
+ *         — Stale inline fix-tag annotations removed; domain reasoning preserved.
  */
 
 import { useSelector, useDispatch }      from 'react-redux';
 import { selectAllAHUs }                 from '../ahu/ahuSlice';
-// BUG-UI-18 FIX: setRoomAhu (single replace) replaces toggleRoomAhu (multi-toggle).
 import { setRoomAhu }                    from './roomSlice';
 
 const AhuAssignment = ({ activeRoom }) => {
   const dispatch = useDispatch();
   const allAhus  = useSelector(selectAllAHUs);
 
-  // BUG-UI-18 FIX: single selected AHU is always [0].
-  // toggleRoomAhu multi-select was architecturally inconsistent — all
-  // downstream consumers only read assignedAhuIds[0].
+  // Single selected AHU is always [0].
+  // All downstream consumers (rdsSelector, useRdsRow, useProjectTotals) only
+  // read assignedAhuIds[0] — the multi-select UI was architecturally inconsistent.
   const currentAhuId = activeRoom.assignedAhuIds?.[0] ?? '';
 
   const handleSelect = (ahuId) => {
@@ -55,10 +51,11 @@ const AhuAssignment = ({ activeRoom }) => {
     <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-full">
       <div className="mb-4">
         <h3 className="text-lg font-bold text-gray-800">Assigned AHU</h3>
-        {/* BUG-UI-18 FIX: surface the one-AHU-per-room constraint in the UI */}
         <p className="text-xs text-gray-500 mt-1">
           Select the Air Handling Unit that supplies air to this room.
         </p>
+        {/* One-AHU-per-room constraint surfaced in UI — all load, CFM, and pipe
+            sizing calculations use assignedAhuIds[0] exclusively. */}
         <p className="text-[10px] text-slate-400 mt-1">
           One AHU per room — all load, CFM, and pipe sizing calculations use this assignment.
         </p>
@@ -71,9 +68,8 @@ const AhuAssignment = ({ activeRoom }) => {
       ) : (
         <div className="space-y-2">
 
-          {/* BUG-UI-18 FIX: explicit "Unassigned" option.
-              Previously unassigning required unchecking in a multi-select.
-              Now it's a first-class radio option. */}
+          {/* Explicit "Unassigned" option — previously unassigning required
+              unchecking in a multi-select with no clear affordance. */}
           <label
             className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all
               ${!currentAhuId
@@ -110,7 +106,7 @@ const AhuAssignment = ({ activeRoom }) => {
                     : 'bg-gray-50 border-gray-100 hover:bg-white hover:border-gray-300'
                   }`}
               >
-                {/* BUG-UI-18 FIX: radio (single-select) replaces checkbox (multi-select) */}
+                {/* Radio (single-select) — matches the one-AHU-per-room calc contract */}
                 <input
                   type="radio"
                   name={`ahu-${activeRoom.id}`}

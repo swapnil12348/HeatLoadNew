@@ -22,15 +22,12 @@
  *
  *   BUG-UI-16 — deleteAHU replaced with deleteAhuWithCleanup.
  *
- *     The Delete System button was calling deleteAHU directly from ahuSlice.
- *     ahuSlice.js BUG-SLICE-04 explicitly documents this as unsafe:
  *     deleteAHU only removes the AHU from the list — it does NOT clear
  *     room.assignedAhuIds references, leaving all assigned rooms with a stale
  *     AHU ID. rdsSelector then silently reverts those rooms to Recirculating
  *     type with ahuId: '' and typeOfUnit: '-'.
  *
  *     Fix: dispatch(deleteAhuWithCleanup(selectedAhuId)) from roomActions.js.
- *     deleteAHU removed from the ahuSlice import (not needed in UI code).
  *
  * -- CHANGELOG v2.1 -----------------------------------------------------------
  *
@@ -42,15 +39,11 @@
 import { useState }                                 from 'react';
 import { useSelector, useDispatch }                 from 'react-redux';
 import { selectAllAHUs, addAHU, updateAHU }         from '../features/ahu/ahuSlice';
-// BUG-UI-16 FIX: deleteAhuWithCleanup instead of deleteAHU directly.
-// deleteAHU is retained as the underlying reducer for the thunk to dispatch —
-// do NOT re-add it here. See ahuSlice.js BUG-SLICE-04 for the full explanation.
 import { deleteAhuWithCleanup }                     from '../features/room/roomActions';
 import { selectRdsData }                            from '../features/results/rdsSelector';
 import ASHRAE                                       from '../constants/ashrae';
 
 // ── Supply air governance badge ───────────────────────────────────────────────
-// Matches ResultsPage v2.1
 const GovernedBadge = ({ governed }) => {
   if (!governed) return null;
 
@@ -85,11 +78,11 @@ const GovernedBadge = ({ governed }) => {
  * Shows per-room: ADP (°F) and ΔT between room DB and ADP.
  * If no rooms are assigned yet, shows a placeholder prompt.
  *
- * NOTE: room.designTemp from rdsRow is °C (roomSlice storage convention).
+ * Note: room.designTemp from rdsRow is °C (roomSlice storage convention).
  * It is converted to °F here for display only — the authoritative dbInF
  * used in calculations lives in rdsSelector.js as summerCalcs.dbInF.
- * If you add dbInF: dbInF to the rdsSelector return object, use that here
- * instead to eliminate the duplicate conversion.
+ * If dbInF is added to the rdsSelector return object in the future, use
+ * that here instead to eliminate the duplicate conversion.
  */
 const AdpCalculatedReadout = ({ assignedRooms, defaultAdp }) => {
   const roomsWithAdp = assignedRooms.filter(r => r.coil_adp != null);
@@ -126,7 +119,7 @@ const AdpCalculatedReadout = ({ assignedRooms, defaultAdp }) => {
           {roomsWithAdp.map(room => {
             const adp     = parseFloat(room.coil_adp) || defaultAdp;
             const roomDb  = parseFloat(room.designTemp);
-            // designTemp stored in °C — convert to °F for display label only
+            // designTemp stored in °C — convert to °F for display label only.
             const roomDbF = !isNaN(roomDb) ? roomDb * 9 / 5 + 32 : 72;
             const deltaT  = (roomDbF - adp).toFixed(1);
 
@@ -173,7 +166,6 @@ export default function AHUConfig() {
   const totalCFM = assignedRooms.reduce((sum, r) => sum + (r.supplyAir || 0), 0);
   const totalTR  = assignedRooms.reduce((sum, r) => sum + (parseFloat(r.coolingCapTR) || 0), 0);
 
-  // BUG-UI-14 FIX: include 'regulatoryAcph' in ACPH-governed count.
   const acphCount = assignedRooms.filter(
     (r) => ['designAcph', 'minAcph', 'regulatoryAcph'].includes(r.supplyAirGoverned)
   ).length;
@@ -359,10 +351,12 @@ export default function AHUConfig() {
                   </div>
 
                   {/* ── Delete ──────────────────────────────────────────── */}
-                  {/* BUG-UI-16 FIX: deleteAhuWithCleanup clears room.assignedAhuIds
-                      before removing the AHU. deleteAHU directly only removes the
-                      AHU from the list — assigned rooms would retain stale ahuId
-                      and silently revert to Recirculating / typeOfUnit: '-'. */}
+                  {/*
+                    deleteAhuWithCleanup clears room.assignedAhuIds before removing
+                    the AHU. Calling deleteAHU directly only removes the AHU from
+                    the list — assigned rooms would retain a stale ahuId and silently
+                    revert to Recirculating / typeOfUnit: '-' in rdsSelector.
+                  */}
                   <div className="pt-4">
                     <button
                       onClick={() => dispatch(deleteAhuWithCleanup(selectedAhuId))}
@@ -397,7 +391,7 @@ export default function AHUConfig() {
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase">
                           Room
                         </th>
-                        {/* rdsRow.floorArea is ft² (post CRIT-RDS-01) — no conversion needed */}
+                        {/* rdsRow.floorArea is ft² (post CRIT-RDS-01) — no conversion needed here */}
                         <th className="px-6 py-3 text-xs font-bold text-slate-400 uppercase text-right">
                           Area (ft²)
                         </th>
@@ -423,7 +417,7 @@ export default function AHUConfig() {
                               </div>
                             )}
                           </td>
-                          {/* BUG-UI-13 FIX: rdsRow.floorArea is already ft² (CRIT-RDS-01). */}
+                          {/* rdsRow.floorArea is already ft² — display directly */}
                           <td className="px-6 py-3 text-right font-mono text-slate-500">
                             {parseFloat(room.floorArea || 0).toFixed(0)}
                           </td>
@@ -446,7 +440,7 @@ export default function AHUConfig() {
                         <td className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">
                           System Total
                         </td>
-                        {/* BUG-UI-13 FIX: sum rdsRow.floorArea directly — already ft². */}
+                        {/* rdsRow.floorArea is ft² — sum directly */}
                         <td className="px-6 py-3 text-right font-mono text-xs text-slate-500">
                           {assignedRooms
                             .reduce((s, r) => s + (parseFloat(r.floorArea) || 0), 0)

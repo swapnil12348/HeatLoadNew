@@ -24,9 +24,9 @@
  *   room.volume     → m³  (roomSlice — SI)
  *   room.designTemp → °C  (roomSlice — SI)
  *
- *   rdsRow.floorArea → ft²  (post CRIT-RDS-01 fix — rdsSelector converts)
- *   rdsRow.volume    → ft³  (post CRIT-RDS-01 fix — rdsSelector converts)
- *   rdsRow.supplyAir → CFM
+ *   rdsRow.floorArea    → ft²  (rdsSelector converts on output)
+ *   rdsRow.volume       → ft³  (rdsSelector converts on output)
+ *   rdsRow.supplyAir    → CFM
  *   rdsRow.coolingCapTR → TR
  *
  *   Consumers that display geometry must use room.* for SI display and

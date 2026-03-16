@@ -3,17 +3,21 @@
  * Responsibility: Room geometry, indoor design targets, ISO classification,
  *                 ventilation category, and AHU assignment.
  *
- * Fixes vs previous version:
- *   - Dead React import removed
- *   - useActiveRoom hook replaces raw useSelector/useDispatch boilerplate
- *   - handleUpdate: text fields preserved as string, numeric fields use
- *     parseFloat with null fallback (not || 0) to allow negatives
- *   - roomNo field added — was missing from UI entirely
- *   - ventCategory select added — drives ASHRAE 62.1 Rp/Ra in airQuantities
- *   - classInOp + atRestClass selects added — ISO 14644 dual classification
- *   - recOt + flpType selects added — GMP documentation completeness
- *   - value ?? '' nullish guard replaces falsy || '' (preserves 0 values)
- *   - ft² stat card added alongside m² for engineering cross-reference
+ * Changelog:
+ *   v2.0 — Dead React import removed
+ *         — useActiveRoom hook replaces raw useSelector/useDispatch boilerplate
+ *         — handleUpdate: text fields preserved as string, numeric fields use
+ *           parseFloat with NaN fallback (not || 0) to allow negatives
+ *         — roomNo field added — was missing from UI entirely
+ *         — ventCategory select added — drives ASHRAE 62.1 Rp/Ra in airQuantities
+ *         — classInOp + atRestClass selects added — ISO 14644 dual classification
+ *         — recOt + flpType selects added — GMP documentation completeness
+ *         — value ?? '' nullish guard replaces falsy || '' (preserves 0 values)
+ *         — ft² stat card added alongside m² for engineering cross-reference
+ *   v2.1 — floorAreaFt2: m2ToFt2(activeRoom.floorArea ?? 0) guards against NaN
+ *           display on new rooms before dimensions are entered
+ *         — handleUpdate: removed dead ?? rawValue — parseFloat never returns
+ *           null/undefined so nullish coalescing never fired
  */
 
 import { useDispatch }                        from 'react-redux';
@@ -94,7 +98,7 @@ export default function RoomConfig() {
   const handleUpdate = (field, rawValue) => {
     const value = STRING_FIELDS.has(field)
       ? rawValue
-      : (rawValue === '' ? '' : (parseFloat(rawValue) ?? rawValue));
+      : (rawValue === '' ? '' : parseFloat(rawValue));
 
     dispatch(updateRoom({ id: activeRoom.id, field, value }));
   };
@@ -111,7 +115,8 @@ export default function RoomConfig() {
     );
   }
 
-  const floorAreaFt2 = m2ToFt2(activeRoom.floorArea).toLocaleString(
+  // Guard against undefined/NaN floorArea on new rooms before dimensions are entered
+  const floorAreaFt2 = m2ToFt2(activeRoom.floorArea ?? 0).toLocaleString(
     undefined, { maximumFractionDigits: 0 }
   );
 
@@ -161,7 +166,7 @@ export default function RoomConfig() {
                   unit="Pa"
                   onChange={(e) => handleUpdate('pressure', e.target.value)}
                 />
-                {/* ventCategory drives ASHRAE 62.1 Rp/Ra selection */}
+                {/* ventCategory drives ASHRAE 62.1 Rp/Ra selection in airQuantities.js */}
                 <SelectGroup
                   label="Ventilation Category"
                   value={activeRoom.ventCategory ?? 'general'}

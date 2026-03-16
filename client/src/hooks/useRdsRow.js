@@ -9,58 +9,42 @@
  * Returns stable callback references (useCallback) so memoized row
  * components only re-render when room.id changes.
  *
- * -- CHANGELOG v2.1 -----------------------------------------------------------
+ * -- CHANGELOG ----------------------------------------------------------------
  *
- *   FIX-H05 [MEDIUM] — initializeRoom dispatched with object payload, not string.
- *
- *     Previous:
- *       dispatch(initializeRoom(roomId))   — legacy string payload
+ *   v2.0 — initializeRoom dispatched with object payload, not string.
  *
  *     envelopeSlice.initializeRoom handles two payload shapes:
- *       string:        legacy path — sets room = null
- *       { id, room }: preferred path — calls isIsoClassified(room)
+ *       string:        legacy path — sets room = null → isIsoClassified(null) = false
+ *       { id, room }: preferred path — calls isIsoClassified(room) correctly
  *
- *     With the string path: isIsoClassified(null) always returns false.
- *     The ISO pressurization guard (achValue = 0) never fires for any room
- *     initialized through this path.
+ *     With the string path the ISO pressurization guard (achValue = 0) never
+ *     fires. In practice handleEnvUpdate calls initializeRoom as an idempotency
+ *     guard on already-initialized rooms, so the early-return fires first and
+ *     it is harmless. But if called on an uninitialized room (first edit before
+ *     addNewRoom completes), the ISO guard would be silently bypassed.
+ *     Fix: object payload, classInOp sourced from room prop. Consistent with
+ *     the same fix applied in roomActions.js.
  *
- *     In practice handleEnvUpdate calls initializeRoom as an idempotency guard
- *     on rooms that already have byRoomId[roomId] populated — so the early
- *     return in initializeRoom fires before the ISO check is reached. Currently
- *     harmless. But if any code path calls handleEnvUpdate on an uninitialized
- *     room (e.g. first edit before addNewRoom completes), the ISO guard is silently
- *     bypassed, producing a non-zero achValue on a pressurized cleanroom.
+ *   v2.1 — designRH type coercion note corrected.
  *
- *     Fix: use object payload consistent with BUG-SLICE-02 fix in roomActions.js.
- *     classInOp is sourced from col.classInOp if the column definition exposes it,
- *     otherwise empty string (isIsoClassified('') = false — safe conservative fallback).
+ *     The type guard for designRH (and all other room fields) lives in
+ *     buildRoomUpdate (rdsFieldUtils.js), not here. handleRoomUpdate delegates
+ *     to buildRoomUpdate entirely — no field-specific logic in this hook.
+ *     buildRoomUpdate: text/select fields → string; all others → parseFloat || 0.
  *
- *   FIX-H06 [MEDIUM] — designRH dispatched as number, not string.
+ *   v2.2 — parseFloat || 0 for envelope numeric fields documented.
  *
- *     buildRoomUpdate (RDSConfig.js) is not audited yet. As a defensive measure,
- *     handleRoomUpdate guards the designRH field explicitly:
- *       designRH must be dispatched as a number (not string) because
- *       roomSlice's null-guard reads room.designRH != null.
- *       parseFloat('0') = 0 — correct.
- *       '0' != null = true BUT the calc layer also does parseFloat(room.designRH)
- *       which on a string '0' returns 0 — so both paths work.
- *     The explicit guard is retained as documentation of the contract.
+ *     kw, count, wattsPerSqFt, sensiblePct, latentPct, diversityFactor —
+ *     0 is a valid and expected value; empty input should default to 0.
+ *     This is intentionally || 0 (not ?? 0) for these fields.
  *
- *   FIX-H07 [LOW] — handleEnvUpdate guards against NaN for numeric fields.
- *
- *     Previous: parseFloat(rawValue) || 0
- *     The || 0 is correct for all envelope numeric fields (kw, count,
- *     wattsPerSqFt, etc.) — 0 is always a valid and expected value and
- *     empty-string inputs should default to 0, not block dispatch.
- *     This is intentionally different from the designRH case where 0 is valid
- *     and must pass through unchanged (which it does — parseFloat('0') || 0 = 0
- *     is coincidentally correct here, but the intent should be explicit).
+ *   v2.3 — Stale inline fix-tag annotations removed; changelog restructured.
  *
  * ── DISPATCH CONTRACT ────────────────────────────────────────────────────────
  *
  *   handleRoomUpdate  → updateRoom({ id, field, value })
  *                       field: dot-notation path ('exhaustAir.general', 'designRH')
- *                       value: type as expected by roomSlice (numeric where required)
+ *                       value: typed by buildRoomUpdate (rdsFieldUtils.js)
  *
  *   handleEnvUpdate   → initializeRoom({ id, room: { classInOp } })
  *                     → updateInternalLoad({ roomId, type, data })
@@ -96,8 +80,9 @@ const useRdsRow = (roomId, room = null) => {
   const dispatch = useDispatch();
 
   // ── Room field update ──────────────────────────────────────────────────────
-  // Resolves dot-notation key and casts value via buildRoomUpdate.
-  // buildRoomUpdate is responsible for type coercion per field.
+  // buildRoomUpdate (rdsFieldUtils.js) handles all type coercion:
+  //   text/select fields → string; all others → parseFloat || 0.
+  // No field-specific logic needed here.
   const handleRoomUpdate = useCallback((col, rawValue) => {
     const { field, value } = buildRoomUpdate(col, rawValue);
     dispatch(updateRoom({ id: roomId, field, value }));
@@ -105,23 +90,21 @@ const useRdsRow = (roomId, room = null) => {
 
   // ── Envelope field update ──────────────────────────────────────────────────
   //
-  // FIX-H05: initializeRoom dispatched with object payload.
-  //
   // initializeRoom is idempotent — safe to call on every update.
   // It guards against re-initialization internally:
   //   if (state.byRoomId[roomId]) return;  // already initialized — no-op
   //
-  // Passing classInOp from the room object ensures isIsoClassified() fires
-  // correctly if this is ever called on an uninitialized room. Without it,
-  // a pressurized ISO-classified room could receive a non-zero achValue default.
+  // Object payload ensures isIsoClassified() fires correctly if this is ever
+  // called on an uninitialized room. A string payload would set room = null,
+  // causing isIsoClassified(null) = false and silently bypassing the ISO
+  // pressurization guard (achValue = 0) for classified cleanrooms.
   const handleEnvUpdate = useCallback((col, rawValue) => {
-    // FIX-H05: object payload — isIsoClassified() guard fires correctly.
     dispatch(initializeRoom({
       id:   roomId,
       room: { classInOp: room?.classInOp ?? '' },
     }));
 
-    // FIX-H07: parseFloat || 0 is correct for all envelope numeric fields.
+    // parseFloat || 0 is correct for all envelope numeric fields.
     // kw, count, wattsPerSqFt, sensiblePct, latentPct, diversityFactor —
     // 0 is a valid value and empty input should default to 0 for all of these.
     dispatch(updateInternalLoad({
@@ -138,7 +121,7 @@ const useRdsRow = (roomId, room = null) => {
 
   // ── Room deletion ──────────────────────────────────────────────────────────
   // deleteRoomWithCleanup removes from roomSlice AND envelopeSlice atomically.
-  // FLOW-05 FIX: was deleteRoom() which left envelope data behind.
+  // Using deleteRoom() directly would leave orphaned envelope data behind.
   const handleDeleteRoom = useCallback(() => {
     if (window.confirm('Permanently delete this room and all its data?')) {
       dispatch(deleteRoomWithCleanup(roomId));
