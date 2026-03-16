@@ -14,7 +14,6 @@
  *   'text'       → Editable text input
  */
 
-import React from 'react';
 import { InputCell, SelectCell } from './RDSCellComponents';
 import { getFieldValue }         from './RDSConfig';
 

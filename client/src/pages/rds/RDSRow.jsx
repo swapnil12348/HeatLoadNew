@@ -10,27 +10,21 @@
  * The only local concern is the sticky Sr.No. and delete button cells
  * which are layout responsibilities, not data responsibilities.
  *
- * -- CHANGELOG v2.1 -----------------------------------------------------------
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   BUG-UI-10 [MEDIUM — ISO CORRECTNESS] — useRdsRow called with room object.
  *
  *     Previous: useRdsRow(room.id)
  *     Fixed:    useRdsRow(room.id, room)
  *
- *     Identical to BUG-UI-01 fixed in RoomDetailPanel v2.2.
- *     useRdsRow(roomId, room = null) uses room?.classInOp inside handleEnvUpdate
- *     to dispatch initializeRoom({ id, room: { classInOp } }). Without the room
- *     argument, classInOp is always '' → isIsoClassified() never fires for any
- *     room first edited through the table row.
- *
- *     RDSRow is an equally likely first-edit path to RoomDetailPanel — an
- *     engineer may edit occupancy or equipment load inline in the table before
- *     opening the panel. The ISO pressurization guard (achValue = 0 for
- *     pressurized ISO rooms) was silently bypassed on every such edit.
+ *     useRdsRow uses room?.classInOp inside handleEnvUpdate to dispatch
+ *     initializeRoom({ id, room: { classInOp } }). Without the room argument,
+ *     classInOp is always undefined → isIsoClassified() never fires for rooms
+ *     first edited through the table row. The ISO pressurization guard
+ *     (achValue = 0 for ISO-classified rooms) was silently bypassed on every
+ *     such edit, identical to BUG-UI-01 fixed in RoomDetailPanel v2.2.
  *
  *   BUG-UI-11 [LOW] — delete icon: raw inline SVG replaced with lucide-react X.
- *     Consistent with project icon convention (lucide-react used everywhere else).
- *     No functional change.
  */
 
 import { memo }          from 'react';
@@ -42,23 +36,12 @@ import useRdsRow         from '../../hooks/useRdsRow';
 const RDSRow = ({ room, envelope, ahus, index }) => {
   const currentAhuId = room.assignedAhuIds?.[0] || '';
 
-  // BUG-UI-10 FIX: pass room as second argument.
-  //
-  // Previous: useRdsRow(room.id)
-  //   → room?.classInOp undefined → '' → isIsoClassified('') = false
-  //   → initializeRoom({ id, room: { classInOp: '' } }) always
-  //   → ISO pressurization guard bypassed for all first-time envelope edits
-  //     made via the table row (e.g. typing occupancy into the table directly).
-  //
-  // Now: useRdsRow(room.id, room)
-  //   → classInOp forwarded from roomSlice state
-  //   → isIsoClassified() fires correctly on uninitialized rooms
   const {
     handleRoomUpdate,
     handleEnvUpdate,
     handleAhuChange,
     handleDeleteRoom,
-  } = useRdsRow(room.id, room); // BUG-UI-10 FIX: room passed as second arg
+  } = useRdsRow(room.id, room);
 
   return (
     <tr className="hover:bg-blue-50/10 transition-colors group">
@@ -94,7 +77,6 @@ const RDSRow = ({ room, envelope, ahus, index }) => {
       )}
 
       {/* ── Delete — sticky right ──────────────────────────────────────── */}
-      {/* BUG-UI-11 FIX: lucide-react X replaces raw inline SVG */}
       <td className="
         p-0 border-b border-gray-100
         bg-white sticky right-0 z-20 w-8

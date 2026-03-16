@@ -3,7 +3,7 @@
  * Responsibility: Fixed side-panel editor for a single room.
  *                 Renders all RDS_SECTIONS fields in a tabbed form layout.
  *
- * -- CHANGELOG v2.3 -----------------------------------------------------------
+ * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
  *   UI-REFRESH — Readability and layout improvements:
  *     - Panel widened from 620px → 820px
@@ -15,9 +15,21 @@
  *     - Header badges and room name scaled up
  *     - Footer buttons full-size text
  *
- * -- CHANGELOG v2.2 -----------------------------------------------------------
- *   BUG-UI-01 — useRdsRow called with room object (ISO correctness)
- *   BUG-UI-02 — dynamic require() removed, top-level ESM import
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-UI-01 — useRdsRow called with room object (ISO correctness).
+ *     useRdsRow(roomId, room) forwards classInOp so initializeRoom can apply
+ *     the ISO pressurization guard (achValue = 0) on first-edit rooms.
+ *
+ *   BUG-UI-02 — dynamic require() removed, top-level ESM import.
+ *
+ * ── SEASON DIVIDER ORDER NOTE ─────────────────────────────────────────────────
+ *
+ *   groupColumnsBySeason iterates Object.entries(groups) which preserves
+ *   insertion order in modern JS. Season dividers appear in the order
+ *   that column definitions appear in the section files. All section files
+ *   define summer → monsoon → winter in that order — maintain this convention
+ *   when adding new seasonal column blocks.
  */
 
 import { useState, useCallback }     from 'react';
@@ -32,7 +44,6 @@ import useRdsRow                     from '../../hooks/useRdsRow';
 import { deleteRoomWithCleanup }     from '../../features/room/roomActions';
 
 // ── Section colour palette ────────────────────────────────────────────────────
-// Maps section.color → { header bg, border, label text }
 const SECTION_PALETTE = {
   gray:   { header: 'bg-slate-50   border-slate-200', accent: 'bg-slate-400',   text: 'text-slate-600'  },
   blue:   { header: 'bg-blue-50    border-blue-200',  accent: 'bg-blue-500',    text: 'text-blue-700'   },
@@ -56,6 +67,7 @@ const getPalette = (color) =>
   SECTION_PALETTE[color] ?? SECTION_PALETTE.gray;
 
 // ── Season grouping ───────────────────────────────────────────────────────────
+// Groups columns by seasonLabel, preserving definition order (summer → monsoon → winter).
 const groupColumnsBySeason = (columns) => {
   const groups    = {};
   const ungrouped = [];
@@ -98,10 +110,9 @@ const PanelField = ({
   col, room, rdsRow, envelope, ahus,
   onRoomUpdate, onEnvUpdate, onAhuChange,
 }) => {
-  const value = getFieldValue(col, room, envelope, rdsRow);
+  const value      = getFieldValue(col, room, envelope, rdsRow);
   const isReadOnly = col.type === 'readOnly' || col.derived;
 
-  // ── ReadOnly derived ───────────────────────────────────────────────────────
   if (isReadOnly) {
     return (
       <ReadOnlyField
@@ -112,7 +123,6 @@ const PanelField = ({
     );
   }
 
-  // ── AHU selector ──────────────────────────────────────────────────────────
   if (col.type === 'select-ahu') {
     return (
       <div className="col-span-2">
@@ -144,7 +154,6 @@ const PanelField = ({
     );
   }
 
-  // ── Select ────────────────────────────────────────────────────────────────
   if (col.type === 'select') {
     return (
       <FormSelect
@@ -157,7 +166,6 @@ const PanelField = ({
     );
   }
 
-  // ── Number / text ──────────────────────────────────────────────────────────
   return (
     <FormInput
       label={col.label}
@@ -217,7 +225,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
   const assignedAhuId  = room.assignedAhuIds?.[0];
   const isAssigned     = Boolean(assignedAhuId && assignedAhuId.trim() !== '');
 
-  // Columns per row — setup fields are compact enough for 3 cols
   const gridCols = activeTab === 'setup' ? 'grid-cols-3' : 'grid-cols-2';
 
   return (
@@ -229,7 +236,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
                       flex justify-between items-start shrink-0">
         <div className="flex-1 min-w-0">
 
-          {/* Badge row */}
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
               Room Editor
@@ -257,7 +263,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
             )}
           </div>
 
-          {/* Room name + number */}
           <div className="flex items-baseline gap-3">
             <h2 className="text-xl font-bold text-slate-900 leading-tight truncate">
               {room.name || (
@@ -271,7 +276,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
             )}
           </div>
 
-          {/* Quick stats row */}
           {rdsRow && (
             <div className="flex items-center gap-4 mt-1">
               {rdsRow.supplyAir > 0 && (
@@ -299,7 +303,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
           )}
         </div>
 
-        {/* Close button */}
         <button
           onClick={onClose}
           aria-label="Close panel"
@@ -345,7 +348,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
               key={section.id}
               className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
             >
-              {/* Section header — colour-coded */}
               <div className={`px-4 py-2 border-b ${palette.header}
                               flex items-center gap-3`}>
                 <span className={`w-1 h-5 rounded-full shrink-0 ${palette.accent}`}
@@ -358,12 +360,9 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
                 </span>
               </div>
 
-              {/* Section fields */}
               <div className="p-4 space-y-3">
                 {columnGroups.map(({ groupLabel, columns }, gi) => (
                   <div key={gi}>
-
-                    {/* Season divider */}
                     {groupLabel && (
                       <div className="flex items-center gap-3 mb-4">
                         <SeasonBadge season={groupLabel} />
@@ -371,7 +370,6 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
                       </div>
                     )}
 
-                    {/* Field grid */}
                     <div className={`grid ${gridCols} gap-x-4 gap-y-3`}>
                       {columns.map((col) => {
                         const isWide =

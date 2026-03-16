@@ -10,16 +10,15 @@
  *   FormSelect   — form-style labelled select (RoomDetailPanel)
  *   SeasonBadge  — coloured season label badge
  *
- * Fixes vs previous version:
- *   - Dead React import removed
+ * ── CHANGELOG ─────────────────────────────────────────────────────────────────
+ *   - Dead React import removed (Vite / React 17+ JSX transform)
  *   - SeasonBadge SEASON_COLORS keyed lowercase to match rdsSeasons.js output
  *     (was title-case — badge always fell back to gray)
- *   - SelectCell option rendering extracted to resolveOption() helper —
- *     eliminates triple typeof repetition
+ *   - resolveOption() helper extracted — used by both SelectCell and FormSelect
  *   - FieldLabel sub-component extracted — shared by FormInput + FormSelect
  *   - InputCell placeholder changed from '—' to '' — '—' triggered browser
  *     number input validation warnings
- *   - Disabled cursor unified: cursor-not-allowed across both InputCell + FormInput
+ *   - Disabled cursor unified: cursor-not-allowed across InputCell + FormInput
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -27,7 +26,6 @@
 /**
  * resolveOption()
  * Normalises a select option that is either a plain string or { value, label }.
- * Eliminates the repeated `typeof opt === 'string' ? ...` ternary.
  *
  * @param {string | { value: string, label: string }} opt
  * @returns {{ value: string, label: string }}
@@ -62,10 +60,10 @@ export const InputCell = ({
   value,
   onChange,
   disabled,
-  type      = 'number',
+  type        = 'number',
   step,
-  placeholder = '',    // FIX: was '—' — invalid for number inputs, browser warning
-  className = '',
+  placeholder = '',
+  className   = '',
 }) => (
   <div className="relative w-full h-full group/cell">
     <input
@@ -180,8 +178,10 @@ export const FormInput = ({
     />
   </div>
 );
+
 // ── FormSelect ────────────────────────────────────────────────────────────────
 // Form-style labelled select — used in RoomDetailPanel side panel.
+// Uses resolveOption() consistent with SelectCell above.
 
 export const FormSelect = ({
   value,
@@ -211,21 +211,17 @@ export const FormSelect = ({
       "
     >
       {options.map((opt) => {
-        const v = typeof opt === 'string' ? opt : opt.value;
-        const l = typeof opt === 'string' ? opt : (opt.label ?? opt.value);
+        const { value: v, label: l } = resolveOption(opt);
         return <option key={v} value={v}>{l}</option>;
       })}
     </select>
   </div>
 );
+
 // ── SeasonBadge ───────────────────────────────────────────────────────────────
 // Coloured pill badge for season labels.
-
-
 // Consumed by RoomDetailPanel section dividers and rdsSeasons column headers.
-//
-// FIX: keys are now lowercase to match rdsSeasons.js which passes
-// 'summer' | 'monsoon' | 'winter' — was title-case so always fell back to gray.
+// Keys are lowercase to match rdsSeasons.js which passes 'summer' | 'monsoon' | 'winter'.
 
 const SEASON_COLORS = {
   summer:  'bg-orange-100 text-orange-700 border-orange-200',
