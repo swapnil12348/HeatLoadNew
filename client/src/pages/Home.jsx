@@ -1,11 +1,18 @@
-import React from 'react';
+/**
+ * Home.jsx
+ * Responsibility: Public landing page — no header/nav wrapper.
+ *
+ * Standalone full-screen page outside AppLayout.
+ * Routes to /project on "Get Started".
+ */
+
 import { Link } from 'react-router-dom';
 
 export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4 font-sans">
       <div className="max-w-3xl w-full bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row">
-        
+
         {/* Left Side: Visual/Context */}
         <div className="bg-blue-600 p-8 md:p-12 text-white flex flex-col justify-center md:w-2/5">
           <h2 className="text-3xl font-bold mb-4">HVAC Project</h2>
@@ -27,8 +34,8 @@ export default function Home() {
             Manage AHUs, Room Geometries, and Climate data in one centralized dashboard.
           </p>
 
-          <Link 
-            to="/project" 
+          <Link
+            to="/project"
             className="group relative inline-flex items-center justify-center px-8 py-3 text-base font-bold text-white transition-all duration-200 bg-slate-900 rounded-lg hover:bg-slate-700 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-900"
           >
             Get Started
@@ -36,7 +43,7 @@ export default function Home() {
               →
             </span>
           </Link>
-          
+
           <div className="mt-8 pt-6 border-t border-gray-100 w-full flex gap-6 text-xs text-gray-400 font-medium uppercase tracking-wider">
             <span>Free to use</span>
             <span>•</span>

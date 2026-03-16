@@ -10,17 +10,15 @@
  * All data and dispatch logic lives in useRoomSidebar.
  * All per-room rendering lives in RoomSidebarItem.
  *
- * Fixes vs old version:
- *   - h-[calc(100vh-64px)] → h-full (BUG-16 FIX: fills AppLayout flex-1 correctly)
- *   - Raw SVG plus icon → lucide-react Plus
- *   - BUG-UI-21: Dead import React removed (React 17+ JSX transform — was documented
- *     as removed in changelog but the import was never actually deleted)
- *   - Footer shows total area m² in addition to zone count
- *   - aria-label on add button
+ * CHANGELOG
+ *
+ *   v2.0 — h-[calc(100vh-64px)] → h-full (fills AppLayout flex-1 correctly).
+ *         Raw SVG plus icon → lucide-react Plus.
+ *         Dead React import removed (React 17+ JSX transform).
+ *         Footer shows total area m² in addition to zone count.
+ *         aria-label on add button.
  */
 
-// BUG-UI-21 FIX: React import removed. Was listed in the changelog as already
-// removed but was still present on the import line.
 import { Plus }        from 'lucide-react';
 import useRoomSidebar  from '../../hooks/useRoomSidebar';
 import RoomSidebarItem from './RoomSidebarItem';
@@ -36,7 +34,7 @@ export default function RoomSidebar() {
   } = useRoomSidebar();
 
   return (
-    // BUG-16 FIX: h-full fills AppLayout's flex-1 <main> container.
+    // h-full fills AppLayout's flex-1 <main> container.
     // Old h-[calc(100vh-64px)] only subtracted header height and broke
     // when TabNav height changed.
     <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-full shrink-0">

@@ -5,18 +5,19 @@
  * Pure presentational component — zero Redux, zero dispatch.
  * All interaction is via callbacks from useRoomSidebar.
  *
- * Fixes vs old RoomSidebar inline render:
- *   - Raw SVGs replaced with lucide-react
- *   - floorArea displayed in m² (stored unit) — was incorrectly labelled ft²
- *   - roomNo fallback is '—' not 'NO #'
- *   - border-r-4 active indicator replaced with border-l-4 — no layout shift
- *   - Delete button visible on hover — was missing entirely
- *   - aria-labels on all interactive elements
- *   - ISO class badge shown when atRestClass is set
+ * CHANGELOG
+ *
+ *   v2.0 — Raw SVGs replaced with lucide-react.
+ *         floorArea displayed in m² (stored unit) — was incorrectly labelled ft².
+ *         roomNo fallback is '—' not 'NO #'.
+ *         border-r-4 active indicator → border-l-4 — no layout shift.
+ *         Delete button visible on hover — was missing entirely.
+ *         aria-labels on all interactive elements.
+ *         ISO class badge shown when atRestClass is set.
  */
 
-import React, { memo }       from 'react';
-import { ChevronRight, X }   from 'lucide-react';
+import { memo }            from 'react';
+import { ChevronRight, X } from 'lucide-react';
 
 const RoomSidebarItem = ({
   room,
@@ -55,7 +56,7 @@ const RoomSidebarItem = ({
           <div className="text-[10px] text-gray-400 font-mono mt-0.5 flex items-center gap-1.5">
             <span>{room.roomNo || '—'}</span>
             <span className="text-gray-200">·</span>
-            {/* BUG-04 FIX: floorArea is stored in m² — was labelled ft² */}
+            {/* floorArea is stored in m² by roomSlice (SI units) */}
             <span>
               {room.floorArea
                 ? `${parseFloat(room.floorArea).toLocaleString(undefined, { maximumFractionDigits: 1 })} m²`

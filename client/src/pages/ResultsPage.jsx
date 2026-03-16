@@ -3,39 +3,34 @@
  * Responsibility: Project dashboard — KPI cards, system load breakdown,
  *                 zone supply air governance summary, design parameters.
  *
+ * -- CHANGELOG v2.3 -----------------------------------------------------------
+ *
+ *   Export fixed — project name now read from Redux (was hardcoded 'HVAC Design').
+ *   Export payload documented as a results snapshot, not a project file:
+ *     it serialises computed rdsRows and project totals but NOT the raw Redux
+ *     state (rooms, envelopes, AHU configs, climate). It cannot be re-imported
+ *     to reconstruct a project.
+ *   min-h-[calc(100vh-64px)] → min-h-full — stale layout class removed.
+ *     Inside AppLayout's flex-1 overflow-auto container, the calc() subtracted
+ *     only header height and ignored TabNav, same bug fixed across all other pages.
+ *   Inline SVG download icon → lucide-react Download, consistent with codebase.
+ *
  * -- CHANGELOG v2.2 -----------------------------------------------------------
  *
- *   BUG-UI-10 [CRITICAL — MISSING TBODY CELLS] — RSH / ERSH / GTSH data cells
- *     added to Zone Supply Air Summary tbody rows.
- *
- *     thead had RSH / ERSH / GTSH columns (added in v2.1 patch) but the tbody
- *     row had no corresponding <td> elements — columns were structurally present
- *     but rendered empty because the data cells were never written.
- *
- *   BUG-UI-11 [MEDIUM — FALSY GUARD] — RSH / ERSH / GTSH conditionals changed
- *     from truthy check to null + NaN guard.
- *
- *     Previous: {r.ersh ? value : '—'}
- *     Problem:  0 is falsy in JS. A room with zero sensible load (e.g. a room
- *               with only latent gains) would display '—' instead of '0'.
- *     Fix:      {r.ersh != null && !isNaN(r.ersh) ? value : '—'}
+ *   BUG-UI-10 [CRITICAL] — RSH / ERSH / GTSH data cells added to tbody rows.
+ *   BUG-UI-11 [MEDIUM]   — RSH / ERSH / GTSH conditionals use null + NaN guard.
  *
  * -- CHANGELOG v2.1 -----------------------------------------------------------
  *
- *   BUG-UI-05 [CRITICAL — DOUBLE UNIT CONVERSION] — Manual area computation
- *     replaced with useProjectTotals.
- *
- *   BUG-UI-06 [MEDIUM — MISSING CRITICAL SURFACE] — highHumidRooms banner added.
- *
- *   BUG-UI-07 [MEDIUM — MISSING DATA] — totalCoilLoadBTU KPI card added.
- *
- *   BUG-UI-08 [MEDIUM — MISSING GOVERNED TYPE] — 'regulatoryAcph' added to
- *     GovernedBadge and acphGoverned count.
- *
- *   BUG-UI-09 [LOW] — unused `import React from 'react'` removed.
+ *   BUG-UI-05 [CRITICAL] — Double unit conversion fixed via useProjectTotals.
+ *   BUG-UI-06 [MEDIUM]   — highHumidRooms banner added.
+ *   BUG-UI-07 [MEDIUM]   — totalCoilLoadBTU KPI card added.
+ *   BUG-UI-08 [MEDIUM]   — 'regulatoryAcph' added to GovernedBadge + acphGoverned.
+ *   BUG-UI-09 [LOW]      — Dead React import removed.
  */
 
 import { useSelector }      from 'react-redux';
+import { Download }         from 'lucide-react';
 import { selectAllAHUs }    from '../features/ahu/ahuSlice';
 import { selectRdsData }    from '../features/results/rdsSelector';
 import useProjectTotals     from '../hooks/useProjectTotals';
@@ -75,6 +70,7 @@ export default function ResultsPage() {
   const ahus         = useSelector(selectAllAHUs);
   const systemDesign = useSelector((state) => state.project.systemDesign);
   const elevation    = useSelector((state) => state.project.ambient.elevation || 0);
+  const projectName  = useSelector((state) => state.project.name || 'HVAC Project');
 
   const {
     totalTR,
@@ -127,24 +123,34 @@ export default function ResultsPage() {
   }
 
   const handleExport = () => {
+    // ⚠ This export is a RESULTS SNAPSHOT — not a project save file.
+    // It serialises computed rdsRows and project-level totals.
+    // It does NOT include the raw Redux state (rooms, envelopes, AHU configs,
+    // climate data). It cannot be re-imported to reconstruct a project.
+    // Use it as a calculation record / handover document only.
     const payload = {
-      project: 'HVAC Design',
-      units:   { area: 'm²', airflow: 'CFM', load: 'TR', coilLoad: 'BTU/hr' },
-      totals:  { totalTR, totalCFM, totalAreaM2, totalAreaFt2, totalCoilLoadBTU },
-      rooms:   rdsRows,
+      project:   projectName,
+      exportedAt: new Date().toISOString(),
+      units:     { area: 'm²', airflow: 'CFM', load: 'TR', coilLoad: 'BTU/hr' },
+      totals:    { totalTR, totalCFM, totalAreaM2, totalAreaFt2, totalCoilLoadBTU },
+      rooms:     rdsRows,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = 'project_calculations.json';
+    a.download = `${projectName.replace(/\s+/g, '_')}_calculations.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="min-h-[calc(100vh-64px)] bg-slate-50 p-8 overflow-y-auto">
+    // min-h-full: AppLayout's flex-1 overflow-auto parent handles page height.
+    // Old min-h-[calc(100vh-64px)] only subtracted header height — same stale
+    // class removed from every other page during the layout audit.
+    <div className="min-h-full bg-slate-50 p-8 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
 
         {/* ── Header ── */}
@@ -165,10 +171,7 @@ export default function ResultsPage() {
             onClick={handleExport}
             className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-slate-50 flex items-center gap-2"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
+            <Download className="w-4 h-4" aria-hidden="true" />
             Export JSON
           </button>
         </div>
@@ -398,8 +401,8 @@ export default function ResultsPage() {
                         </td>
 
                         {/* null + NaN guard: 0 is a valid engineering result for rooms
-                            with minimal sensible loads — a plain truthy check would show '—'
-                            for 0 BTU/hr which is incorrect. */}
+                            with minimal sensible loads — a plain truthy check would show
+                            '—' for 0 BTU/hr which is incorrect. */}
                         <td className="px-4 py-2.5 text-right font-mono text-slate-500">
                           {r.rsh != null && !isNaN(r.rsh)
                             ? Math.round(r.rsh).toLocaleString()

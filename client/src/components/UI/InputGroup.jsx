@@ -1,4 +1,11 @@
-import React from 'react';
+/**
+ * InputGroup.jsx
+ * Responsibility: Labelled numeric input with inline unit suffix.
+ *
+ * Used for climate and project detail fields where a simple
+ * text/number input with a unit label is sufficient.
+ * For increment/decrement controls use NumberControl instead.
+ */
 
 const InputGroup = ({ label, value, onChange, unit, type = 'number', step = '1', className = '' }) => (
   <div className={`flex flex-col space-y-1 ${className}`}>

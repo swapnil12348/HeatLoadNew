@@ -1,4 +1,10 @@
-import React from 'react';
+/**
+ * StatCard.jsx
+ * Responsibility: Display a single KPI statistic in a coloured card.
+ *
+ * Pure presentational — no Redux, no hooks.
+ * Invalid color values fall back to 'blue'.
+ */
 
 const COLOR_MAP = {
   blue:    'bg-blue-50   text-blue-700   border-blue-100',

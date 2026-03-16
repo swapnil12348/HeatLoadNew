@@ -17,22 +17,38 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.4 ────────────────────────────────────────────────────────────
+ *
+ *   Multi-season peak selection — monsoon vs summer comparison implemented.
+ *
+ *     Previous behaviour: peakErsh and peakErlh were always taken from summer.
+ *     For high-humidity monsoon climates (Mumbai, Chennai, Singapore), the
+ *     combined room + OA enthalpy load during monsoon can exceed the summer
+ *     design point, causing cooling capacity to be undersized.
+ *
+ *     Two distinct peaks are now tracked and may resolve to different seasons:
+ *
+ *       peakCFMSeason    — season with highest ERSH.
+ *                          Governs supply air CFM and ADP calculation.
+ *                          Supply air is a sensible quantity; thermalCFM =
+ *                          ERSH / (Cs × supplyDT), so peak sensible governs.
+ *
+ *       peakCoolingSeason — season with highest (ERSH + ERLH + OA enthalpy).
+ *                           Governs cooling capacity (TR), coilLoadBTU, and
+ *                           CHW pipe sizing.
+ *                           Determined after STEP 3 when OA loads are available.
+ *
+ *     In temperate northern-hemisphere climates both seasons resolve to
+ *     'summer' — no change in output. The split only matters when monsoon
+ *     OA enthalpy load tips the peak to a different season.
+ *
+ *     Both seasons are exposed in the return object (peakCoolingSeason,
+ *     peakCFMSeason) for engineering audit and RDS display.
+ *
  * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
  *   returnFanHeat wired from systemDesign.returnFanHeat.
- *
- *     Previous hardcoded 0.02 multiplier (returnFanHeat = supplyFanHeat × 2%)
- *     was non-configurable and significantly underestimated return fan heat for
- *     balanced supply/return systems. Now reads systemDesign.returnFanHeat (%)
- *     added to projectSlice v2.3. Default 5% via projectSlice initialState.
- *
  *   humidificationTarget wired as raRH fallback.
- *
- *     raRH fell back to hardcoded 50 when room.designRH was missing/NaN.
- *     Now falls back to systemDesign.humidificationTarget (project-level
- *     winter RH default). Rooms with an explicit designRH — including 0%RH
- *     dry rooms — always use room.designRH directly; the fallback only fires
- *     when no designRH is set at all.
  *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
@@ -74,6 +90,15 @@
  *                   Math.max(thermalCFM, designAcphCFM, regulatoryAcphCFM, minAcphCFM)
  *   freshAirCheck = OA-only CFM component.
  *   ACPH uses supplyAir (total) — correct for ISO 14644 cleanroom ACH. ✓
+ *
+ * ── PEAK SEASON SELECTION ────────────────────────────────────────────────────
+ *
+ *   peakCFMSeason     → season with highest ERSH → governs supply air CFM
+ *   peakCoolingSeason → season with highest (ERSH + ERLH + OA) → governs TR
+ *
+ *   In temperate climates both are 'summer'. They diverge for high-humidity
+ *   monsoon climates where OA enthalpy load is the dominant cooling driver.
+ *   peakCoolingSeason is determined after STEP 3 (requires OA loads).
  */
 
 import { createSelector } from '@reduxjs/toolkit';
@@ -115,9 +140,9 @@ export const selectRdsData = createSelector(
     rooms, envelopes, ahus, climate, systemDesign,
     elevation, latitude, dailyRange
   ) => {
-    const altCf       = altitudeCorrectionFactor(elevation);
+    const altCf        = altitudeCorrectionFactor(elevation);
     const SEASONS_LIST = ['summer', 'monsoon', 'winter'];
-    const Cs          = sensibleFactor(elevation);
+    const Cs           = sensibleFactor(elevation);
 
     return rooms.map(room => {
       try {
@@ -144,9 +169,13 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 1 — Seasonal loads
+        //
+        // All three season calcs objects are retained in seasonCalcs so that
+        // the post-STEP-1 peak selection can access ersh, erlh, and dbInF
+        // for any season without re-running calculateSeasonLoad.
         // ════════════════════════════════════════════════════════════════════════
         const seasonResults = {};
-        let summerCalcs = null;
+        const seasonCalcs   = {};  // full calcs per season — used for peak selection
 
         SEASONS_LIST.forEach(season => {
           const calcs = calculateSeasonLoad(
@@ -154,6 +183,8 @@ export const selectRdsData = createSelector(
             altCf, elevation, floorAreaFt2, volumeFt3,
             latitude, dailyRange,
           );
+
+          seasonCalcs[season] = calcs;
 
           seasonResults[`ershOn_${season}`] = calcs.ersh;
           seasonResults[`erlhOn_${season}`] = calcs.erlh;
@@ -166,13 +197,32 @@ export const selectRdsData = createSelector(
           seasonResults[`erlhOff_${season}`] = Math.round(
             calcs.erlh - calcs.equipLatent
           );
-
-          if (season === 'summer') summerCalcs = calcs;
         });
 
-        const peakErsh = seasonResults['ershOn_summer'];
-        const peakErlh = seasonResults['erlhOn_summer'];
-        const dbInF    = summerCalcs?.dbInF ?? 72;
+        // ── Peak ERSH season ────────────────────────────────────────────────
+        // Governs supply air CFM and ADP calculation.
+        // Supply air is a sensible quantity — thermalCFM = ERSH / (Cs × supplyDT)
+        // — so peak sensible (ERSH) is the correct governing criterion here.
+        //
+        // In temperate northern-hemisphere climates this always resolves to
+        // 'summer'. The reduce is inexpensive (3 items) and future-proofs
+        // against unusual climate profiles without any branch logic.
+        // peakCFMSeason: season with highest ERSH — governs supply air CFM and ADP.
+        // Aliased as peakCFMSeason (not peakErshSeason) so the name in the return
+        // object is self-documenting at the RDS display layer.
+        const peakCFMSeason = SEASONS_LIST.reduce((best, s) =>
+          (seasonCalcs[s].ersh > seasonCalcs[best].ersh ? s : best), 'summer'
+        );
+        // Full calcs object for the CFM-governing season — needed for dbInF,
+        // infilCFM, rawSensible (all sensible-peak quantities).
+        const peakCalcs = seasonCalcs[peakCFMSeason];
+
+        const peakErsh = peakCalcs.ersh;
+        const peakErlh = peakCalcs.erlh;
+        // dbInF from the peak sensible season — feeds ADP calculation and
+        // psychrometric state points. Using summer's dbInF when a different
+        // season governs CFM would produce a mismatched supply temperature.
+        const dbInF    = peakCalcs.dbInF ?? 72;
 
         // ════════════════════════════════════════════════════════════════════════
         // ADP-01 — Resolve effective ADP
@@ -273,6 +323,9 @@ export const selectRdsData = createSelector(
         // STEP 3 — Outdoor air coil loads
         //
         // outdoorAirLoad.js derives altCf internally from elevation.
+        // OA loads for all three seasons are computed here — they are required
+        // both for the per-season oaFields output AND for the peak cooling
+        // season selection that follows in STEP 4.
         // ════════════════════════════════════════════════════════════════════════
         const oaLoads = calculateAllSeasonOALoads(
           freshAirCheck, climate, dbInF, raRH,
@@ -290,44 +343,72 @@ export const selectRdsData = createSelector(
         });
 
         // ════════════════════════════════════════════════════════════════════════
-        // STEP 4 — Grand total cooling load
+        // STEP 4 — Peak cooling season selection + grand total
         //
-        // oaSummer.oaTotal (enthalpy method) is used for both grandTotal and
-        // coilLoadBTU — not the sum of oaSensible + oaLatent separately.
-        // fan heat: supply fan heat applied downstream of coil (draw-through).
-        //           return fan heat applied upstream of coil (increases coil load).
-        //           Neither is compounded with the safety factor.
+        // Supply air CFM was sized to peakCFMSeason (peak sensible load).
+        // Cooling capacity must be sized to the season with the highest
+        // combined room load + OA enthalpy load.
+        //
+        // For high-humidity monsoon climates (Mumbai OA: ~83°F DB / ~78°F WB,
+        // enthalpy ~41 BTU/lb) the monsoon OA load can exceed summer even when
+        // summer ERSH is higher, because monsoon latent + OA enthalpy together
+        // dominate. A fab that sizes to summer only would be ~10–20% short on
+        // cooling capacity.
+        //
+        // seasonTotals[s] = ERSH_s + ERLH_s + oaTotal_s
+        //
+        // fan heat basis: peakErsh (from peakCFMSeason) — supply fan is sized
+        // to the CFM requirement, not the capacity-governing season.
         // ════════════════════════════════════════════════════════════════════════
-        const oaSummer = oaLoads.summer;
+        const seasonTotals = {};
+        SEASONS_LIST.forEach(s => {
+          seasonTotals[s] = (seasonResults[`ershOn_${s}`] || 0)
+            + (seasonResults[`erlhOn_${s}`] || 0)
+            + (oaLoads[s]?.oaTotal         || 0);
+        });
+
+        // Season with highest combined room + OA load governs capacity.
+        const peakCoolingSeason = SEASONS_LIST.reduce((best, s) =>
+          (seasonTotals[s] > seasonTotals[best] ? s : best), peakCFMSeason
+        );
+
+        // Capacity-governing load values.
+        const peakErshForCap = seasonResults[`ershOn_${peakCoolingSeason}`];
+        const peakErlhForCap = seasonResults[`erlhOn_${peakCoolingSeason}`];
+        const oaPeak         = oaLoads[peakCoolingSeason];
 
         const supplyFanHeatFraction = (parseFloat(systemDesign.fanHeat)       || 5) / 100;
         const returnFanHeatFraction = (parseFloat(systemDesign.returnFanHeat) || 5) / 100;
 
+        // Fan heat is based on peakErsh (CFM-governing season) — supply fan
+        // is sized to the airflow requirement, not the capacity-governing season.
         const supplyFanHeatBTU = Math.round(Math.abs(peakErsh) * supplyFanHeatFraction);
         const returnFanHeatBTU = Math.round(supplyFanHeatBTU   * returnFanHeatFraction);
 
-        const grandTotal = (peakErsh + peakErlh)
-          + oaSummer.oaTotal
+        const grandTotal = (peakErshForCap + peakErlhForCap)
+          + oaPeak.oaTotal
           + supplyFanHeatBTU
           + returnFanHeatBTU;
 
         const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
         const grandTotalSensible = Math.round(
-          peakErsh + oaSummer.oaSensible + supplyFanHeatBTU + returnFanHeatBTU
+          peakErshForCap + oaPeak.oaSensible + supplyFanHeatBTU + returnFanHeatBTU
         );
 
         // coilLoadBTU: basis for CHW pipe sizing — excludes supply fan heat
         // (supply fan is downstream of coil in draw-through configuration).
-        const coilLoadBTU = (peakErsh + peakErlh)
-          + oaSummer.oaTotal
+        // Uses peakCoolingSeason values — CHW pipe must handle the peak coil load.
+        const coilLoadBTU = (peakErshForCap + peakErlhForCap)
+          + oaPeak.oaTotal
           + returnFanHeatBTU;
 
         const supplyFanHeatBlow = supplyFanHeatBTU;
         const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
         const returnFanHeat     = (returnFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
 
-        const totalInfil = summerCalcs ? Math.round(summerCalcs.infilCFM) : 0;
-        const rsh        = summerCalcs ? Math.round(summerCalcs.rawSensible) : 0;
+        // totalInfil and rsh: from peak ERSH season (sensible peak conditions).
+        const totalInfil = Math.round(peakCalcs.infilCFM   || 0);
+        const rsh        = Math.round(peakCalcs.rawSensible || 0);
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 5 — Heating + humidification
@@ -425,6 +506,15 @@ export const selectRdsData = createSelector(
           // ft³ / ft² — override m³ / m² from ...room spread.
           volume:        volumeFt3,
           floorArea:     floorAreaFt2,
+
+          // ── Peak season audit ────────────────────────────────────────────────
+          // Exposed for RDS display and engineering review.
+          // peakCFMSeason:    season whose ERSH governed supply air CFM.
+          // peakCoolingSeason: season whose (ERSH + ERLH + OA) governed TR/coil.
+          // These are identical in temperate climates. They differ when monsoon
+          // OA enthalpy load tips the capacity peak to a different season.
+          peakCFMSeason,
+          peakCoolingSeason,
 
           // ── Core cooling outputs ─────────────────────────────────────────────
           supplyAir,

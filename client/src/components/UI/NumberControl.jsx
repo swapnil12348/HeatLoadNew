@@ -1,10 +1,10 @@
-import React from 'react';
-import useNumberControl from '../../hooks/useNumberControl';
-
 /**
- * NumberControl
+ * NumberControl.jsx
+ * Responsibility: Labelled numeric input with increment/decrement buttons.
  *
- * Presentational component only — all clamping/stepping logic lives in useNumberControl.
+ * Presentational component only — all clamping/stepping logic lives in
+ * useNumberControl. See that hook for the designRH = 0 contract and the
+ * rationale for clamping only on blur, not on every keystroke.
  *
  * Physical quantities that CAN be negative (pass min explicitly):
  *   - latitude (southern hemisphere: min={-90})
@@ -14,6 +14,9 @@ import useNumberControl from '../../hooks/useNumberControl';
  * Default min = 0 catches the most common accidental negatives.
  * Default max = Infinity — callers set explicit max where needed (e.g. RH max={100}).
  */
+
+import useNumberControl from '../../hooks/useNumberControl';
+
 const NumberControl = ({
   label,
   value,
