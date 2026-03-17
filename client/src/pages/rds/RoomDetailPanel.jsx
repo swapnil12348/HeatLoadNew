@@ -217,7 +217,7 @@ export default function RoomDetailPanel({ room, rdsRow, envelope, ahus, onClose 
       dispatch(deleteRoomWithCleanup(room.id));
       onClose();
     }
-  }, [dispatch, room?.id, onClose]);
+  }, [dispatch, room, onClose]);
 
   if (!room) return null;
 

@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { useSelector, useDispatch } from 'react-redux';
 import { updateProjectInfo, updateAmbient, updateSystemDesign } from '../features/project/projectSlice';
 import NumberControl from '../components/UI/NumberControl';
