@@ -3,17 +3,35 @@
  * Responsibility: Project dashboard — KPI cards, system load breakdown,
  *                 zone supply air governance summary, design parameters.
  *
+ * -- CHANGELOG v2.4 -----------------------------------------------------------
+ *
+ *   Monsoon peak season surfaced — rdsSelector v2.4 added peakCoolingSeason
+ *     and peakCFMSeason per room. When any room's capacity is governed by
+ *     monsoon (not summer), a banner now explains this and each affected room
+ *     shows a badge in the zone table. Without this, a Mumbai/Chennai fab
+ *     would show a TR number with no indication it came from monsoon design
+ *     conditions — the engineer and AHJ have no way to audit the basis.
+ *
+ *   Heating + humidification KPI cards added — totalHeatingKW and totalHumidKW
+ *     were computed by useProjectTotals but invisible on this page. Critical
+ *     facility engineers need the HW plant and humidifier totals alongside
+ *     the CHW plant total. Both added as a conditional second KPI row (only
+ *     shown when the project has non-zero heating or humidification loads).
+ *     Both also added to the Design Parameters panel as line items.
+ *
+ *   systemSummary mutation fixed — const array was mutated with .push().
+ *     Rebuilt as a single pure expression using array spread.
+ *
+ *   RATING_TO_COLOR comment added — 'excellent' maps to red/warning because
+ *     <50 ft²/TR is correct for a semiconductor fab but still warrants a
+ *     "verify these extreme loads" check. Not a bug — documented as intentional.
+ *
  * -- CHANGELOG v2.3 -----------------------------------------------------------
  *
- *   Export fixed — project name now read from Redux (was hardcoded 'HVAC Design').
- *   Export payload documented as a results snapshot, not a project file:
- *     it serialises computed rdsRows and project totals but NOT the raw Redux
- *     state (rooms, envelopes, AHU configs, climate). It cannot be re-imported
- *     to reconstruct a project.
- *   min-h-[calc(100vh-64px)] → min-h-full — stale layout class removed.
- *     Inside AppLayout's flex-1 overflow-auto container, the calc() subtracted
- *     only header height and ignored TabNav, same bug fixed across all other pages.
- *   Inline SVG download icon → lucide-react Download, consistent with codebase.
+ *   Export fixed — project name now read from Redux.
+ *   Export documented as results snapshot, not a project save file.
+ *   min-h-[calc(100vh-64px)] → min-h-full.
+ *   Inline SVG → lucide-react Download.
  *
  * -- CHANGELOG v2.2 -----------------------------------------------------------
  *
@@ -35,6 +53,18 @@ import { selectAllAHUs }    from '../features/ahu/ahuSlice';
 import { selectRdsData }    from '../features/results/rdsSelector';
 import useProjectTotals     from '../hooks/useProjectTotals';
 
+// ── Check figure color mapping ─────────────────────────────────────────────
+//
+// 'excellent' (<50 ft²/TR, semiconductor/fab) maps to RED — intentional.
+// This is the correct load density for a fab, but the warning colour signals
+// "verify these extreme loads before stamping". It is NOT a positive
+// confirmation — the engineer should double-check inputs at this density.
+//
+// 'review' (150–400 ft²/TR, general commercial) maps to GREEN because
+// this is the normal range for a conventional building — no action needed.
+//
+// 'high' (>400 ft²/TR) maps to ORANGE — suspiciously low density,
+// likely means loads are incomplete.
 const RATING_TO_COLOR = {
   excellent: 'red',
   good:      'orange',
@@ -65,6 +95,14 @@ const GovernedBadge = ({ governed }) => {
   );
 };
 
+// Shown in zone table when monsoon governs capacity (peakCoolingSeason !== 'summer').
+const MonsoonPeakBadge = () => (
+  <span className="inline-block ml-1.5 text-[9px] font-bold uppercase tracking-wide
+    bg-teal-50 text-teal-700 border border-teal-200 px-1.5 py-0.5 rounded">
+    monsoon peak
+  </span>
+);
+
 export default function ResultsPage() {
   const rdsRows      = useSelector(selectRdsData);
   const ahus         = useSelector(selectAllAHUs);
@@ -77,6 +115,8 @@ export default function ResultsPage() {
     totalCFM,
     totalAreaFt2,
     totalAreaM2,
+    totalHeatingKW,
+    totalHumidKW,
     checkFigureVal,
     checkFigureRating,
     checkFigureNote,
@@ -94,7 +134,16 @@ export default function ResultsPage() {
     (r) => ['designAcph', 'minAcph', 'regulatoryAcph'].includes(r.supplyAirGoverned)
   ).length;
 
-  const systemSummary = ahus.map((ahu) => {
+  // Rooms where the capacity-governing season is not summer.
+  // rdsSelector v2.4 tracks peakCoolingSeason independently of peakCFMSeason.
+  // For Mumbai/Chennai/Singapore-class climates, monsoon OA enthalpy can push
+  // the combined room + OA load above the summer peak.
+  const monsoonPeakRooms = rdsRows.filter(
+    (r) => r.peakCoolingSeason && r.peakCoolingSeason !== 'summer'
+  );
+
+  // ── System summary — pure expression, no mutation ──────────────────────
+  const ahuRows = ahus.map((ahu) => {
     const assigned = rdsRows.filter((r) => r.ahuId === ahu.id);
     const ahuTR    = assigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0);
     const ahuCFM   = assigned.reduce((s, r) => s + (parseFloat(r.supplyAir)    || 0), 0);
@@ -108,32 +157,33 @@ export default function ResultsPage() {
   });
 
   const unassigned = rdsRows.filter((r) => !r.ahuId);
-  if (unassigned.length > 0) {
-    systemSummary.push({
-      id:        'unassigned',
-      name:      'Unassigned Zones',
-      type:      'N/A',
-      roomCount: unassigned.length,
-      totalTR:   unassigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0),
-      totalCFM:  unassigned.reduce((s, r) => s + (parseFloat(r.supplyAir)    || 0), 0),
-      loadPct:   totalTR > 0
-        ? (unassigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0) / totalTR) * 100
-        : 0,
-    });
-  }
+  const unassignedRow = unassigned.length > 0
+    ? [{
+        id:        'unassigned',
+        name:      'Unassigned Zones',
+        type:      'N/A',
+        roomCount: unassigned.length,
+        totalTR:   unassigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0),
+        totalCFM:  unassigned.reduce((s, r) => s + (parseFloat(r.supplyAir)    || 0), 0),
+        loadPct:   totalTR > 0
+          ? (unassigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0) / totalTR) * 100
+          : 0,
+      }]
+    : [];
+
+  const systemSummary = [...ahuRows, ...unassignedRow];
 
   const handleExport = () => {
     // ⚠ This export is a RESULTS SNAPSHOT — not a project save file.
     // It serialises computed rdsRows and project-level totals.
     // It does NOT include the raw Redux state (rooms, envelopes, AHU configs,
     // climate data). It cannot be re-imported to reconstruct a project.
-    // Use it as a calculation record / handover document only.
     const payload = {
-      project:   projectName,
+      project:    projectName,
       exportedAt: new Date().toISOString(),
-      units:     { area: 'm²', airflow: 'CFM', load: 'TR', coilLoad: 'BTU/hr' },
-      totals:    { totalTR, totalCFM, totalAreaM2, totalAreaFt2, totalCoilLoadBTU },
-      rooms:     rdsRows,
+      units:      { area: 'm²', airflow: 'CFM', load: 'TR', coilLoad: 'BTU/hr' },
+      totals:     { totalTR, totalCFM, totalAreaM2, totalAreaFt2, totalCoilLoadBTU },
+      rooms:      rdsRows,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -147,9 +197,6 @@ export default function ResultsPage() {
   };
 
   return (
-    // min-h-full: AppLayout's flex-1 overflow-auto parent handles page height.
-    // Old min-h-[calc(100vh-64px)] only subtracted header height — same stale
-    // class removed from every other page during the layout audit.
     <div className="min-h-full bg-slate-50 p-8 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
 
@@ -176,13 +223,11 @@ export default function ResultsPage() {
           </button>
         </div>
 
-        {/* ── KPI Cards ── */}
+        {/* ── KPI Cards — Row 1: Cooling ── */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
 
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-              Total Cooling
-            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Total Cooling</div>
             <div className="text-2xl font-bold text-blue-600 mt-2">
               {totalTR.toFixed(1)}{' '}
               <span className="text-sm text-slate-400 font-normal">TR</span>
@@ -191,9 +236,7 @@ export default function ResultsPage() {
           </div>
 
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-              Total Airflow
-            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Total Airflow</div>
             <div className="text-2xl font-bold text-slate-700 mt-2">
               {totalCFM.toLocaleString()}{' '}
               <span className="text-sm text-slate-400 font-normal">CFM</span>
@@ -206,9 +249,7 @@ export default function ResultsPage() {
           </div>
 
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-              CHW Plant Load
-            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">CHW Plant Load</div>
             <div className="text-2xl font-bold text-cyan-600 mt-2">
               {(totalCoilLoadBTU / 12000).toFixed(1)}{' '}
               <span className="text-sm text-slate-400 font-normal">TR</span>
@@ -219,9 +260,7 @@ export default function ResultsPage() {
           </div>
 
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-              Total Area
-            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Total Area</div>
             <div className="text-2xl font-bold text-slate-700 mt-2">
               {totalAreaM2.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
               <span className="text-sm text-slate-400 font-normal">m²</span>
@@ -232,18 +271,80 @@ export default function ResultsPage() {
           </div>
 
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-              Check Figure
-            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Check Figure</div>
             <div className="text-2xl font-bold text-emerald-600 mt-2">
               {sqftPerTR}{' '}
               <span className="text-sm text-slate-400 font-normal">ft²/TR</span>
             </div>
-            <div className="text-[10px] text-slate-400 mt-1 font-mono">
-              {cfmPerSqft} CFM/ft²
-            </div>
+            <div className="text-[10px] text-slate-400 mt-1 font-mono">{cfmPerSqft} CFM/ft²</div>
           </div>
         </div>
+
+        {/* ── KPI Cards — Row 2: Heating + Humidification ──────────────────────
+            Only rendered when the project has non-zero heating or humidification.
+            These totals are computed by useProjectTotals but were previously
+            invisible — critical facility engineers need HW plant and humidifier
+            totals alongside the CHW plant total. */}
+        {hasData && (totalHeatingKW > 0 || totalHumidKW > 0) && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+
+            {totalHeatingKW > 0 && (
+              <div className="bg-white p-5 rounded-xl border border-orange-100 shadow-sm">
+                <div className="text-xs font-bold text-orange-400 uppercase tracking-wide">Total Heating</div>
+                <div className="text-2xl font-bold text-orange-600 mt-2">
+                  {totalHeatingKW.toFixed(1)}{' '}
+                  <span className="text-sm text-orange-300 font-normal">kW</span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1">HW plant basis</div>
+              </div>
+            )}
+
+            {totalHumidKW > 0 && (
+              <div className="bg-white p-5 rounded-xl border border-sky-100 shadow-sm">
+                <div className="text-xs font-bold text-sky-400 uppercase tracking-wide">Total Humidification</div>
+                <div className="text-2xl font-bold text-sky-600 mt-2">
+                  {totalHumidKW.toFixed(1)}{' '}
+                  <span className="text-sm text-sky-300 font-normal">kW</span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {highHumidRooms.length > 0
+                    ? `${highHumidRooms.length} room${highHumidRooms.length !== 1 ? 's' : ''} need review`
+                    : 'Steam / electric humidifier'}
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* ── Monsoon peak capacity banner ─────────────────────────────────────
+            Shown when any room's cooling capacity is governed by monsoon OA
+            enthalpy load rather than summer sensible peak. Added with
+            rdsSelector v2.4 multi-season peak selection. */}
+        {monsoonPeakRooms.length > 0 && (
+          <div className="bg-teal-50 border border-teal-300 rounded-xl p-4 flex items-start gap-3">
+            <div className="text-xl mt-0.5 shrink-0">🌧️</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-teal-900">
+                {monsoonPeakRooms.length} room{monsoonPeakRooms.length !== 1 ? 's' : ''} — cooling capacity governed by monsoon, not summer
+              </p>
+              <p className="text-xs text-teal-700 mt-1 leading-relaxed">
+                Combined room + outdoor air enthalpy load is higher during monsoon than summer
+                for these zones. Cooling capacity (TR) and CHW pipe sizing are based on monsoon
+                design conditions. Supply air CFM is still governed by peak sensible (summer).
+                Confirm monsoon outdoor conditions in the Climate tab before final issue.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {monsoonPeakRooms.map((r) => (
+                  <span key={r.id}
+                    className="text-xs font-mono font-bold text-teal-800 bg-teal-100 rounded px-2 py-1">
+                    {r.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── High humidification warning banner ── */}
         {highHumidRooms.length > 0 && (
@@ -369,7 +470,7 @@ export default function ResultsPage() {
               <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
                 <h3 className="text-sm font-bold text-slate-800">Zone Supply Air Summary</h3>
                 <span className="text-[10px] text-slate-400 font-mono">
-                  RSH / ERSH / GTSH in BTU/hr · governed by: thermal load | design ACPH | min ACPH | regulatory ACH
+                  RSH / ERSH / GTSH in BTU/hr · governed by: thermal | design ACPH | min ACPH | regulatory ACH
                 </span>
               </div>
               <div className="overflow-x-auto">
@@ -389,7 +490,14 @@ export default function ResultsPage() {
                   <tbody className="divide-y divide-slate-50">
                     {rdsRows.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-2.5 font-medium text-slate-800">{r.name}</td>
+                        <td className="px-4 py-2.5 font-medium text-slate-800">
+                          {r.name}
+                          {/* Monsoon peak badge — shown when peakCoolingSeason !== 'summer'.
+                              TR and CHW pipe sizing came from monsoon design conditions. */}
+                          {r.peakCoolingSeason && r.peakCoolingSeason !== 'summer' && (
+                            <MonsoonPeakBadge />
+                          )}
+                        </td>
                         <td className="px-4 py-2.5 text-right font-mono text-slate-500">
                           {(r.thermalCFM || 0).toLocaleString()}
                         </td>
@@ -399,26 +507,19 @@ export default function ResultsPage() {
                         <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-800">
                           {(r.supplyAir || 0).toLocaleString()}
                         </td>
-
-                        {/* null + NaN guard: 0 is a valid engineering result for rooms
-                            with minimal sensible loads — a plain truthy check would show
-                            '—' for 0 BTU/hr which is incorrect. */}
+                        {/* null + NaN guard: 0 is a valid result for rooms with
+                            minimal sensible loads — a truthy check shows '—' for 0. */}
                         <td className="px-4 py-2.5 text-right font-mono text-slate-500">
-                          {r.rsh != null && !isNaN(r.rsh)
-                            ? Math.round(r.rsh).toLocaleString()
-                            : '—'}
+                          {r.rsh != null && !isNaN(r.rsh) ? Math.round(r.rsh).toLocaleString() : '—'}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono font-bold text-violet-600">
-                          {r.ersh != null && !isNaN(r.ersh)
-                            ? Math.round(r.ersh).toLocaleString()
-                            : '—'}
+                          {r.ersh != null && !isNaN(r.ersh) ? Math.round(r.ersh).toLocaleString() : '—'}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono font-bold text-indigo-600">
                           {r.grandTotalSensible != null && !isNaN(r.grandTotalSensible)
                             ? Math.round(r.grandTotalSensible).toLocaleString()
                             : '—'}
                         </td>
-
                         <td className="px-4 py-2.5 text-right">
                           <GovernedBadge governed={r.supplyAirGoverned} />
                         </td>
@@ -461,9 +562,7 @@ export default function ResultsPage() {
                 </li>
                 <li className="flex justify-between border-b border-slate-50 pb-2">
                   <span className="text-slate-500">Return Fan Heat</span>
-                  <span className="font-bold text-slate-700">
-                    {systemDesign.returnFanHeat ?? 5}%
-                  </span>
+                  <span className="font-bold text-slate-700">{systemDesign.returnFanHeat ?? 5}%</span>
                 </li>
                 <li className="flex justify-between border-b border-slate-50 pb-2">
                   <span className="text-slate-500">Site Elevation</span>
@@ -473,14 +572,26 @@ export default function ResultsPage() {
                   <span className="text-slate-500">CHW Plant (coil only)</span>
                   <span className="font-bold text-cyan-600">{(totalCoilLoadBTU / 12000).toFixed(1)} TR</span>
                 </li>
+                {totalHeatingKW > 0 && (
+                  <li className="flex justify-between border-b border-slate-50 pb-2">
+                    <span className="text-slate-500">HW Plant Total</span>
+                    <span className="font-bold text-orange-600">{totalHeatingKW.toFixed(1)} kW</span>
+                  </li>
+                )}
+                {totalHumidKW > 0 && (
+                  <li className="flex justify-between border-b border-slate-50 pb-2">
+                    <span className="text-slate-500">Humidifier Total</span>
+                    <span className="font-bold text-sky-600">{totalHumidKW.toFixed(1)} kW</span>
+                  </li>
+                )}
               </ul>
             </div>
 
             {hasData && sqftPerTR !== '—' && (
               <div className={`rounded-xl border p-5 flex items-start gap-3
-                ${tipColor === 'red'    ? 'bg-red-50    border-red-200'       : ''}
-                ${tipColor === 'orange' ? 'bg-amber-50  border-amber-200'     : ''}
-                ${tipColor === 'green'  ? 'bg-emerald-50 border-emerald-200'  : ''}
+                ${tipColor === 'red'    ? 'bg-red-50    border-red-200'      : ''}
+                ${tipColor === 'orange' ? 'bg-amber-50  border-amber-200'    : ''}
+                ${tipColor === 'green'  ? 'bg-emerald-50 border-emerald-200' : ''}
               `}>
                 <div className="text-xl">
                   {tipColor === 'red' ? '⚠️' : tipColor === 'orange' ? '🔶' : '💡'}

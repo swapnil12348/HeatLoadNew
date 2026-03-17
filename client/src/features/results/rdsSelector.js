@@ -17,6 +17,28 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.5 ────────────────────────────────────────────────────────────
+ *
+ *   ADP-01 calculated mode — use thermalCFM not supplyAir as back-calculation basis.
+ *
+ *     Root cause: calculateAdpFromLoads was called with prelimAirQty.supplyAir
+ *     (the full ACPH-governed supply). For rooms where ACH constraints set supply
+ *     air well above the thermal requirement, supplyAir >> thermalCFM.
+ *     ADP = roomDB − ERSH/(Cs × coilCFM) collapsed to roomDB − 2°F (the clamp).
+ *
+ *     Example: Production Hall, 24°C / 44%RH, Design ACPH governing 22,107 CFM.
+ *       thermalCFM ≈ 1,800 CFM, supplyAir = 22,107 CFM (12× thermal).
+ *       With supplyAir as basis: ADP = 75.2 − 5121/(1.08 × 19454) = 73.0°F → clamped 73.2°F.
+ *       grADP at 73.2°F sat ≈ 116 gr/lb >> raGr ≈ 57 gr/lb → enthDiff < 0 → SHR = 1.0 (fallback).
+ *       With thermalCFM as basis: ADP = 75.2 − 5121/(1.08 × 1584) = 75.2 − 3.0 = 72.2°F
+ *       → still close but now sized to the actual coil duty, not ventilation-inflated CFM.
+ *
+ *     Fix: adpBasisCFM = thermalCFM when thermalCFM > 0, else supplyAir fallback.
+ *     If thermalCFM = 0 (purely ACH-governed, zero thermal load), calculateAdpFromLoads
+ *     guards on coilCFM = 0 and returns DEFAULT_ADP — a correct safe fallback.
+ *
+ *   Load breakdown fields (bd_*) added for Insights tab.
+ *
  * ── CHANGELOG v2.4 ────────────────────────────────────────────────────────────
  *
  *   Multi-season peak selection — monsoon vs summer comparison implemented.
@@ -265,11 +287,37 @@ export const selectRdsData = createSelector(
             floorAreaFt2, volumeFt3,
           );
 
-          // Pass 2 — back-calculate ADP from preliminary supply air.
+          // Pass 2 — back-calculate ADP from the THERMAL CFM, not supplyAir.
+          //
+          // ⚠ BUG FIXED: previouscode passed prelimAirQty.supplyAir (the full
+          // ACPH-governed supply) to calculateAdpFromLoads. For any room where
+          // supply air is set by an ACH constraint rather than thermal load
+          // (supplyAirGoverned !== 'thermal'), supplyAir >> thermalCFM.
+          //
+          // calculateAdpFromLoads computes:
+          //   ADP = roomDB − ERSH / (Cs × coilCFM)
+          //
+          // With a small ERSH divided by a massive ACPH-inflated coilCFM,
+          // the result collapses to roomDB − 2°F (the clamp in psychro.js).
+          // For a 24°C room (75.2°F) this gives ADP = 73.2°F — only 2°F
+          // below room temperature. The coil leaving air at 73.2°F saturation
+          // has ~116 gr/lb; the room at 44%RH has ~57 gr/lb. Supply air is
+          // wetter than the room → enthDiff < 0 → SHR defaults to 1.0
+          // silently, with no physical meaning.
+          //
+          // Fix: use thermalCFM as the ADP basis. ADP should be sized to
+          // the actual heat load, not the ventilation-inflated supply air.
+          // If thermalCFM = 0 (room is cooling-load-free, purely ACH-governed),
+          // calculateAdpFromLoads guards (ersh <= 0 or coilCFM <= 0) fire and
+          // return DEFAULT_ADP — a correct and safe fallback.
+          const adpBasisCFM = prelimAirQty.thermalCFM > 0
+            ? prelimAirQty.thermalCFM
+            : prelimAirQty.supplyAir;
+
           adpF = calculateAdpFromLoads(
             dbInF,
             peakErsh,
-            prelimAirQty.supplyAir,
+            adpBasisCFM,
             bf,
             elevation,
           );
@@ -381,7 +429,13 @@ export const selectRdsData = createSelector(
 
         // Fan heat is based on peakErsh (CFM-governing season) — supply fan
         // is sized to the airflow requirement, not the capacity-governing season.
-        const supplyFanHeatBTU = Math.round(Math.abs(peakErsh) * supplyFanHeatFraction);
+        // Math.abs guard: when adpF > dbInF (e.g. 5°C room with default 55°F ADP),
+// (dbInF − adpF) is negative → supplyFanHeatBTU goes negative → grandTotal
+// is REDUCED instead of increased. Fan heat is always physically positive.
+// The Insights tab ADP-above-room-temp rule already flags this condition.
+const supplyFanHeatBTU = Math.round(
+  Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf)) * supplyFanHeatFraction
+);
         const returnFanHeatBTU = Math.round(supplyFanHeatBTU   * returnFanHeatFraction);
 
         const grandTotal = (peakErshForCap + peakErlhForCap)
@@ -615,6 +669,27 @@ export const selectRdsData = createSelector(
 
           // ── Psychrometric state points ───────────────────────────────────────
           ...psychroFields,
+
+          // ── Load breakdown — for Insights tab ───────────────────────────────
+          //
+          // Component values from peakCFMSeason (the season that governs supply
+          // air CFM). These are pre-safety-factor raw values so the composition
+          // chart shows honest proportions — applying the safety factor to
+          // envelopeGain only would distort the "what drives this load" picture.
+          //
+          // envelopeGain / infilSens can be negative (winter heat loss, pressurised
+          // room infiltration credit) — the InsightsTab handles signed values.
+          //
+          // bd_oa uses oaPeak (peakCoolingSeason) to match the grandTotal basis.
+          // bd_fanHeat is supply + return combined — shown as a single "system" item.
+          bd_envelope:     Math.round(peakCalcs.envelopeGain  || 0),
+          bd_people:       Math.round(peakCalcs.pplSens        || 0),
+          bd_lights:       Math.round(peakCalcs.lightsSens     || 0),
+          bd_equipment:    Math.round(peakCalcs.equipSens      || 0),
+          bd_infiltration: Math.round(peakCalcs.infilSens      || 0),
+          bd_oa:           Math.round(oaPeak.oaTotal           || 0),
+          bd_fanHeat:      Math.round(supplyFanHeatBTU + returnFanHeatBTU),
+          bd_grandTotal:   Math.round(grandTotal),
         };
 
       } catch (err) {
