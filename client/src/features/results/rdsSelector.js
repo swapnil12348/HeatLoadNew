@@ -136,6 +136,7 @@ import {
   altitudeCorrectionFactor,
   sensibleFactor,
   calculateAdpFromLoads,
+  calculateRequiredADP
 } from '../../utils/psychro';
 
 import { KW_TO_BTU_HR, m2ToFt2, m3ToFt3 } from '../../utils/units';
@@ -459,6 +460,65 @@ const supplyFanHeatBTU = Math.round(
         const supplyFanHeatDraw = (supplyFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
         const returnFanHeat     = (returnFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
 
+        // ════════════════════════════════════════════════════════════════════════
+// STEP 4b — Required ADP from ESHF line
+//
+// ESHF = (peakErshForCap + oaPeak.oaSensible) / grandTotal
+//        ≈ total sensible / total cooling load
+//
+// calculateRequiredADP finds the coil surface temperature the room
+// thermodynamically demands to control BOTH temperature AND humidity
+// simultaneously. Compares against plantADP (adpF) to detect rooms
+// where the CHW plant is too warm to control humidity.
+//
+// Uses peakCoolingSeason loads (peakErshForCap / peakErlhForCap / oaPeak)
+// so the ESHF is consistent with the capacity-governing design point.
+//
+// grIn from peakCalcs: indoor humidity ratio at peak CFM season conditions.
+// This is the correct room moisture basis — it comes from calculateSeasonLoad
+// which uses the room's designRH and applies the Hyland-Wexler Patm correction.
+//
+// ⚠ Only meaningful for cooling-coil AHUs.
+//   Battery dry rooms and desiccant systems: ESHF analysis does not apply.
+//   The 'sensible_only' outcome handles rooms with dew point ≤ 32°F.
+// ════════════════════════════════════════════════════════════════════════
+const eshfTotalSensible = (peakErshForCap  || 0) + (oaPeak.oaSensible || 0);
+const eshfTotalLatent   = (peakErlhForCap  || 0) + (oaPeak.oaLatent   || 0);
+ 
+const eshfResult = calculateRequiredADP(
+  dbInF,
+  peakCalcs.grIn,
+  eshfTotalSensible,
+  eshfTotalLatent,
+  elevation,
+);
+ 
+const eshf          = eshfResult.eshf;
+const requiredADP   = eshfResult.requiredADP;   // °F | null
+const eshfType      = eshfResult.type;           // 'found' | 'sensible_only' | 'no_solution'
+const eshfNote      = eshfResult.note;
+ 
+// adpGap: how many °F the plant ADP is above the Required ADP.
+// Positive = plant too warm (humidity risk). Negative = plant has margin.
+// null when ESHF analysis is not applicable (sensible_only).
+const adpGap = (eshfType === 'found' && requiredADP !== null)
+  ? parseFloat((adpF - requiredADP).toFixed(1))
+  : null;
+ 
+// adpSufficient: summarises whether the plant can control humidity.
+//   'yes'           → plantADP ≤ requiredADP (adequate margin)
+//   'marginal'      → 0 < gap ≤ 3°F (within engineering tolerance)
+//   'insufficient'  → gap > 3°F (plant too warm — humidity risk)
+//   'no_solution'   → coil cannot control humidity at any ADP
+//   'not_applicable'→ sensible-only room or desiccant system
+const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
+  : eshfType === 'sensible_only'                    ? 'not_applicable'
+  : adpGap === null                                 ? 'not_applicable'
+  : adpGap <= 0                                     ? 'yes'
+  : adpGap <= 3                                     ? 'marginal'
+  :                                                   'insufficient';
+ 
+
         // totalInfil and rsh: from peak ERSH season (sensible peak conditions).
         const totalInfil = Math.round(peakCalcs.infilCFM   || 0);
         const rsh        = Math.round(peakCalcs.rawSensible || 0);
@@ -658,6 +718,14 @@ const supplyFanHeatBTU = Math.round(
           coil_contactFactor: psychroFields['coil_contactFactor'],
           coil_adp:           adpF,        // resolved ADP (°F) for display
           coil_adpMode:       ahuAdpMode,  // 'manual' | 'calculated'
+
+          eshf, // eshf:           effective sensible heat factor (0–1)
+
+          requiredADP, // requiredADP:    minimum coil surface temp to control humidity (°F | null)
+          adpGap, // adpGap:         plantADP − requiredADP (°F). Positive = humidity risk.
+          adpSufficient, // adpSufficient:  'yes' | 'marginal' | 'insufficient' | 'no_solution' | 'not_applicable'
+          eshfType, // eshfType:       raw bisection outcome for engineering audit
+          eshfNote, // eshfNote:       explanation when type !== 'found'
 
           // ── Seasonal load results ────────────────────────────────────────────
           ...seasonResults,

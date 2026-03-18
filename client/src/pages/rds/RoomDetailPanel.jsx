@@ -7,10 +7,18 @@
  *
  *   Insights tab added — fifth tab alongside Setup / Loads / Results / Psychro.
  *
- *     Nine recommendation rules including critical: ADP above room temperature.
- *     When ADP ≥ room DB, supplyDT is negative, thermalCFM = 0, supply air is
- *     warmer than the room, and SHR defaults to 1.0 as a silent fallback.
- *     The rule fires and explains the exact cause with the room's own numbers.
+ *     Twelve recommendation rules including:
+ *       - Critical: ADP above room temperature (coil model invalid)
+ *       - Critical: Plant ADP insufficient for humidity control (ESHF analysis)
+ *       - Critical: No solution — supplemental dehumidification required
+ *       - Critical: Unconfigured winter conditions
+ *       - Review: Plant ADP marginal for humidity control
+ *       - Opportunity: Enthalpy recovery on OA stream
+ *       - And six others covering equipment load, envelope, ACPH governance etc.
+ *
+ *     ESHF rules read adpSufficient, requiredADP, adpGap from rdsRow.
+ *     These fields are computed by calculateRequiredADP in psychro.js (v2.3)
+ *     and exposed by rdsSelector after STEP 4b.
  *
  * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
@@ -395,6 +403,58 @@ const RECOMMENDATION_RULES = [
       title: 'Low Sensible Heat Ratio — Dehumidification Duty',
       body:  `Coil SHR of ${r.coil_shr} is below the 0.70 threshold. Standard AHU coils are designed for SHR 0.75–0.85. At this SHR the coil must remove significant moisture — verify coil rows, fin spacing, and face velocity are suitable for dehumidification duty.`,
       action: 'Specify coil for dehumidification duty explicitly. Consider a lower ADP or deeper coil (more rows) to achieve the required SHR at design airflow.'
+    };
+  },
+
+  // Plant ADP insufficient for humidity control (ESHF analysis)
+  //
+  // 'insufficient': plantADP > requiredADP by more than 3°F.
+  // The CHW plant is too warm to simultaneously control both temperature
+  // and humidity. The cooling coil will maintain temperature setpoint but
+  // the room will run above its design RH under peak load conditions.
+  (r) => {
+    if (r.adpSufficient !== 'insufficient') return null;
+    const gap = parseFloat(r.adpGap);
+    const req = r.requiredADP !== null ? `${parseFloat(r.requiredADP).toFixed(1)}°F` : '—';
+    return {
+      level: 'critical',
+      icon:  '💧',
+      title: 'CHW Plant Cannot Control Humidity',
+      body:  `Required ADP is ${req} but Plant ADP is ${parseFloat(r.coil_adp).toFixed(1)}°F — a gap of ${gap.toFixed(1)}°F. The ESHF line for this room (${r.eshf !== undefined ? (parseFloat(r.eshf)*100).toFixed(1) : '—'}% sensible) does not intersect the saturation curve at the current plant condition. The cooling coil will maintain the temperature setpoint but the room will exceed its design RH of ${r.designRH}% under peak load conditions. This is a silent failure — the room appears correctly cooled while being over-humidified.`,
+      action: `Lower the CHW supply temperature to achieve Plant ADP ≤ ${req}. Alternatively add a supplemental dehumidification coil or desiccant wheel on the OA stream to reduce the latent load component. Review the ESHF tab in Psychrometrics for the psychrometric chart basis.`
+    };
+  },
+
+  // Plant ADP marginal for humidity control (ESHF analysis)
+  //
+  // 'marginal': 0 < plantADP − requiredADP ≤ 3°F.
+  // Within engineering tolerance but worth confirming coil selection.
+  (r) => {
+    if (r.adpSufficient !== 'marginal') return null;
+    const gap = parseFloat(r.adpGap);
+    const req = r.requiredADP !== null ? `${parseFloat(r.requiredADP).toFixed(1)}°F` : '—';
+    return {
+      level: 'review',
+      icon:  '⚡',
+      title: 'Plant ADP Marginal for Humidity Control',
+      body:  `Required ADP is ${req} and Plant ADP is ${parseFloat(r.coil_adp).toFixed(1)}°F — only ${gap.toFixed(1)}°F margin. ESHF is ${r.eshf !== undefined ? (parseFloat(r.eshf)*100).toFixed(1) : '—'}%. Under peak load conditions the coil is operating at the edge of its dehumidification duty. Any increase in OA latent load (higher monsoon humidity, more occupants) may tip the room above its humidity setpoint.`,
+      action: 'Verify coil selection with the manufacturer at these exact entering and leaving conditions. Consider specifying a 5–8% lower CHW supply temperature as design margin, especially for pharma or precision manufacturing rooms where humidity exceedance is a compliance event.'
+    };
+  },
+
+  // No solution — supplemental dehumidification required
+  //
+  // The ESHF line does not intersect the saturation curve at any ADP.
+  // This means no cooling coil — no matter how cold — can simultaneously
+  // control both temperature and humidity for this room at these load conditions.
+  (r) => {
+    if (r.adpSufficient !== 'no_solution') return null;
+    return {
+      level: 'critical',
+      icon:  '🚫',
+      title: 'Cooling Coil Cannot Control Humidity — Supplemental Dehumidification Required',
+      body:  `The ESHF line for this room does not intersect the saturation curve. This means no standard cooling coil at any ADP can simultaneously maintain both the temperature setpoint (${r.designTemp}°C) and humidity setpoint (${r.designRH}%RH) under peak load conditions. The latent load (OA + room) is too high relative to the sensible load for single-coil control. ESHF is ${r.eshf !== undefined ? (parseFloat(r.eshf)*100).toFixed(1) : '—'}%.`,
+      action: 'One of three solutions is required: (1) Add a desiccant wheel on the OA stream to pre-dry outdoor air before it enters the AHU — reduces the latent component substantially. (2) Pre-cool and reheat the OA stream to condense out moisture before mixing. (3) Add a dedicated dehumidification unit (separate from the main AHU) sized for the latent delta. This is a design-basis decision — raise with the project mechanical engineer before equipment procurement.'
     };
   },
 
