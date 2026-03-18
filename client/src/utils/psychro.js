@@ -3,6 +3,27 @@
  * Psychrometric utilities.
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 1
  *
+ * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
+ *
+ *   calculateRequiredADP added — ESHF line intersection with saturation curve.
+ *
+ *     Finds the coil surface temperature the room thermodynamically demands to
+ *     control BOTH temperature AND humidity simultaneously.
+ *     ASHRAE HOF 2021 Ch.18 — ESHF line method.
+ *
+ *     Three outcomes:
+ *       'found'         → requiredADP is the minimum coil duty (°F). Compare
+ *                         with plantADP to detect humidity control risk.
+ *       'sensible_only' → Required ADP < 32°F or ESHF ≥ 99.5% or room dew
+ *                         point ≤ 32°F. Any standard CHW coil works.
+ *       'no_solution'   → ESHF line does not intersect saturation curve.
+ *                         Supplemental dehumidification required.
+ *
+ *     Upper bisection bound = room dew point (not roomDB). Above the room
+ *     dew point, satGr(adp) > roomGr — the coil would add moisture, not
+ *     remove it. Non-physical upper bound was causing false 'no_solution'
+ *     outcomes in testing.
+ *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
  *   BUG-TIER1-01 FIX — calculateDewPoint returns null for rh ≤ 0.
@@ -28,32 +49,10 @@
  *
  *   MEDIUM-02 FIX — calculateDewPoint returns null instead of −148 sentinel.
  *
- *     The previous sentinel value was never checked by any caller (psychroValidation,
- *     heatingHumid, rdsSelector) and silently propagated into load calculations
- *     as a real temperature. null forces callers to handle the out-of-range case.
- *
- *     Callers must check:
- *       const dp = calculateDewPoint(db, rh);
- *       if (dp === null) { ... handle out-of-range ... }
- *
- *     This only triggers below −100°C frost point (RH < 0.00056% at 70°F DB) —
- *     solid-state battery and sub-ppm moisture applications only.
- *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
  *   BUG-PSYCH-01 [CRITICAL] — Magnus formula replaced with ASHRAE Hyland-Wexler.
- *
- *     Old: Magnus (Alduchov & Eskridge 1996) — valid to −40°C, ±0.28 hPa at −37°C.
- *     New: ASHRAE HOF 2021 Ch.1, Eq.3 (ice) & Eq.5 (liquid) — valid −100°C to +200°C,
- *          error < 0.001% across full range.
- *
- *     Why this matters at 1%RH: dew point ≈ −37°C. Magnus error at this point
- *     propagates ±10–15% into humidification capacity sizing — non-acceptable for
- *     Li-ion cell assembly, TSMC lithography bays, and pharma dry powder filling.
- *
- *   BUG-PSYCH-02 — calculateDewPoint analytical Magnus inverse replaced with
- *     bisection on Hyland-Wexler curve. Previous formula was wrong below −30°C
- *     — exactly the range critical for sub-1%RH critical facilities.
+ *   BUG-PSYCH-02 — calculateDewPoint bisection on Hyland-Wexler curve.
  *
  * ── PUBLIC API ─────────────────────────────────────────────────────────────────
  *
@@ -71,6 +70,10 @@
  *   calculateSpecificVolume(dbF, grains, elevFt) → ft³/lb dry air
  *   calculateAdpFromLoads(dbInF, peakErsh, supplyAir, bf, elevFt?) → °F ADP
  *     ⚠️  Cooling-coil systems ONLY — do not use for desiccant dry rooms.
+ *   calculateRequiredADP(roomDB, roomGr, totalSensible, totalLatent, elevFt?)
+ *     → { type, requiredADP, eshf, note }
+ *     type: 'found' | 'sensible_only' | 'no_solution'
+ *     ⚠️  Cooling-coil systems ONLY — not applicable for desiccant dry rooms.
  */
 
 import ASHRAE from '../constants/ashrae';
@@ -291,7 +294,6 @@ export const calculateRH = (dbF, grains, elevFt = 0) => {
  * Returns null for:
  *   • rh ≤ 0  — dew point is physically undefined for perfectly dry air
  *   • frost point below −100°C — outside H-W equation range
- *     (only triggers at RH < 0.00056% at 70°F — solid-state battery / sub-ppm only)
  *
  * Reference values (H-W corrected):
  *   1.0%RH @ 70°F  →  −35.1°F (−37.3°C) frost point
@@ -308,9 +310,7 @@ export const calculateDewPoint = (dbF, rh) => {
   const dbFNum = parseFloat(dbF);
   const rhNum  = parseFloat(rh);
 
-  // Non-numeric input → 0 (no dew point possible)
   if (isNaN(dbFNum) || isNaN(rhNum)) return 0;
-  // rh ≤ 0 → null (dew point physically undefined for dry air)
   if (rhNum <= 0) return null;
 
   const rhClamped = Math.min(100, Math.max(0.001, rhNum));
@@ -323,8 +323,6 @@ export const calculateDewPoint = (dbF, rh) => {
   let lo = -100;
   let hi = dbC;
 
-  // Below −100°C: outside H-W range — return null.
-  // Only triggered at sub-ppm moisture levels (solid-state battery, vacuum tools).
   if (saturationPressure(lo) > Epw) {
     console.warn(
       `calculateDewPoint: RH=${rh}% at DB=${dbF}°F yields frost point below −100°C. ` +
@@ -495,8 +493,6 @@ export const calculateSpecificVolume = (dbF, grains, elevFt = 0) => {
  *
  * ⚠️  COOLING-COIL CONCEPT ONLY.
  *   Do NOT use for desiccant dry rooms (battery Li-ion, sub-10%RH pharma).
- *   For those systems ADP has no physical meaning — dehumidification is
- *   achieved by adsorption, not coil condensation.
  *
  * @param {number} dbInF     - room design dry-bulb (°F)
  * @param {number} peakErsh  - peak effective room sensible heat (BTU/hr)
@@ -533,9 +529,6 @@ export const calculateAdpFromLoads = (
   const adpClamped = Math.max(35, Math.min(adpRaw, dbNum - 2));
   return Math.round(adpClamped * 10) / 10;
 };
-
-// This is the addition to append to psychro.js
-// After calculateAdpFromLoads, before the end of the file
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Required ADP from ESHF line
@@ -629,7 +622,6 @@ export const calculateRequiredADP = (
   const sensNum = parseFloat(totalSensible);
   const latNum  = parseFloat(totalLatent);
 
-  // Input guards
   if (isNaN(dbNum) || isNaN(grNum) || isNaN(sensNum) || isNaN(latNum)) {
     return { type: 'sensible_only', requiredADP: null, eshf: 1,
              note: 'Invalid inputs — cannot compute Required ADP' };
@@ -643,14 +635,13 @@ export const calculateRequiredADP = (
 
   const eshf = sensNum / totalLoad;
 
-  // Guard: negligible latent load — pure sensible room
   if (eshf >= 0.995) {
     return { type: 'sensible_only', requiredADP: null, eshf,
              note: 'ESHF ≥ 99.5% — negligible latent load, any CHW coil controls humidity' };
   }
 
-  // Site-pressure-corrected saturation grains helper
-  // Uses the internal saturationPressure (Hyland-Wexler) already in scope
+  // Site-pressure-corrected saturation grains.
+  // Uses saturationPressure (Hyland-Wexler) already in scope — internal to this module.
   const Patm = sitePressure(elevFt);
   const satGr = (tF) => {
     const tC = (tF - 32) * 5 / 9;
@@ -659,15 +650,14 @@ export const calculateRequiredADP = (
     return Math.max(0, 0.62198 * Es / (Patm - Es) * ASHRAE.GR_PER_LB);
   };
 
-  // Guard: room so dry that coil at 32°F cannot dehumidify further
-  // (room humidity ratio at or below saturation at freezing)
+  // Guard: room so dry that coil at 32°F cannot dehumidify further.
   if (grNum <= satGr(32)) {
     return { type: 'sensible_only', requiredADP: null, eshf,
              note: 'Room dew point ≤ 32°F — coil sensible-only, any standard CHW plant works' };
   }
 
-  // Find room dew point — upper bound for bisection
-  // Above room dew point: satGr(adp) > roomGr → coil adds moisture → non-physical
+  // Find room dew point — upper bound for bisection.
+  // Above room dew point: satGr(adp) > roomGr → coil adds moisture → non-physical.
   let dpLo = -100 * 9/5 + 32; // −148°F
   let dpHi = dbNum;
   for (let i = 0; i < 80; i++) {
@@ -676,11 +666,11 @@ export const calculateRequiredADP = (
     if (dpHi - dpLo < 0.01) break;
   }
   const roomDewPointF = (dpLo + dpHi) / 2;
-  const upperBound    = roomDewPointF - 0.5; // stay below dew point
+  const upperBound    = roomDewPointF - 0.5;
 
-  // ESHF bisection target function
+  // ESHF bisection target function:
   // f(adp) = computedESHF(adp) − targetESHF
-  // computedESHF = Cs*(roomDB−adp) / [Cs*(roomDB−adp) + Cl*(roomGr−satGr(adp))]
+  // Bisect until f = 0 — that adp is the Required ADP.
   const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
   const Cl = ASHRAE.LATENT_FACTOR_SEA_LEVEL   * altitudeCorrectionFactor(elevFt);
 
@@ -688,29 +678,23 @@ export const calculateRequiredADP = (
     const sens  = Cs * (dbNum - adp);
     const lat   = Cl * (grNum - satGr(adp));
     const total = sens + lat;
-    if (total <= 0) return 1.0; // outside valid range
+    if (total <= 0) return 1.0;
     return (sens / total) - eshf;
   };
 
   const f_lo = f(32);
   const f_hi = f(upperBound);
 
-  // No sign change in [32°F, roomDewPoint]
   if (f_lo * f_hi > 0) {
     if (f_lo >= 0) {
-      // computedESHF ≥ target at 32°F — coil always more sensible than load requires
-      // Required ADP is below 32°F — not achievable with standard CHW
       return { type: 'sensible_only', requiredADP: null, eshf,
                note: 'Required ADP < 32°F — room is sensible-dominated, any standard coil works' };
     } else {
-      // computedESHF < target even at room dew point — latent load too high
-      // ESHF line does not intersect the saturation curve
       return { type: 'no_solution', requiredADP: null, eshf,
                note: 'Latent load exceeds coil capacity — standard cooling coil cannot control humidity. Supplemental dehumidification required (desiccant, separate dehumidifier, or pre-cooling + reheat).' };
     }
   }
 
-  // Normal case: bisect [32°F, roomDewPoint]
   let lo = 32, hi = upperBound;
   for (let i = 0; i < 80; i++) {
     const mid = (lo + hi) / 2;
@@ -718,11 +702,9 @@ export const calculateRequiredADP = (
     if (hi - lo < 0.01) break;
   }
 
-  const requiredADP = Math.round(((lo + hi) / 2) * 10) / 10;
-
   return {
     type: 'found',
-    requiredADP,
+    requiredADP: Math.round(((lo + hi) / 2) * 10) / 10,
     eshf,
     note: '',
   };

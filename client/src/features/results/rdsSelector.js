@@ -17,25 +17,40 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.6 ────────────────────────────────────────────────────────────
+ *
+ *   ESHF / Required ADP analysis added (STEP 4b).
+ *
+ *     calculateRequiredADP (psychro.js v2.3) finds the coil surface temperature
+ *     the room thermodynamically demands to control BOTH temperature AND humidity
+ *     simultaneously (ASHRAE HOF 2021 Ch.18 ESHF line method).
+ *
+ *     Five new fields on rdsRow: eshf, requiredADP, adpGap, adpSufficient, eshfNote.
+ *     adpSufficient: 'yes' | 'marginal' | 'insufficient' | 'no_solution' | 'not_applicable'
+ *     Consumed by resultsSections.js (ACES Summary) and InsightsTab recommendation rules.
+ *
+ *   Fan heat basis corrected — Cs × supplyAir × coilDT replaces Math.abs(peakErsh).
+ *
+ *     Previous basis (peakErsh × fanHeatPct) is correct when supply air is
+ *     thermal-governed (supplyAir ≈ thermalCFM). For ACPH-governed rooms
+ *     where supplyAir >> thermalCFM, the fan is physically moving much more
+ *     air than the thermal load implies — fan heat was understated by up to 80×.
+ *
+ *     New basis: Cs × supplyAir × (dbInF − adpF) × (1 − bf) × fanHeatPct
+ *     — proportional to actual coil air quantity, not room sensible load.
+ *
+ *     Math.abs guard added: when adpF > dbInF (e.g. 5°C room with default 55°F
+ *     project ADP), (dbInF − adpF) is negative → fan heat goes negative →
+ *     grandTotal is REDUCED instead of increased. Fan heat is always positive.
+ *
  * ── CHANGELOG v2.5 ────────────────────────────────────────────────────────────
  *
  *   ADP-01 calculated mode — use thermalCFM not supplyAir as back-calculation basis.
  *
- *     Root cause: calculateAdpFromLoads was called with prelimAirQty.supplyAir
- *     (the full ACPH-governed supply). For rooms where ACH constraints set supply
- *     air well above the thermal requirement, supplyAir >> thermalCFM.
- *     ADP = roomDB − ERSH/(Cs × coilCFM) collapsed to roomDB − 2°F (the clamp).
- *
- *     Example: Production Hall, 24°C / 44%RH, Design ACPH governing 22,107 CFM.
- *       thermalCFM ≈ 1,800 CFM, supplyAir = 22,107 CFM (12× thermal).
- *       With supplyAir as basis: ADP = 75.2 − 5121/(1.08 × 19454) = 73.0°F → clamped 73.2°F.
- *       grADP at 73.2°F sat ≈ 116 gr/lb >> raGr ≈ 57 gr/lb → enthDiff < 0 → SHR = 1.0 (fallback).
- *       With thermalCFM as basis: ADP = 75.2 − 5121/(1.08 × 1584) = 75.2 − 3.0 = 72.2°F
- *       → still close but now sized to the actual coil duty, not ventilation-inflated CFM.
- *
+ *     For ACPH-governed rooms, supplyAir >> thermalCFM.
+ *     ADP = roomDB − ERSH/(Cs × coilCFM) collapsed to roomDB − 2°F (the clamp)
+ *     when the full ACPH supply was used as the denominator.
  *     Fix: adpBasisCFM = thermalCFM when thermalCFM > 0, else supplyAir fallback.
- *     If thermalCFM = 0 (purely ACH-governed, zero thermal load), calculateAdpFromLoads
- *     guards on coilCFM = 0 and returns DEFAULT_ADP — a correct safe fallback.
  *
  *   Load breakdown fields (bd_*) added for Insights tab.
  *
@@ -43,29 +58,8 @@
  *
  *   Multi-season peak selection — monsoon vs summer comparison implemented.
  *
- *     Previous behaviour: peakErsh and peakErlh were always taken from summer.
- *     For high-humidity monsoon climates (Mumbai, Chennai, Singapore), the
- *     combined room + OA enthalpy load during monsoon can exceed the summer
- *     design point, causing cooling capacity to be undersized.
- *
- *     Two distinct peaks are now tracked and may resolve to different seasons:
- *
- *       peakCFMSeason    — season with highest ERSH.
- *                          Governs supply air CFM and ADP calculation.
- *                          Supply air is a sensible quantity; thermalCFM =
- *                          ERSH / (Cs × supplyDT), so peak sensible governs.
- *
- *       peakCoolingSeason — season with highest (ERSH + ERLH + OA enthalpy).
- *                           Governs cooling capacity (TR), coilLoadBTU, and
- *                           CHW pipe sizing.
- *                           Determined after STEP 3 when OA loads are available.
- *
- *     In temperate northern-hemisphere climates both seasons resolve to
- *     'summer' — no change in output. The split only matters when monsoon
- *     OA enthalpy load tips the peak to a different season.
- *
- *     Both seasons are exposed in the return object (peakCoolingSeason,
- *     peakCFMSeason) for engineering audit and RDS display.
+ *     peakCFMSeason    — season with highest ERSH → governs supply air CFM.
+ *     peakCoolingSeason — season with highest (ERSH + ERLH + OA) → governs TR.
  *
  * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
@@ -81,14 +75,6 @@
  *       2. ahu.adp > 0               → per-AHU manual override (°F)
  *       3. systemDesign.adp          → project-level default
  *       4. ASHRAE.DEFAULT_ADP        → 55°F hardcoded fallback
- *
- *     Two-pass for 'calculated' mode breaks the supplyAir ↔ ADP circular dependency:
- *       Pass 1: preliminary airQuantities with project-default ADP
- *       Pass 2: calculateAdpFromLoads from preliminary supplyAir → adpF
- *       Final:  effectiveSystemDesign = { ...systemDesign, adp: adpF }
- *
- *     ⚠ The ADP block MUST come after STEP 1 — 'calculated' mode requires
- *       peakErsh and dbInF, which are only available after calculateSeasonLoad().
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
@@ -120,7 +106,6 @@
  *
  *   In temperate climates both are 'summer'. They diverge for high-humidity
  *   monsoon climates where OA enthalpy load is the dominant cooling driver.
- *   peakCoolingSeason is determined after STEP 3 (requires OA loads).
  */
 
 import { createSelector } from '@reduxjs/toolkit';
@@ -136,7 +121,7 @@ import {
   altitudeCorrectionFactor,
   sensibleFactor,
   calculateAdpFromLoads,
-  calculateRequiredADP
+  calculateRequiredADP,
 } from '../../utils/psychro';
 
 import { KW_TO_BTU_HR, m2ToFt2, m3ToFt3 } from '../../utils/units';
@@ -198,7 +183,7 @@ export const selectRdsData = createSelector(
         // for any season without re-running calculateSeasonLoad.
         // ════════════════════════════════════════════════════════════════════════
         const seasonResults = {};
-        const seasonCalcs   = {};  // full calcs per season — used for peak selection
+        const seasonCalcs   = {};
 
         SEASONS_LIST.forEach(season => {
           const calcs = calculateSeasonLoad(
@@ -223,38 +208,20 @@ export const selectRdsData = createSelector(
         });
 
         // ── Peak ERSH season ────────────────────────────────────────────────
-        // Governs supply air CFM and ADP calculation.
-        // Supply air is a sensible quantity — thermalCFM = ERSH / (Cs × supplyDT)
-        // — so peak sensible (ERSH) is the correct governing criterion here.
-        //
-        // In temperate northern-hemisphere climates this always resolves to
-        // 'summer'. The reduce is inexpensive (3 items) and future-proofs
-        // against unusual climate profiles without any branch logic.
         // peakCFMSeason: season with highest ERSH — governs supply air CFM and ADP.
-        // Aliased as peakCFMSeason (not peakErshSeason) so the name in the return
-        // object is self-documenting at the RDS display layer.
         const peakCFMSeason = SEASONS_LIST.reduce((best, s) =>
           (seasonCalcs[s].ersh > seasonCalcs[best].ersh ? s : best), 'summer'
         );
-        // Full calcs object for the CFM-governing season — needed for dbInF,
-        // infilCFM, rawSensible (all sensible-peak quantities).
         const peakCalcs = seasonCalcs[peakCFMSeason];
 
         const peakErsh = peakCalcs.ersh;
-        // peakErlh from peakCFMSeason is NOT used for capacity — capacity uses
-        // peakErlhForCap from peakCoolingSeason (determined after STEP 3).
-        // dbInF from the peak sensible season feeds ADP and psychro state points.
         const dbInF    = peakCalcs.dbInF ?? 72;
 
         // ════════════════════════════════════════════════════════════════════════
         // ADP-01 — Resolve effective ADP
         //
         // ⚠ This block MUST come after STEP 1.
-        //   'calculated' mode requires peakErsh and dbInF, which are only
-        //   defined after calculateSeasonLoad() completes above. Placing this
-        //   block before STEP 1 causes calculateAdpFromLoads to receive
-        //   peakErsh=undefined → guard fires → returns DEFAULT_ADP every time
-        //   → 'calculated' mode becomes a silent no-op.
+        //   'calculated' mode requires peakErsh and dbInF.
         //
         // Priority chain (most specific wins):
         //   1. ahuAdpMode = 'calculated' → calculateAdpFromLoads(dbInF, peakErsh, ...)
@@ -262,14 +229,10 @@ export const selectRdsData = createSelector(
         //   3. systemDesign.adp          → project-level default
         //   4. ASHRAE.DEFAULT_ADP        → 55°F hardcoded fallback
         //
-        // Two-pass for 'calculated' mode:
-        //   Pass 1: preliminaryAirQuantities with projectAdp → preliminary supplyAir
-        //   Pass 2: calculateAdpFromLoads(dbInF, peakErsh, prelim.supplyAir, bf)
-        //   Result: effectiveSystemDesign = { ...systemDesign, adp: adpF }
-        //           passed to STEP 2 so calculateAirQuantities uses resolved ADP.
+        // Two-pass for 'calculated' mode — adpBasisCFM = thermalCFM, not supplyAir.
+        // Using supplyAir collapsed ADP to roomDB−2°F for ACPH-governed rooms.
         //
         // ⚠ 'calculated' mode is only valid for cooling-coil AHUs.
-        //   Battery dry rooms and desiccant systems must remain 'manual'.
         // ════════════════════════════════════════════════════════════════════════
 
         const projectAdpMode  = systemDesign?.adpMode || 'manual';
@@ -280,7 +243,6 @@ export const selectRdsData = createSelector(
         let adpF;
 
         if (ahuAdpMode === 'calculated') {
-          // Pass 1 — preliminary air quantities using project-default ADP.
           const prelimSystemDesign = { ...systemDesign, adp: projectAdp };
           const prelimAirQty = calculateAirQuantities(
             room, envelope, ahu, prelimSystemDesign,
@@ -288,29 +250,6 @@ export const selectRdsData = createSelector(
             floorAreaFt2, volumeFt3,
           );
 
-          // Pass 2 — back-calculate ADP from the THERMAL CFM, not supplyAir.
-          //
-          // ⚠ BUG FIXED: previouscode passed prelimAirQty.supplyAir (the full
-          // ACPH-governed supply) to calculateAdpFromLoads. For any room where
-          // supply air is set by an ACH constraint rather than thermal load
-          // (supplyAirGoverned !== 'thermal'), supplyAir >> thermalCFM.
-          //
-          // calculateAdpFromLoads computes:
-          //   ADP = roomDB − ERSH / (Cs × coilCFM)
-          //
-          // With a small ERSH divided by a massive ACPH-inflated coilCFM,
-          // the result collapses to roomDB − 2°F (the clamp in psychro.js).
-          // For a 24°C room (75.2°F) this gives ADP = 73.2°F — only 2°F
-          // below room temperature. The coil leaving air at 73.2°F saturation
-          // has ~116 gr/lb; the room at 44%RH has ~57 gr/lb. Supply air is
-          // wetter than the room → enthDiff < 0 → SHR defaults to 1.0
-          // silently, with no physical meaning.
-          //
-          // Fix: use thermalCFM as the ADP basis. ADP should be sized to
-          // the actual heat load, not the ventilation-inflated supply air.
-          // If thermalCFM = 0 (room is cooling-load-free, purely ACH-governed),
-          // calculateAdpFromLoads guards (ersh <= 0 or coilCFM <= 0) fire and
-          // return DEFAULT_ADP — a correct and safe fallback.
           const adpBasisCFM = prelimAirQty.thermalCFM > 0
             ? prelimAirQty.thermalCFM
             : prelimAirQty.supplyAir;
@@ -323,25 +262,15 @@ export const selectRdsData = createSelector(
             elevation,
           );
         } else {
-          // Manual mode: per-AHU override if set; otherwise project default.
           adpF = ahuAdpOverride > 0 ? ahuAdpOverride : projectAdp;
         }
 
-        // Build a room-local effective systemDesign with the resolved ADP.
-        // Never mutates the shared systemDesign reference.
-        // STEP 2 must receive effectiveSystemDesign — raw systemDesign would
-        // ignore the resolved adpF since calculateAirQuantities reads adp internally.
         const effectiveSystemDesign = adpF !== projectAdp
           ? { ...systemDesign, adp: adpF }
-          : systemDesign; // no allocation if ADP unchanged
+          : systemDesign;
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 2 — Air quantities
-        //
-        // effectiveSystemDesign carries the resolved adpF.
-        // calculateAirQuantities reads systemDesign.adp for thermalCFM:
-        //   supplyDT   = (1 − bf) × (dbInF − adp)
-        //   thermalCFM = ERSH / (Cs × supplyDT)
         // ════════════════════════════════════════════════════════════════════════
         const airQty = calculateAirQuantities(
           room, envelope, ahu, effectiveSystemDesign,
@@ -369,11 +298,6 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 3 — Outdoor air coil loads
-        //
-        // outdoorAirLoad.js derives altCf internally from elevation.
-        // OA loads for all three seasons are computed here — they are required
-        // both for the per-season oaFields output AND for the peak cooling
-        // season selection that follows in STEP 4.
         // ════════════════════════════════════════════════════════════════════════
         const oaLoads = calculateAllSeasonOALoads(
           freshAirCheck, climate, dbInF, raRH,
@@ -383,44 +307,30 @@ export const selectRdsData = createSelector(
         const oaFields = {};
         SEASONS_LIST.forEach(season => {
           const oa = oaLoads[season];
-          oaFields[`oaSensible_${season}`]    = oa.oaSensible;
-          oaFields[`oaLatent_${season}`]      = oa.oaLatent;
-          oaFields[`oaTotal_${season}`]       = oa.oaTotal;
-          oaFields[`oaGrDelta_${season}`]     = (oa.grOut - oa.grIn).toFixed(1);
-          oaFields[`oaEnthDelta_${season}`]   = oa.oaEnthalpyDelta.toFixed(2);
+          oaFields[`oaSensible_${season}`]  = oa.oaSensible;
+          oaFields[`oaLatent_${season}`]    = oa.oaLatent;
+          oaFields[`oaTotal_${season}`]     = oa.oaTotal;
+          oaFields[`oaGrDelta_${season}`]   = (oa.grOut - oa.grIn).toFixed(1);
+          oaFields[`oaEnthDelta_${season}`] = oa.oaEnthalpyDelta.toFixed(2);
         });
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4 — Peak cooling season selection + grand total
         //
-        // Supply air CFM was sized to peakCFMSeason (peak sensible load).
-        // Cooling capacity must be sized to the season with the highest
-        // combined room load + OA enthalpy load.
-        //
-        // For high-humidity monsoon climates (Mumbai OA: ~83°F DB / ~78°F WB,
-        // enthalpy ~41 BTU/lb) the monsoon OA load can exceed summer even when
-        // summer ERSH is higher, because monsoon latent + OA enthalpy together
-        // dominate. A fab that sizes to summer only would be ~10–20% short on
-        // cooling capacity.
-        //
-        // seasonTotals[s] = ERSH_s + ERLH_s + oaTotal_s
-        //
-        // fan heat basis: peakErsh (from peakCFMSeason) — supply fan is sized
-        // to the CFM requirement, not the capacity-governing season.
+        // peakCoolingSeason: season with highest (ERSH + ERLH + OA enthalpy).
+        // Governs cooling capacity (TR), coilLoadBTU, and CHW pipe sizing.
         // ════════════════════════════════════════════════════════════════════════
         const seasonTotals = {};
         SEASONS_LIST.forEach(s => {
           seasonTotals[s] = (seasonResults[`ershOn_${s}`] || 0)
             + (seasonResults[`erlhOn_${s}`] || 0)
-            + (oaLoads[s]?.oaTotal         || 0);
+            + (oaLoads[s]?.oaTotal          || 0);
         });
 
-        // Season with highest combined room + OA load governs capacity.
         const peakCoolingSeason = SEASONS_LIST.reduce((best, s) =>
           (seasonTotals[s] > seasonTotals[best] ? s : best), peakCFMSeason
         );
 
-        // Capacity-governing load values.
         const peakErshForCap = seasonResults[`ershOn_${peakCoolingSeason}`];
         const peakErlhForCap = seasonResults[`erlhOn_${peakCoolingSeason}`];
         const oaPeak         = oaLoads[peakCoolingSeason];
@@ -428,16 +338,19 @@ export const selectRdsData = createSelector(
         const supplyFanHeatFraction = (parseFloat(systemDesign.fanHeat)       || 5) / 100;
         const returnFanHeatFraction = (parseFloat(systemDesign.returnFanHeat) || 5) / 100;
 
-        // Fan heat is based on peakErsh (CFM-governing season) — supply fan
-        // is sized to the airflow requirement, not the capacity-governing season.
-        // Math.abs guard: when adpF > dbInF (e.g. 5°C room with default 55°F ADP),
-// (dbInF − adpF) is negative → supplyFanHeatBTU goes negative → grandTotal
-// is REDUCED instead of increased. Fan heat is always physically positive.
-// The Insights tab ADP-above-room-temp rule already flags this condition.
-const supplyFanHeatBTU = Math.round(
-  Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf)) * supplyFanHeatFraction
-);
-        const returnFanHeatBTU = Math.round(supplyFanHeatBTU   * returnFanHeatFraction);
+        // Fan heat basis: Cs × supplyAir × coilDT × fanHeatPct.
+        // Proportional to actual air volume being moved through the coil —
+        // correct for both thermal-governed and ACPH-governed rooms.
+        //
+        // Math.abs guard: when adpF > dbInF (ADP above room temp — invalid
+        // configuration), (dbInF − adpF) is negative. Without Math.abs,
+        // supplyFanHeatBTU goes negative and reduces grandTotal instead of
+        // adding to it. Fan heat is always physically positive.
+        // The Insights tab ADP-above-room-temp rule flags this condition.
+        const supplyFanHeatBTU = Math.round(
+          Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf)) * supplyFanHeatFraction
+        );
+        const returnFanHeatBTU = Math.round(supplyFanHeatBTU * returnFanHeatFraction);
 
         const grandTotal = (peakErshForCap + peakErlhForCap)
           + oaPeak.oaTotal
@@ -451,7 +364,6 @@ const supplyFanHeatBTU = Math.round(
 
         // coilLoadBTU: basis for CHW pipe sizing — excludes supply fan heat
         // (supply fan is downstream of coil in draw-through configuration).
-        // Uses peakCoolingSeason values — CHW pipe must handle the peak coil load.
         const coilLoadBTU = (peakErshForCap + peakErlhForCap)
           + oaPeak.oaTotal
           + returnFanHeatBTU;
@@ -461,63 +373,54 @@ const supplyFanHeatBTU = Math.round(
         const returnFanHeat     = (returnFanHeatBTU / KW_TO_BTU_HR).toFixed(2);
 
         // ════════════════════════════════════════════════════════════════════════
-// STEP 4b — Required ADP from ESHF line
-//
-// ESHF = (peakErshForCap + oaPeak.oaSensible) / grandTotal
-//        ≈ total sensible / total cooling load
-//
-// calculateRequiredADP finds the coil surface temperature the room
-// thermodynamically demands to control BOTH temperature AND humidity
-// simultaneously. Compares against plantADP (adpF) to detect rooms
-// where the CHW plant is too warm to control humidity.
-//
-// Uses peakCoolingSeason loads (peakErshForCap / peakErlhForCap / oaPeak)
-// so the ESHF is consistent with the capacity-governing design point.
-//
-// grIn from peakCalcs: indoor humidity ratio at peak CFM season conditions.
-// This is the correct room moisture basis — it comes from calculateSeasonLoad
-// which uses the room's designRH and applies the Hyland-Wexler Patm correction.
-//
-// ⚠ Only meaningful for cooling-coil AHUs.
-//   Battery dry rooms and desiccant systems: ESHF analysis does not apply.
-//   The 'sensible_only' outcome handles rooms with dew point ≤ 32°F.
-// ════════════════════════════════════════════════════════════════════════
-const eshfTotalSensible = (peakErshForCap  || 0) + (oaPeak.oaSensible || 0);
-const eshfTotalLatent   = (peakErlhForCap  || 0) + (oaPeak.oaLatent   || 0);
- 
-const eshfResult = calculateRequiredADP(
-  dbInF,
-  peakCalcs.grIn,
-  eshfTotalSensible,
-  eshfTotalLatent,
-  elevation,
-);
- 
-const eshf          = eshfResult.eshf;
-const requiredADP   = eshfResult.requiredADP;   // °F | null
-const eshfType      = eshfResult.type;           // 'found' | 'sensible_only' | 'no_solution'
-const eshfNote      = eshfResult.note;
- 
-// adpGap: how many °F the plant ADP is above the Required ADP.
-// Positive = plant too warm (humidity risk). Negative = plant has margin.
-// null when ESHF analysis is not applicable (sensible_only).
-const adpGap = (eshfType === 'found' && requiredADP !== null)
-  ? parseFloat((adpF - requiredADP).toFixed(1))
-  : null;
- 
-// adpSufficient: summarises whether the plant can control humidity.
-//   'yes'           → plantADP ≤ requiredADP (adequate margin)
-//   'marginal'      → 0 < gap ≤ 3°F (within engineering tolerance)
-//   'insufficient'  → gap > 3°F (plant too warm — humidity risk)
-//   'no_solution'   → coil cannot control humidity at any ADP
-//   'not_applicable'→ sensible-only room or desiccant system
-const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
-  : eshfType === 'sensible_only'                    ? 'not_applicable'
-  : adpGap === null                                 ? 'not_applicable'
-  : adpGap <= 0                                     ? 'yes'
-  : adpGap <= 3                                     ? 'marginal'
-  :                                                   'insufficient';
- 
+        // STEP 4b — Required ADP from ESHF line (psychrometric sufficiency check)
+        //
+        // Finds the coil surface temperature the room thermodynamically demands
+        // to control BOTH temperature AND humidity simultaneously.
+        // ASHRAE HOF 2021 Ch.18 — ESHF line intersection with saturation curve.
+        //
+        // Uses peakCoolingSeason loads so ESHF is consistent with the capacity-
+        // governing design point. grIn from peakCalcs gives the room moisture
+        // basis with correct Hyland-Wexler Patm correction.
+        //
+        // Three possible outcomes:
+        //   'found'         → requiredADP in °F — compare against plantADP (adpF)
+        //   'sensible_only' → room is sensible-dominated, any CHW plant works
+        //   'no_solution'   → CRITICAL: coil cannot control humidity at any ADP,
+        //                     supplemental dehumidification required
+        //
+        // ⚠ Only meaningful for cooling-coil AHUs.
+        //   Battery dry rooms and desiccant systems: not applicable.
+        // ════════════════════════════════════════════════════════════════════════
+        const eshfTotalSensible = (peakErshForCap   || 0) + (oaPeak.oaSensible || 0);
+        const eshfTotalLatent   = (peakErlhForCap   || 0) + (oaPeak.oaLatent   || 0);
+
+        const eshfResult = calculateRequiredADP(
+          dbInF,
+          peakCalcs.grIn,
+          eshfTotalSensible,
+          eshfTotalLatent,
+          elevation,
+        );
+
+        const eshf          = eshfResult.eshf;
+        const requiredADP   = eshfResult.requiredADP;  // °F | null
+        const eshfType      = eshfResult.type;          // 'found' | 'sensible_only' | 'no_solution'
+        const eshfNote      = eshfResult.note;
+
+        // adpGap: plantADP − requiredADP (°F). Positive = plant too warm.
+        // null when ESHF analysis is not applicable (sensible_only outcome).
+        const adpGap = (eshfType === 'found' && requiredADP !== null)
+          ? parseFloat((adpF - requiredADP).toFixed(1))
+          : null;
+
+        // adpSufficient: summary of whether the plant can control humidity.
+        const adpSufficient = eshfType === 'no_solution'  ? 'no_solution'
+          : eshfType === 'sensible_only'                   ? 'not_applicable'
+          : adpGap === null                                ? 'not_applicable'
+          : adpGap <= 0                                    ? 'yes'
+          : adpGap <= 3                                    ? 'marginal'
+          :                                                  'insufficient';
 
         // totalInfil and rsh: from peak ERSH season (sensible peak conditions).
         const totalInfil = Math.round(peakCalcs.infilCFM   || 0);
@@ -585,14 +488,14 @@ const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
           pickupFields[`pickupOff_${s}`] = supplyAir > 0
             ? (e_off / (Cs * supplyAir)).toFixed(1) : '0.0';
 
-          achFields[`achOn_temp_${s}`]     = dbInF.toFixed(1);
-          achFields[`achOn_rh_${s}`]       = raRH.toFixed(1);
-          achFields[`achOff_temp_${s}`]    = dbInF.toFixed(1);
-          achFields[`achOff_rh_${s}`]      = raRH.toFixed(1);
-          achFields[`achTermOn_temp_${s}`] = dbInF.toFixed(1);
-          achFields[`achTermOn_rh_${s}`]   = raRH.toFixed(1);
-          achFields[`achTermOff_temp_${s}`]= dbInF.toFixed(1);
-          achFields[`achTermOff_rh_${s}`]  = raRH.toFixed(1);
+          achFields[`achOn_temp_${s}`]      = dbInF.toFixed(1);
+          achFields[`achOn_rh_${s}`]        = raRH.toFixed(1);
+          achFields[`achOff_temp_${s}`]     = dbInF.toFixed(1);
+          achFields[`achOff_rh_${s}`]       = raRH.toFixed(1);
+          achFields[`achTermOn_temp_${s}`]  = dbInF.toFixed(1);
+          achFields[`achTermOn_rh_${s}`]    = raRH.toFixed(1);
+          achFields[`achTermOff_temp_${s}`] = dbInF.toFixed(1);
+          achFields[`achTermOff_rh_${s}`]   = raRH.toFixed(1);
 
           termHeatFields[`termHeatOn_${s}`]  = e_on  < 0
             ? (Math.abs(e_on)  / KW_TO_BTU_HR).toFixed(2) : '0.00';
@@ -617,15 +520,10 @@ const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
           equipment_kw:  envelope?.internalLoads?.equipment?.kw || 0,
 
           // ft³ / ft² — override m³ / m² from ...room spread.
-          volume:        volumeFt3,
-          floorArea:     floorAreaFt2,
+          volume:    volumeFt3,
+          floorArea: floorAreaFt2,
 
           // ── Peak season audit ────────────────────────────────────────────────
-          // Exposed for RDS display and engineering review.
-          // peakCFMSeason:    season whose ERSH governed supply air CFM.
-          // peakCoolingSeason: season whose (ERSH + ERLH + OA) governed TR/coil.
-          // These are identical in temperate climates. They differ when monsoon
-          // OA enthalpy load tips the capacity peak to a different season.
           peakCFMSeason,
           peakCoolingSeason,
 
@@ -674,8 +572,8 @@ const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
           dehumidifiedAir,
           freshAirAces,
           bleedAir,
-          ahuCap:         supplyAir,
-          coolingLoadHL:  coolingCapTR,
+          ahuCap:        supplyAir,
+          coolingLoadHL: coolingCapTR,
 
           // ── OA coil loads ────────────────────────────────────────────────────
           ...oaFields,
@@ -704,28 +602,34 @@ const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
           humidWarning,
 
           // ── Pipe sizing ──────────────────────────────────────────────────────
-          chwBranchSize:   pipes.chw.branchDiamMm,
-          chwManifoldSize: pipes.chw.manifoldDiamMm,
-          chwFlowRate:     pipes.chw.flowGPM,
-          hwBranchSize:    pipes.hw.branchDiamMm,
-          hwManifoldSize:  pipes.hw.manifoldDiamMm,
-          hwFlow:          pipes.hw.flowGPM,
+          chwBranchSize:     pipes.chw.branchDiamMm,
+          chwManifoldSize:   pipes.chw.manifoldDiamMm,
+          chwFlowRate:       pipes.chw.flowGPM,
+          hwBranchSize:      pipes.hw.branchDiamMm,
+          hwManifoldSize:    pipes.hw.manifoldDiamMm,
+          hwFlow:            pipes.hw.flowGPM,
           preheatBranchSize: pipes.preheat.branchDiamMm,
           preheatHwFlow:     pipes.preheat.flowGPM,
 
           // ── Coil performance ─────────────────────────────────────────────────
           coil_shr:           psychroFields['coil_shr'],
           coil_contactFactor: psychroFields['coil_contactFactor'],
-          coil_adp:           adpF,        // resolved ADP (°F) for display
-          coil_adpMode:       ahuAdpMode,  // 'manual' | 'calculated'
+          coil_adp:           adpF,       // resolved ADP (°F) for display
+          coil_adpMode:       ahuAdpMode, // 'manual' | 'calculated'
 
-          eshf, // eshf:           effective sensible heat factor (0–1)
-
-          requiredADP, // requiredADP:    minimum coil surface temp to control humidity (°F | null)
-          adpGap, // adpGap:         plantADP − requiredADP (°F). Positive = humidity risk.
-          adpSufficient, // adpSufficient:  'yes' | 'marginal' | 'insufficient' | 'no_solution' | 'not_applicable'
-          eshfType, // eshfType:       raw bisection outcome for engineering audit
-          eshfNote, // eshfNote:       explanation when type !== 'found'
+          // ── ESHF / Required ADP psychrometric sufficiency ────────────────────
+          // eshf:           effective sensible heat factor (0–1)
+          // requiredADP:    coil surface temp needed to control temp + humidity (°F | null)
+          // adpGap:         plantADP − requiredADP (°F). Positive = humidity risk.
+          // adpSufficient:  'yes' | 'marginal' | 'insufficient' | 'no_solution' | 'not_applicable'
+          // eshfType:       raw bisection outcome — for engineering audit / debugging
+          // eshfNote:       explanation string when type !== 'found'
+          eshf,
+          requiredADP,
+          adpGap,
+          adpSufficient,
+          eshfType,
+          eshfNote,
 
           // ── Seasonal load results ────────────────────────────────────────────
           ...seasonResults,
@@ -739,23 +643,16 @@ const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
           ...psychroFields,
 
           // ── Load breakdown — for Insights tab ───────────────────────────────
-          //
-          // Component values from peakCFMSeason (the season that governs supply
-          // air CFM). These are pre-safety-factor raw values so the composition
-          // chart shows honest proportions — applying the safety factor to
-          // envelopeGain only would distort the "what drives this load" picture.
-          //
-          // envelopeGain / infilSens can be negative (winter heat loss, pressurised
-          // room infiltration credit) — the InsightsTab handles signed values.
-          //
-          // bd_oa uses oaPeak (peakCoolingSeason) to match the grandTotal basis.
-          // bd_fanHeat is supply + return combined — shown as a single "system" item.
-          bd_envelope:     Math.round(peakCalcs.envelopeGain  || 0),
-          bd_people:       Math.round(peakCalcs.pplSens        || 0),
-          bd_lights:       Math.round(peakCalcs.lightsSens     || 0),
-          bd_equipment:    Math.round(peakCalcs.equipSens      || 0),
-          bd_infiltration: Math.round(peakCalcs.infilSens      || 0),
-          bd_oa:           Math.round(oaPeak.oaTotal           || 0),
+          // Pre-safety-factor raw components from peakCFMSeason.
+          // Signed values: envelopeGain / infilSens can be negative (heat loss,
+          // pressurised room infiltration credit).
+          // bd_oa uses oaPeak (peakCoolingSeason) to match grandTotal basis.
+          bd_envelope:     Math.round(peakCalcs.envelopeGain || 0),
+          bd_people:       Math.round(peakCalcs.pplSens      || 0),
+          bd_lights:       Math.round(peakCalcs.lightsSens   || 0),
+          bd_equipment:    Math.round(peakCalcs.equipSens    || 0),
+          bd_infiltration: Math.round(peakCalcs.infilSens    || 0),
+          bd_oa:           Math.round(oaPeak.oaTotal         || 0),
           bd_fanHeat:      Math.round(supplyFanHeatBTU + returnFanHeatBTU),
           bd_grandTotal:   Math.round(grandTotal),
         };
@@ -764,7 +661,7 @@ const adpSufficient = eshfType === 'no_solution'   ? 'no_solution'
         console.error(`[rdsSelector] Room ${room.id} failed:`, err);
         return {
           ...room,
-          volume:             0,   // SI value from ...room is wrong unit — zero is safer
+          volume:             0,
           floorArea:          0,
           _error:             err.message,
           _calculationFailed: true,

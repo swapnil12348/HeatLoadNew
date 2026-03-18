@@ -3,6 +3,33 @@
  * RDS category: results
  * Sections: ACES Summary, Consultant Override, Equipment ON/OFF analysis,
  *           Room Grains, Humidification, Achieved Conditions, Terminal Heating
+ *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   ESHF / Required ADP fields added to acesSummary section.
+ *
+ *     Five new read-only derived fields surface the psychrometric sufficiency
+ *     of the CHW plant for each room. Computed by calculateRequiredADP in
+ *     psychro.js (v2.3) and exposed by rdsSelector after STEP 4b.
+ *
+ *     eshf:          Effective Sensible Heat Factor — total sensible / total load.
+ *     requiredADP:   Coil surface temperature the room thermodynamically demands
+ *                    to control BOTH temperature AND humidity simultaneously
+ *                    (ASHRAE HOF 2021 Ch.18 ESHF line method). °F | null.
+ *     coil_adp:      Plant ADP — the actual coil surface temperature being used
+ *                    (resolved from project default or per-AHU override).
+ *     adpGap:        plantADP − requiredADP (°F). Positive = plant too warm,
+ *                    humidity control at risk. Null when ESHF not applicable.
+ *     adpSufficient: 'yes' | 'marginal' | 'insufficient' | 'no_solution' |
+ *                    'not_applicable'. Use for badge colour in UI.
+ *
+ *     These five fields replace the previously silent gap between what the
+ *     plant can achieve and what the room actually needs. For comfort rooms
+ *     with high OA latent load (monsoon, tropical climates) this can flag
+ *     rooms where no standard cooling coil at any ADP can control humidity —
+ *     the most dangerous failure mode currently undetected by load calculations.
+ *
+ *   (NEW) labels removed from section comments — audit trail complete.
  */
 
 import { createSeasonColumns, createSeasonPairs } from '../rdsSeasons';
@@ -53,13 +80,39 @@ export const RESULTS_SECTIONS = [
       { key: 'preheatHwFlow',      label: 'Preheat HW Flow',        subLabel: 'USGPM', type: 'readOnly', derived: true },
       { key: 'preheatBranchSize',  label: 'Preheat Branch Size',    subLabel: 'DN mm', type: 'readOnly', derived: true },
 
+      // ── ESHF / Required ADP psychrometric sufficiency ────────────────────────
+      //
+      // These five fields answer: "Can the CHW plant simultaneously control
+      // BOTH temperature AND humidity for this room under peak conditions?"
+      //
+      // requiredADP is derived from the ESHF line intersection with the
+      // saturation curve (ASHRAE HOF 2021 Ch.18). It is the minimum coil
+      // surface temperature needed for simultaneous temp + humidity control.
+      //
+      // Comparing it against coil_adp (plant ADP) reveals the gap:
+      //   adpGap > 0  → plant too warm → humidity may not be controlled
+      //   adpGap ≤ 0  → plant sufficient → adequate margin
+      //   null        → not applicable (sensible-only room or desiccant system)
+      //
+      // adpSufficient badge colours:
+      //   'yes'            → green  — plant adequate
+      //   'marginal'       → amber  — ≤ 3°F margin, verify coil selection
+      //   'insufficient'   → red    — plant too warm, humidity risk
+      //   'no_solution'    → red    — no standard coil can control humidity
+      //   'not_applicable' → grey   — sensible-only or desiccant room
+      { key: 'eshf',          label: 'ESHF',            subLabel: '—',   type: 'readOnly', derived: true },
+      { key: 'requiredADP',   label: 'Required ADP',    subLabel: '°F',  type: 'readOnly', derived: true },
+      { key: 'coil_adp',      label: 'Plant ADP',       subLabel: '°F',  type: 'readOnly', derived: true },
+      { key: 'adpGap',        label: 'ADP Gap',         subLabel: '°F',  type: 'readOnly', derived: true },
+      { key: 'adpSufficient', label: 'Humidity Control',subLabel: '—',   type: 'readOnly', derived: true },
+
       // ── Pre-cooling coil ─────────────────────────────────────────────────────
       // NOTE: preCoolingAhuCap / preCoolChwFlow / preCoolChwManifold are not
       // computed by rdsSelector and will display 0 until the logic layer is
       // extended to calculate pre-cooling coil values.
-      { key: 'preCoolingAhuCap',    label: 'Pre-Cooling AHU Cap.',    subLabel: 'CFM',   type: 'readOnly', derived: true },
-      { key: 'preCoolChwFlow',      label: 'Pre-Cooling CHW Flow',    subLabel: 'USGPM', type: 'readOnly', derived: true },
-      { key: 'preCoolChwManifold',  label: 'Pre-Cooling CHW Manifold',subLabel: 'DN mm', type: 'readOnly', derived: true },
+      { key: 'preCoolingAhuCap',    label: 'Pre-Cooling AHU Cap.',     subLabel: 'CFM',   type: 'readOnly', derived: true },
+      { key: 'preCoolChwFlow',      label: 'Pre-Cooling CHW Flow',     subLabel: 'USGPM', type: 'readOnly', derived: true },
+      { key: 'preCoolChwManifold',  label: 'Pre-Cooling CHW Manifold', subLabel: 'DN mm', type: 'readOnly', derived: true },
     ],
   },
 
