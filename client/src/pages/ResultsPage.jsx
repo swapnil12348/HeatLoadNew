@@ -3,6 +3,24 @@
  * Responsibility: Project dashboard — KPI cards, system load breakdown,
  *                 zone supply air governance summary, design parameters.
  *
+ * -- CHANGELOG v2.5 -----------------------------------------------------------
+ *
+ *   CHW plant psychrometric sufficiency banner added.
+ *
+ *     rdsSelector v2.6 STEP 4b computes requiredADP (ESHF line method) and
+ *     adpSufficient per room. useProjectTotals v2.2 aggregates these into
+ *     insufficientAdpRooms.
+ *
+ *     Two failure modes surfaced as separate sections within one banner:
+ *       'no_solution'  — CRITICAL (rose): no coil at any ADP can control
+ *                        humidity. Supplemental dehumidification required.
+ *       'insufficient' — REVIEW (amber): plant ADP too warm by adpGap °F.
+ *                        Each affected room listed with the exact gap.
+ *
+ *     Banner inserted between the monsoon peak banner and the high
+ *     humidification banner. 'marginal' rooms (adpGap ≤ 3°F) are handled
+ *     per-room in the Insights tab — not surfaced here to avoid noise.
+ *
  * -- CHANGELOG v2.4 -----------------------------------------------------------
  *
  *   Monsoon peak season surfaced — rdsSelector v2.4 added peakCoolingSeason
@@ -122,6 +140,7 @@ export default function ResultsPage() {
     checkFigureNote,
     highHumidRooms,
     regulatoryAcphRooms,
+    insufficientAdpRooms,
     totalCoilLoadBTU,
     hasData,
   } = useProjectTotals();
@@ -141,6 +160,12 @@ export default function ResultsPage() {
   const monsoonPeakRooms = rdsRows.filter(
     (r) => r.peakCoolingSeason && r.peakCoolingSeason !== 'summer'
   );
+
+  // CHW plant insufficiency — split by severity for separate banner sections.
+  // 'no_solution' is critical (supplemental dehumidification required).
+  // 'insufficient' is a review item (lower CHW supply temp or accept elevated RH).
+  const noSolutionRooms     = insufficientAdpRooms.filter(r => r.adpSufficient === 'no_solution');
+  const adpInsufficientRooms = insufficientAdpRooms.filter(r => r.adpSufficient === 'insufficient');
 
   // ── System summary — pure expression, no mutation ──────────────────────
   const ahuRows = ahus.map((ahu) => {
@@ -342,6 +367,93 @@ export default function ResultsPage() {
                   </span>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── CHW plant psychrometric sufficiency banner ────────────────────────
+            Shown when any room's ESHF analysis (rdsSelector v2.6 STEP 4b)
+            finds that the plant ADP is too warm to simultaneously control
+            both temperature and humidity.
+            Two sections: no_solution (critical) and insufficient (review).
+            'marginal' rooms are handled per-room in the Insights tab. */}
+        {insufficientAdpRooms.length > 0 && (
+          <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex items-start gap-3">
+            <div className="text-xl mt-0.5 shrink-0">❄️</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-rose-900">
+                CHW plant cannot control humidity in {insufficientAdpRooms.length} room{insufficientAdpRooms.length !== 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-rose-700 mt-1 leading-relaxed">
+                The ESHF analysis (ASHRAE HOF 2021 Ch.18) found that the plant apparatus dew point
+                is too warm to simultaneously meet the temperature setpoint and humidity setpoint
+                for the rooms below. Sensible cooling and tonnage figures are unaffected.
+              </p>
+
+              {/* no_solution rooms — CRITICAL */}
+              {noSolutionRooms.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs font-bold text-rose-800 uppercase tracking-wide mb-1.5">
+                    ⛔ Supplemental dehumidification required — no cooling coil can control humidity
+                  </p>
+                  <div className="space-y-1">
+                    {noSolutionRooms.map((r) => (
+                      <div key={r.id} className="text-xs font-mono text-rose-900 bg-rose-100 rounded px-2 py-1">
+                        <span className="font-bold">{r.name}</span>
+                        {r.designRH != null && (
+                          <span className="text-rose-600 ml-2">target {r.designRH}%RH</span>
+                        )}
+                        {r.eshfNote && (
+                          <span className="text-rose-600 ml-2">— {r.eshfNote}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-rose-600 mt-1.5 leading-relaxed">
+                    Options: desiccant wheel, chilled-water reheat, or a dedicated dehumidifier circuit.
+                    The cooling coil can handle sensible load but will not condense moisture at these conditions.
+                  </p>
+                </div>
+              )}
+
+              {/* insufficient rooms — REVIEW */}
+              {adpInsufficientRooms.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs font-bold text-amber-800 uppercase tracking-wide mb-1.5">
+                    ⚠️ Plant ADP too warm — lower CHW supply temperature or accept elevated RH
+                  </p>
+                  <div className="space-y-1">
+                    {adpInsufficientRooms.map((r) => (
+                      <div key={r.id} className="text-xs font-mono text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        <span className="font-bold">{r.name}</span>
+                        {r.requiredADP != null && (
+                          <span className="text-amber-700 ml-2">
+                            needs {r.requiredADP.toFixed(1)}°F ADP
+                          </span>
+                        )}
+                        {r.coil_adp != null && (
+                          <span className="text-amber-600 ml-1">
+                            · plant {r.coil_adp.toFixed(1)}°F
+                          </span>
+                        )}
+                        {r.adpGap != null && (
+                          <span className="font-bold text-amber-800 ml-1">
+                            (+{r.adpGap.toFixed(1)}°F gap)
+                          </span>
+                        )}
+                        {r.designRH != null && (
+                          <span className="text-amber-600 ml-2">· target {r.designRH}%RH</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-amber-700 mt-1.5 leading-relaxed">
+                    Each °F reduction in CHW supply temperature costs ~1.5–2% additional chiller energy annually.
+                    Confirm acceptable RH tolerance with the process engineer before specifying CHW supply temperature.
+                  </p>
+                </div>
+              )}
+
             </div>
           </div>
         )}

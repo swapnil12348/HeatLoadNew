@@ -10,6 +10,24 @@
  *
  * All values are memoized — recomputes only when rdsSelector output changes.
  *
+ * -- CHANGELOG v2.2 -----------------------------------------------------------
+ *
+ *   FIX-H05 — insufficientAdpRooms aggregation added.
+ *
+ *     rdsSelector v2.6 added ESHF / Required ADP analysis (STEP 4b).
+ *     Five fields on every rdsRow: eshf, requiredADP, adpGap, adpSufficient,
+ *     eshfNote. adpSufficient can be 'insufficient' or 'no_solution' when the
+ *     plant CHW temperature is too warm to simultaneously control both
+ *     temperature and humidity.
+ *
+ *     insufficientAdpRooms surfaces both failure modes:
+ *       'no_solution'  — CRITICAL: no cooling coil at any ADP can control
+ *                        humidity. Supplemental dehumidification required.
+ *       'insufficient' — REVIEW: plant ADP is too warm by adpGap °F.
+ *                        Lower CHW supply temp or accept elevated room RH.
+ *
+ *     Consumed by ResultsPage CHW sufficiency banner.
+ *
  * -- CHANGELOG v2.1 -----------------------------------------------------------
  *
  *   FIX-H01 — totalAreaFt2 / totalAreaM2 double-conversion corrected.
@@ -82,6 +100,15 @@
  *                         Rooms where NFPA 855 / OSHA / GMP ACH floor is the
  *                         binding supply air constraint.
  *
+ *   // CHW plant psychrometric insufficiency
+ *   insufficientAdpRooms: Array<{
+ *                           id, name, adpSufficient, requiredADP, coil_adp,
+ *                           adpGap, eshf, eshfNote, designRH
+ *                         }>
+ *                         Rooms where plant ADP is too warm to control humidity.
+ *                         adpSufficient === 'no_solution'  → supplemental dehumidification needed.
+ *                         adpSufficient === 'insufficient' → lower CHW supply temp required.
+ *
  *   // Pipe sizing
  *   projectPipes:         object   from calculateProjectPipeSizing()
  *
@@ -140,6 +167,7 @@ const EMPTY_TOTALS = {
   },
   highHumidRooms:      [],
   regulatoryAcphRooms: [],
+  insufficientAdpRooms: [],
   projectPipes:        {},
   roomCount:           0,
   hasData:             false,
@@ -256,6 +284,41 @@ const useProjectTotals = () => {
         thermalCFM:        r.thermalCFM,
       }));
 
+    // ── CHW plant psychrometric insufficiency ──────────────────────────────
+    //
+    // Rooms where the ESHF analysis (rdsSelector v2.6 STEP 4b) determined that
+    // the plant ADP is too warm to simultaneously control temperature AND humidity.
+    //
+    // Two failure modes:
+    //   'no_solution'  — CRITICAL: no cooling coil at any ADP can control
+    //                    humidity for this room at these conditions. Supplemental
+    //                    dehumidification (desiccant wheel, chilled water reheat,
+    //                    or a separate dehumidifier) is required. The coil can
+    //                    handle sensible cooling but will not remove moisture.
+    //   'insufficient' — REVIEW: the required ADP is colder than what the plant
+    //                    delivers. The gap (adpGap °F) quantifies the shortfall.
+    //                    Options: lower CHW supply temperature, accept elevated RH,
+    //                    or add supplemental dehumidification.
+    //
+    // 'marginal' rooms (adpGap ≤ 3°F) are intentionally excluded — those are
+    // surfaced in the Insights tab recommendation cards per room, not as a
+    // project-level banner which is reserved for actionable concerns.
+    const insufficientAdpRooms = rdsRows
+      .filter(r =>
+        r.adpSufficient === 'insufficient' || r.adpSufficient === 'no_solution'
+      )
+      .map(r => ({
+        id:           r.id,
+        name:         r.name,
+        adpSufficient: r.adpSufficient,
+        requiredADP:  r.requiredADP,   // °F — coil surface temp needed, or null
+        coil_adp:     r.coil_adp,     // °F — plant ADP (resolved)
+        adpGap:       r.adpGap,       // °F positive = plant too warm
+        eshf:         r.eshf,         // 0–1 effective sensible heat factor
+        eshfNote:     r.eshfNote,     // explanation string for no_solution cases
+        designRH:     r.designRH,     // % — room target RH (for context in banner)
+      }));
+
     // ── Project pipe sizing ────────────────────────────────────────────────
     const projectPipes = calculateProjectPipeSizing(rdsRows);
 
@@ -286,6 +349,9 @@ const useProjectTotals = () => {
 
       // Regulatory ACH governed rooms
       regulatoryAcphRooms,
+
+      // CHW plant psychrometric insufficiency
+      insufficientAdpRooms,
 
       // Pipe sizing
       projectPipes,
