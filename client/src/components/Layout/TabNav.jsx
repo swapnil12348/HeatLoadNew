@@ -5,6 +5,21 @@
  * Lives inside AppLayout's fixed-height flex column as a sibling to <main>.
  * It never scrolls out of view — the fixed flex-column layout holds it in
  * place without needing sticky positioning.
+ *
+ * ── TAB ORDER — matches ASHRAE HOF Ch.18 calculation workflow ─────────────────
+ *
+ *   1. Project Info    → site data, system design defaults (elevation, ADP, BF)
+ *   2. Climate         → seasonal outdoor DB/WB/RH — feeds every load calc
+ *   3. Room Geometry   → room dimensions, occupancy, fresh air, exhaust
+ *   4. Envelope & Loads → sensible + latent heat gains (solar, walls, internal)
+ *   5. AHU Config      → ADP selection, bypass factor, fan type per AHU
+ *   6. RDS Input       → master calculation review sheet (all inputs already set)
+ *   7. Results         → GTH in BTU/hr + TR, supply CFM, pipe sizing
+ *
+ *   Previous order placed RDS Input before Room Geometry and Envelope, meaning
+ *   the calculation review sheet appeared before its inputs were collected.
+ *   An engineer following the tabs left-to-right now follows the natural
+ *   load calculation sequence without needing to jump between tabs.
  */
 
 import { NavLink } from 'react-router-dom';
@@ -12,12 +27,11 @@ import { NavLink } from 'react-router-dom';
 export default function TabNav() {
   const tabs = [
     { id: 'project',  label: 'Project Info',       path: '/project'  },
-    
     { id: 'climate',  label: 'Climate',            path: '/climate'  },
-    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'room',     label: 'Room Geometry',      path: '/room'     },
     { id: 'envelope', label: 'Envelope & Loads',   path: '/envelope' },
     { id: 'ahu',      label: 'AHU Config',         path: '/ahu'      },
+    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'results',  label: 'Results',            path: '/results'  },
   ];
 
