@@ -12,8 +12,9 @@ import { NavLink } from 'react-router-dom';
 export default function TabNav() {
   const tabs = [
     { id: 'project',  label: 'Project Info',       path: '/project'  },
-    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
+    
     { id: 'climate',  label: 'Climate',            path: '/climate'  },
+    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'room',     label: 'Room Geometry',      path: '/room'     },
     { id: 'envelope', label: 'Envelope & Loads',   path: '/envelope' },
     { id: 'ahu',      label: 'AHU Config',         path: '/ahu'      },

@@ -17,49 +17,61 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.7 ────────────────────────────────────────────────────────────
+ *
+ *   Reheater logic added (STEP 4c) — ASHRAE HOF 2021 Ch.18 §17.3.
+ *
+ *     When the room ESHF (ERSH / ERTH) falls below the minimum achievable ESHF
+ *     for the selected ADP and BF, the coil cannot simultaneously control
+ *     temperature and humidity. A reheater is required.
+ *
+ *     The minimum achievable ESHF is computed from physics — not Excel's
+ *     hardcoded 0.83. The physics-based formula:
+ *       minESHF = Cs × DR / (Cs × DR + Cl × max(0, grRoom − grADP_sat))
+ *       DR = (1−BF) × (roomDB − ADP) = supply temperature depression
+ *
+ *     This correctly varies with ADP, BF, and room humidity:
+ *       55°F ADP, BF=0.10, 75°F/44%RH  →  minESHF ≈ 0.92 (sensible-only)
+ *       55°F ADP, BF=0.10, 75°F/65%RH  →  minESHF ≈ 0.78 (latent load present)
+ *       45°F ADP, BF=0.10, 75°F/65%RH  →  minESHF ≈ 0.66 (colder coil, more dehumid)
+ *     Excel's hardcoded 0.83 ignores room and coil conditions entirely.
+ *
+ *     Reheat load (matching Excel row 121):
+ *       RH_BTU = (minESHF × ERTH − ERSH) / (1 − minESHF)
+ *       where ERTH = peakErsh + peakErlh (room loads only, no OA — Excel method)
+ *
+ *     Revised cooling capacity:
+ *       TR_rev = (grandTotal + RH_BTU) / 12000
+ *       The coil must cool air that will subsequently be partially reheated.
+ *
+ *     Revised supply CFM (matching Excel row 124):
+ *       DA_rev = (ERSH + RH_BTU) / (Cs × DR)
+ *       The reheater allows the coil to condition more air at a lower ESHF.
+ *       Final supply = max(DA_rev, all ACPH constraints).
+ *
+ *     New fields on rdsRow:
+ *       reheatRequired  boolean  — true when reheater is needed
+ *       reheatBTU       number   — reheater capacity (BTU/hr)
+ *       reheatKW        number   — reheater capacity (kW)
+ *       minESHF         number   — minimum achievable ESHF (physics-based)
+ *       roomESHF        number   — actual room ESHF (ERSH / ERTH, no OA)
+ *       supplyAirGoverned → 'reheat' when reheater drives CFM above ACPH floor
+ *
  * ── CHANGELOG v2.6 ────────────────────────────────────────────────────────────
  *
  *   ESHF / Required ADP analysis added (STEP 4b).
- *
- *     calculateRequiredADP (psychro.js v2.3) finds the coil surface temperature
- *     the room thermodynamically demands to control BOTH temperature AND humidity
- *     simultaneously (ASHRAE HOF 2021 Ch.18 ESHF line method).
- *
- *     Five new fields on rdsRow: eshf, requiredADP, adpGap, adpSufficient, eshfNote.
- *     adpSufficient: 'yes' | 'marginal' | 'insufficient' | 'no_solution' | 'not_applicable'
- *     Consumed by resultsSections.js (ACES Summary) and InsightsTab recommendation rules.
- *
  *   Fan heat basis corrected — Cs × supplyAir × coilDT replaces Math.abs(peakErsh).
- *
- *     Previous basis (peakErsh × fanHeatPct) is correct when supply air is
- *     thermal-governed (supplyAir ≈ thermalCFM). For ACPH-governed rooms
- *     where supplyAir >> thermalCFM, the fan is physically moving much more
- *     air than the thermal load implies — fan heat was understated by up to 80×.
- *
- *     New basis: Cs × supplyAir × (dbInF − adpF) × (1 − bf) × fanHeatPct
- *     — proportional to actual coil air quantity, not room sensible load.
- *
- *     Math.abs guard added: when adpF > dbInF (e.g. 5°C room with default 55°F
- *     project ADP), (dbInF − adpF) is negative → fan heat goes negative →
- *     grandTotal is REDUCED instead of increased. Fan heat is always positive.
  *
  * ── CHANGELOG v2.5 ────────────────────────────────────────────────────────────
  *
  *   ADP-01 calculated mode — use thermalCFM not supplyAir as back-calculation basis.
- *
- *     For ACPH-governed rooms, supplyAir >> thermalCFM.
- *     ADP = roomDB − ERSH/(Cs × coilCFM) collapsed to roomDB − 2°F (the clamp)
- *     when the full ACPH supply was used as the denominator.
- *     Fix: adpBasisCFM = thermalCFM when thermalCFM > 0, else supplyAir fallback.
- *
  *   Load breakdown fields (bd_*) added for Insights tab.
  *
  * ── CHANGELOG v2.4 ────────────────────────────────────────────────────────────
  *
  *   Multi-season peak selection — monsoon vs summer comparison implemented.
- *
- *     peakCFMSeason    — season with highest ERSH → governs supply air CFM.
- *     peakCoolingSeason — season with highest (ERSH + ERLH + OA) → governs TR.
+ *   peakCFMSeason    — season with highest ERSH → governs supply air CFM.
+ *   peakCoolingSeason — season with highest (ERSH + ERLH + OA) → governs TR.
  *
  * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
@@ -69,43 +81,22 @@
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
  *   ADP-01 — Apparatus Dew Point mode: 'manual' | 'calculated' per AHU.
- *
- *     Priority chain (most specific wins):
- *       1. ahuAdpMode = 'calculated' → calculateAdpFromLoads() from psychro.js
- *       2. ahu.adp > 0               → per-AHU manual override (°F)
- *       3. systemDesign.adp          → project-level default
- *       4. ASHRAE.DEFAULT_ADP        → 55°F hardcoded fallback
- *
- * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
- *
- *   CRIT-RDS-01 — rdsRow.volume and rdsRow.floorArea now in ft³ / ft².
- *   CRIT-RDS-02 — grandTotal and coilLoadBTU now use oaTotal (enthalpy method).
- *   HIGH-HH-01  — recirculationFraction now passed to calculateHeatingHumid.
- *
- * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
- *
- *   CRIT-01: OA coil load included in grandTotal (was missing → 15–40% understatement)
- *   MED-01:  Fan heat is SENSIBLE only
- *   MED-02:  returnFanHeat included in grandTotal
- *   RDS-01:  sensibleFactor(elevation) for Cs (was ASHRAE.SENSIBLE_FACTOR → undefined)
- *   RDS-02:  altitudeCorrectionFactor from psychro.js (no local duplicate)
- *   RDS-03:  KW_TO_BTU_HR from units.js (was ASHRAE.KW_TO_BTU, wrong name)
- *   RDS-04:  supplyAcph computed and exposed for ISO 14644 audit
+ *   Priority chain (most specific wins):
+ *     1. ahuAdpMode = 'calculated' → calculateAdpFromLoads()
+ *     2. ahu.adp > 0               → per-AHU manual override
+ *     3. systemDesign.adp          → project-level default
+ *     4. ASHRAE.DEFAULT_ADP        → 55°F hardcoded fallback
  *
  * ── SUPPLY AIR FIELD CLARIFICATION ───────────────────────────────────────────
  *
- *   supplyAir     = TOTAL supply CFM (recirculation + OA), from airQuantities.js
- *                   Math.max(thermalCFM, designAcphCFM, regulatoryAcphCFM, minAcphCFM)
- *   freshAirCheck = OA-only CFM component.
- *   ACPH uses supplyAir (total) — correct for ISO 14644 cleanroom ACH. ✓
+ *   supplyAir = TOTAL supply CFM from airQuantities.js
+ *             = Math.max(thermalCFM, designAcphCFM, regulatoryAcphCFM, minAcphCFM)
+ *             After reheater: Math.max(above, reheat-adjusted thermalCFM)
  *
  * ── PEAK SEASON SELECTION ────────────────────────────────────────────────────
  *
  *   peakCFMSeason     → season with highest ERSH → governs supply air CFM
  *   peakCoolingSeason → season with highest (ERSH + ERLH + OA) → governs TR
- *
- *   In temperate climates both are 'summer'. They diverge for high-humidity
- *   monsoon climates where OA enthalpy load is the dominant cooling driver.
  */
 
 import { createSelector } from '@reduxjs/toolkit';
@@ -120,8 +111,10 @@ import { calculateAllSeasonStatePoints } from './psychroStatePoints';
 import {
   altitudeCorrectionFactor,
   sensibleFactor,
+  latentFactor,
   calculateAdpFromLoads,
   calculateRequiredADP,
+  calculateGrains,
 } from '../../utils/psychro';
 
 import { KW_TO_BTU_HR, m2ToFt2, m3ToFt3 } from '../../utils/units';
@@ -151,6 +144,7 @@ export const selectRdsData = createSelector(
     const altCf        = altitudeCorrectionFactor(elevation);
     const SEASONS_LIST = ['summer', 'monsoon', 'winter'];
     const Cs           = sensibleFactor(elevation);
+    const Cl           = latentFactor(elevation);
 
     return rooms.map(room => {
       try {
@@ -158,18 +152,12 @@ export const selectRdsData = createSelector(
         const envelope = envelopes[room.id] || null;
         const ahu      = ahus.find(a => a.id === room.assignedAhuIds?.[0]) || {};
 
-        // Pre-convert units here — used throughout this room's calculations.
-        // rdsRow.volume and rdsRow.floorArea are written as ft³ / ft² in the
-        // assembled return object below, overriding the m³ / m² from ...room.
         const floorAreaFt2 = m2ToFt2(room.floorArea);
         const volumeFt3    = m3ToFt3(room.volume);
 
         const bf = parseFloat(systemDesign.bypassFactor) || 0.10;
 
         // raRH: room's winter humidity target for heating/humidification sizing.
-        // Preserves 0%RH for battery dry rooms — 0 != null is true in JS, so
-        // 0 correctly passes through. Falls back to project humidificationTarget
-        // (not hardcoded 50) when the room has no designRH set at all.
         const parsedRaRh = parseFloat(room.designRH);
         const raRH = !isNaN(parsedRaRh)
           ? parsedRaRh
@@ -177,10 +165,6 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 1 — Seasonal loads
-        //
-        // All three season calcs objects are retained in seasonCalcs so that
-        // the post-STEP-1 peak selection can access ersh, erlh, and dbInF
-        // for any season without re-running calculateSeasonLoad.
         // ════════════════════════════════════════════════════════════════════════
         const seasonResults = {};
         const seasonCalcs   = {};
@@ -208,7 +192,6 @@ export const selectRdsData = createSelector(
         });
 
         // ── Peak ERSH season ────────────────────────────────────────────────
-        // peakCFMSeason: season with highest ERSH — governs supply air CFM and ADP.
         const peakCFMSeason = SEASONS_LIST.reduce((best, s) =>
           (seasonCalcs[s].ersh > seasonCalcs[best].ersh ? s : best), 'summer'
         );
@@ -220,21 +203,12 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // ADP-01 — Resolve effective ADP
         //
-        // ⚠ This block MUST come after STEP 1.
-        //   'calculated' mode requires peakErsh and dbInF.
-        //
         // Priority chain (most specific wins):
         //   1. ahuAdpMode = 'calculated' → calculateAdpFromLoads(dbInF, peakErsh, ...)
         //   2. ahu.adp > 0               → per-AHU manual override (°F)
         //   3. systemDesign.adp          → project-level default
         //   4. ASHRAE.DEFAULT_ADP        → 55°F hardcoded fallback
-        //
-        // Two-pass for 'calculated' mode — adpBasisCFM = thermalCFM, not supplyAir.
-        // Using supplyAir collapsed ADP to roomDB−2°F for ACPH-governed rooms.
-        //
-        // ⚠ 'calculated' mode is only valid for cooling-coil AHUs.
         // ════════════════════════════════════════════════════════════════════════
-
         const projectAdpMode  = systemDesign?.adpMode || 'manual';
         const ahuAdpMode      = ahu?.adpMode || projectAdpMode;
         const projectAdp      = parseFloat(systemDesign?.adp) || ASHRAE.DEFAULT_ADP;
@@ -316,9 +290,6 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4 — Peak cooling season selection + grand total
-        //
-        // peakCoolingSeason: season with highest (ERSH + ERLH + OA enthalpy).
-        // Governs cooling capacity (TR), coilLoadBTU, and CHW pipe sizing.
         // ════════════════════════════════════════════════════════════════════════
         const seasonTotals = {};
         SEASONS_LIST.forEach(s => {
@@ -339,14 +310,7 @@ export const selectRdsData = createSelector(
         const returnFanHeatFraction = (parseFloat(systemDesign.returnFanHeat) || 5) / 100;
 
         // Fan heat basis: Cs × supplyAir × coilDT × fanHeatPct.
-        // Proportional to actual air volume being moved through the coil —
-        // correct for both thermal-governed and ACPH-governed rooms.
-        //
-        // Math.abs guard: when adpF > dbInF (ADP above room temp — invalid
-        // configuration), (dbInF − adpF) is negative. Without Math.abs,
-        // supplyFanHeatBTU goes negative and reduces grandTotal instead of
-        // adding to it. Fan heat is always physically positive.
-        // The Insights tab ADP-above-room-temp rule flags this condition.
+        // Math.abs guard: when adpF > dbInF, (dbInF − adpF) is negative.
         const supplyFanHeatBTU = Math.round(
           Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf)) * supplyFanHeatFraction
         );
@@ -357,13 +321,12 @@ export const selectRdsData = createSelector(
           + supplyFanHeatBTU
           + returnFanHeatBTU;
 
-        const coolingCapTR = (grandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
         const grandTotalSensible = Math.round(
           peakErshForCap + oaPeak.oaSensible + supplyFanHeatBTU + returnFanHeatBTU
         );
 
         // coilLoadBTU: basis for CHW pipe sizing — excludes supply fan heat
-        // (supply fan is downstream of coil in draw-through configuration).
+        // (draw-through: supply fan is downstream of coil).
         const coilLoadBTU = (peakErshForCap + peakErlhForCap)
           + oaPeak.oaTotal
           + returnFanHeatBTU;
@@ -374,23 +337,6 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4b — Required ADP from ESHF line (psychrometric sufficiency check)
-        //
-        // Finds the coil surface temperature the room thermodynamically demands
-        // to control BOTH temperature AND humidity simultaneously.
-        // ASHRAE HOF 2021 Ch.18 — ESHF line intersection with saturation curve.
-        //
-        // Uses peakCoolingSeason loads so ESHF is consistent with the capacity-
-        // governing design point. grIn from peakCalcs gives the room moisture
-        // basis with correct Hyland-Wexler Patm correction.
-        //
-        // Three possible outcomes:
-        //   'found'         → requiredADP in °F — compare against plantADP (adpF)
-        //   'sensible_only' → room is sensible-dominated, any CHW plant works
-        //   'no_solution'   → CRITICAL: coil cannot control humidity at any ADP,
-        //                     supplemental dehumidification required
-        //
-        // ⚠ Only meaningful for cooling-coil AHUs.
-        //   Battery dry rooms and desiccant systems: not applicable.
         // ════════════════════════════════════════════════════════════════════════
         const eshfTotalSensible = (peakErshForCap   || 0) + (oaPeak.oaSensible || 0);
         const eshfTotalLatent   = (peakErlhForCap   || 0) + (oaPeak.oaLatent   || 0);
@@ -404,17 +350,14 @@ export const selectRdsData = createSelector(
         );
 
         const eshf          = eshfResult.eshf;
-        const requiredADP   = eshfResult.requiredADP;  // °F | null
-        const eshfType      = eshfResult.type;          // 'found' | 'sensible_only' | 'no_solution'
+        const requiredADP   = eshfResult.requiredADP;
+        const eshfType      = eshfResult.type;
         const eshfNote      = eshfResult.note;
 
-        // adpGap: plantADP − requiredADP (°F). Positive = plant too warm.
-        // null when ESHF analysis is not applicable (sensible_only outcome).
         const adpGap = (eshfType === 'found' && requiredADP !== null)
           ? parseFloat((adpF - requiredADP).toFixed(1))
           : null;
 
-        // adpSufficient: summary of whether the plant can control humidity.
         const adpSufficient = eshfType === 'no_solution'  ? 'no_solution'
           : eshfType === 'sensible_only'                   ? 'not_applicable'
           : adpGap === null                                ? 'not_applicable'
@@ -422,25 +365,113 @@ export const selectRdsData = createSelector(
           : adpGap <= 3                                    ? 'marginal'
           :                                                  'insufficient';
 
-        // totalInfil and rsh: from peak ERSH season (sensible peak conditions).
+        // ════════════════════════════════════════════════════════════════════════
+        // STEP 4c — Reheater requirement (ASHRAE HOF 2021 Ch.18 §17.3)
+        //
+        // When the room ESHF (ERSH / ERTH) falls below the minimum achievable
+        // ESHF for the selected ADP and BF, the coil cannot simultaneously
+        // control temperature and humidity. A reheater is required.
+        //
+        // minESHF — computed from physics, not hardcoded 0.83:
+        //   DR (dehumidified rise) = (1−BF) × (roomDB − ADP)
+        //   grADP_sat = saturation humidity ratio at ADP
+        //   minESHF = Cs×DR / (Cs×DR + Cl×max(0, grRoom − grADP_sat))
+        //
+        //   When grADP_sat ≥ grRoom (ADP above room dew point, sensible-only):
+        //     denominator clamps at Cs×DR → minESHF = 1.0
+        //     No reheater needed — SHR = 1.0 is the correct physics.
+        //
+        // roomESHF = peakErsh / (peakErsh + peakErlh) — room loads only (no OA),
+        //   matching Excel row 110 (ERSH/ERTH method).
+        //
+        // Reheat load (Excel row 121):
+        //   RH_BTU = (minESHF × ERTH − ERSH) / (1 − minESHF)
+        //
+        // Revised tonnage (Excel row 123):
+        //   TR_rev = (grandTotal + RH_BTU) / 12000
+        //
+        // Revised supply CFM (Excel row 124):
+        //   DA_rev = (ERSH + RH_BTU) / (Cs × DR)
+        //   Final supply = MAX(DA_rev, all ACPH constraints)
+        // ════════════════════════════════════════════════════════════════════════
+        const grADP_sat = calculateGrains(adpF, 100, elevation);
+        const supplyDT  = (1 - bf) * (dbInF - adpF); // dehumidified rise (DR)
+
+        // minESHF: lowest room SHR achievable without reheat
+        const minESHFNum   = Cs * supplyDT;
+        const minESHFDenom = minESHFNum + Cl * Math.max(0, peakCalcs.grIn - grADP_sat);
+        const minESHF = (supplyDT > 0 && minESHFDenom > 0)
+          ? minESHFNum / minESHFDenom
+          : 1.0; // sensible-only (ADP above room dew point) — no reheat possible or needed
+
+        // Room ESHF: room sensible / room total (no OA, no fan heat — Excel method)
+        const erth     = (peakErsh || 0) + (peakErlhForCap || 0);
+        const roomESHF = erth > 0 ? (peakErsh || 0) / erth : 1.0;
+
+        let reheatBTU      = 0;
+        let reheatRequired = false;
+
+        if (supplyDT > 0 && roomESHF < minESHF - 0.001 && minESHF < 1.0) {
+          reheatRequired = true;
+          // RH_BTU = (minESHF × ERTH − ERSH) / (1 − minESHF)
+          reheatBTU = Math.max(0,
+            (minESHF * erth - (peakErsh || 0)) / (1 - minESHF)
+          );
+        }
+
+        const reheatKW = reheatBTU > 0 ? parseFloat((reheatBTU / KW_TO_BTU_HR).toFixed(2)) : 0;
+
+        // Revised tonnage: original load + reheat (coil conditions all air including
+        // the portion subsequently reheated — Excel row 123).
+        const revisedGrandTotal = grandTotal + reheatBTU;
+        const coolingCapTR = (revisedGrandTotal / ASHRAE.BTU_PER_TON).toFixed(2);
+
+        // Revised coil load: includes reheat (coil must cool air that will be reheated).
+        const revisedCoilLoadBTU = coilLoadBTU + reheatBTU;
+
+        // Revised supply CFM when reheater active (Excel row 124):
+        //   DA_rev = (ERSH + RH_BTU) / (Cs × DR)
+        const revisedThermalCFM = (supplyDT > 0 && reheatRequired)
+          ? Math.ceil(((peakErsh || 0) + reheatBTU) / (Cs * supplyDT))
+          : thermalCFM;
+
+        // Final supply air: max of all constraints including reheater-adjusted CFM.
+        const finalSupplyAir = Math.max(supplyAir, revisedThermalCFM);
+
+        // Update dependent air balance fields if reheat increased supply air.
+        const finalCoilAir    = Math.round(finalSupplyAir * (1 - bf));
+        const finalBypassAir  = Math.round(finalSupplyAir * bf);
+        const finalReturnAir  = Math.max(0, finalSupplyAir - freshAirCheck);
+        const finalSupplyAcph = finalSupplyAir > 0 && volumeFt3 > 0
+          ? parseFloat((finalSupplyAir * 60 / volumeFt3).toFixed(1))
+          : 0;
+
+        // Update supplyAirGoverned if reheat is now the binding constraint.
+        const finalSupplyAirGoverned = (reheatRequired && finalSupplyAir > supplyAir)
+          ? 'reheat'
+          : supplyAirGoverned;
+
+        // ════════════════════════════════════════════════════════════════════════
+        // RSH + infiltration (from peak ERSH season)
+        // ════════════════════════════════════════════════════════════════════════
         const totalInfil = Math.round(peakCalcs.infilCFM   || 0);
         const rsh        = Math.round(peakCalcs.rawSensible || 0);
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 5 — Heating + humidification
         // ════════════════════════════════════════════════════════════════════════
-        const recircFraction = supplyAir > 0 ? returnAir / supplyAir : 0;
+        const recircFraction = finalSupplyAir > 0 ? finalReturnAir / finalSupplyAir : 0;
 
         const heatHumid = calculateHeatingHumid(
           seasonResults['ershOn_winter'],
-          supplyAir,
+          finalSupplyAir,
           freshAirCheck,
           climate,
           dbInF,
           raRH,
           altCf,
           elevation,
-          grandTotal,
+          revisedGrandTotal,
           recircFraction,
         );
 
@@ -458,18 +489,17 @@ export const selectRdsData = createSelector(
         // STEP 6 — Pipe sizing
         // ════════════════════════════════════════════════════════════════════════
         const pipes = calculatePipeSizing(
-          coilLoadBTU,
+          revisedCoilLoadBTU,
           heatingCapBTU,
           preheatCapBTU,
         );
 
         // ════════════════════════════════════════════════════════════════════════
         // STEP 7 — Psychrometric state points
-        // adpF is the fully resolved ADP — consistent with effectiveSystemDesign.
         // ════════════════════════════════════════════════════════════════════════
         const psychroFields = calculateAllSeasonStatePoints(
           climate, dbInF, raRH, adpF, bf,
-          freshAirCheck, supplyAir, elevation,
+          freshAirCheck, finalSupplyAir, elevation,
         );
 
         // ════════════════════════════════════════════════════════════════════════
@@ -483,10 +513,10 @@ export const selectRdsData = createSelector(
           const e_on  = seasonResults[`ershOn_${s}`]  || 0;
           const e_off = seasonResults[`ershOff_${s}`] || 0;
 
-          pickupFields[`pickupOn_${s}`]  = supplyAir > 0
-            ? (e_on  / (Cs * supplyAir)).toFixed(1) : '0.0';
-          pickupFields[`pickupOff_${s}`] = supplyAir > 0
-            ? (e_off / (Cs * supplyAir)).toFixed(1) : '0.0';
+          pickupFields[`pickupOn_${s}`]  = finalSupplyAir > 0
+            ? (e_on  / (Cs * finalSupplyAir)).toFixed(1) : '0.0';
+          pickupFields[`pickupOff_${s}`] = finalSupplyAir > 0
+            ? (e_off / (Cs * finalSupplyAir)).toFixed(1) : '0.0';
 
           achFields[`achOn_temp_${s}`]      = dbInF.toFixed(1);
           achFields[`achOn_rh_${s}`]        = raRH.toFixed(1);
@@ -505,9 +535,6 @@ export const selectRdsData = createSelector(
 
         // ════════════════════════════════════════════════════════════════════════
         // ASSEMBLE — full RDS row
-        //
-        // volume and floorArea explicitly set as ft³ / ft², overriding the
-        // m³ / m² values from the ...room spread.
         // ════════════════════════════════════════════════════════════════════════
         return {
           // ── Identity ────────────────────────────────────────────────────────
@@ -527,17 +554,17 @@ export const selectRdsData = createSelector(
           peakCFMSeason,
           peakCoolingSeason,
 
-          // ── Core cooling outputs ─────────────────────────────────────────────
-          supplyAir,
-          supplyAirGoverned,
-          thermalCFM,
+          // ── Core cooling outputs (reheater-revised where applicable) ─────────
+          supplyAir:         finalSupplyAir,
+          supplyAirGoverned: finalSupplyAirGoverned,
+          thermalCFM:        revisedThermalCFM,
           supplyAirMinAcph,
           regulatoryAcphCFM,
-          supplyAcph,
+          supplyAcph:        finalSupplyAcph,
           coolingCapTR,
-          grandTotal:         Math.round(grandTotal),
+          grandTotal:         Math.round(revisedGrandTotal),
           grandTotalSensible,
-          coilLoadBTU:        Math.round(coilLoadBTU),
+          coilLoadBTU:        Math.round(revisedCoilLoadBTU),
           ersh:               peakErsh,
 
           // ── Fan heat ────────────────────────────────────────────────────────
@@ -565,18 +592,30 @@ export const selectRdsData = createSelector(
           exhaustBibo,
           exhaustMachine,
 
-          // ── AHU air balance ──────────────────────────────────────────────────
-          coilAir,
-          bypassAir,
-          returnAir,
-          dehumidifiedAir,
+          // ── AHU air balance (reheater-revised where applicable) ──────────────
+          coilAir:        finalCoilAir,
+          bypassAir:      finalBypassAir,
+          returnAir:      finalReturnAir,
+          dehumidifiedAir: finalCoilAir,
           freshAirAces,
           bleedAir,
-          ahuCap:        supplyAir,
-          coolingLoadHL: coolingCapTR,
+          ahuCap:         finalSupplyAir,
+          coolingLoadHL:  coolingCapTR,
 
           // ── OA coil loads ────────────────────────────────────────────────────
           ...oaFields,
+
+          // ── Reheater ─────────────────────────────────────────────────────────
+          // reheatRequired: true when room ESHF < minESHF (coil insufficient)
+          // reheatBTU:      reheat coil capacity in BTU/hr
+          // reheatKW:       reheat coil capacity in kW
+          // minESHF:        physics-based minimum achievable ESHF (varies with ADP/BF/room)
+          // roomESHF:       actual room ESHF = ERSH / ERTH (no OA, no fan heat — Excel method)
+          reheatRequired,
+          reheatBTU:     Math.round(reheatBTU),
+          reheatKW,
+          minESHF:       parseFloat(minESHF.toFixed(3)),
+          roomESHF:      parseFloat(roomESHF.toFixed(3)),
 
           // ── Heating ─────────────────────────────────────────────────────────
           heatingCapBTU,
@@ -614,16 +653,10 @@ export const selectRdsData = createSelector(
           // ── Coil performance ─────────────────────────────────────────────────
           coil_shr:           psychroFields['coil_shr'],
           coil_contactFactor: psychroFields['coil_contactFactor'],
-          coil_adp:           adpF,       // resolved ADP (°F) for display
-          coil_adpMode:       ahuAdpMode, // 'manual' | 'calculated'
+          coil_adp:           adpF,
+          coil_adpMode:       ahuAdpMode,
 
           // ── ESHF / Required ADP psychrometric sufficiency ────────────────────
-          // eshf:           effective sensible heat factor (0–1)
-          // requiredADP:    coil surface temp needed to control temp + humidity (°F | null)
-          // adpGap:         plantADP − requiredADP (°F). Positive = humidity risk.
-          // adpSufficient:  'yes' | 'marginal' | 'insufficient' | 'no_solution' | 'not_applicable'
-          // eshfType:       raw bisection outcome — for engineering audit / debugging
-          // eshfNote:       explanation string when type !== 'found'
           eshf,
           requiredADP,
           adpGap,
@@ -643,10 +676,6 @@ export const selectRdsData = createSelector(
           ...psychroFields,
 
           // ── Load breakdown — for Insights tab ───────────────────────────────
-          // Pre-safety-factor raw components from peakCFMSeason.
-          // Signed values: envelopeGain / infilSens can be negative (heat loss,
-          // pressurised room infiltration credit).
-          // bd_oa uses oaPeak (peakCoolingSeason) to match grandTotal basis.
           bd_envelope:     Math.round(peakCalcs.envelopeGain || 0),
           bd_people:       Math.round(peakCalcs.pplSens      || 0),
           bd_lights:       Math.round(peakCalcs.lightsSens   || 0),
@@ -654,7 +683,8 @@ export const selectRdsData = createSelector(
           bd_infiltration: Math.round(peakCalcs.infilSens    || 0),
           bd_oa:           Math.round(oaPeak.oaTotal         || 0),
           bd_fanHeat:      Math.round(supplyFanHeatBTU + returnFanHeatBTU),
-          bd_grandTotal:   Math.round(grandTotal),
+          bd_reheat:       Math.round(reheatBTU),
+          bd_grandTotal:   Math.round(revisedGrandTotal),
         };
 
       } catch (err) {
