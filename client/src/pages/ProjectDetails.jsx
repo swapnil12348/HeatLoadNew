@@ -1,4 +1,3 @@
-
 import { useSelector, useDispatch } from 'react-redux';
 import { updateProjectInfo, updateAmbient, updateSystemDesign } from '../features/project/projectSlice';
 import NumberControl from '../components/UI/NumberControl';
@@ -23,13 +22,15 @@ export default function ProjectDetails() {
     }
   };
 
-  // Live preview uses 72°F (22.2°C) reference indoor temp
-  const refDbInF   = 72;
-  const supplyDT   = (1 - systemDesign.bypassFactor) * (refDbInF - systemDesign.adp);
-  const safetyDisp = (1 + systemDesign.safetyFactor / 100).toFixed(2);
-  const fanDisp    = (1 + systemDesign.fanHeat       / 100).toFixed(2);
+  // Live preview — uses 72°F (22.2°C) reference indoor temp
+  const refDbInF        = 72;
+  const supplyDT        = (1 - systemDesign.bypassFactor) * (refDbInF - systemDesign.adp);
+  const safetyPct       = systemDesign.safetyFactor   || 0;
+  const ductPct         = systemDesign.ductHeatGain   ?? 5;
+  const combinedMultPct = safetyPct + ductPct;
+  const combinedMult    = (1 + combinedMultPct / 100).toFixed(2);
+  const fanDisp         = (1 + systemDesign.fanHeat / 100).toFixed(2);
 
-  // Live diurnal range label helper
   const getDiurnalLabel = (val) => {
     const v = parseFloat(val) || 0;
     if (v === 0)  return 'Using seasonal defaults (18°F summer / 12°F monsoon / 20°F winter)';
@@ -100,7 +101,7 @@ export default function ProjectDetails() {
               Site Conditions
             </h3>
 
-            {/* Elevation — altitude correction */}
+            {/* Elevation */}
             <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
               <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wide mb-2">
                 ↳ Used in load calculations
@@ -117,7 +118,7 @@ export default function ProjectDetails() {
               </p>
             </div>
 
-            {/* Latitude — used in CLTD/SHGF corrections */}
+            {/* Latitude */}
             <div className="mb-4 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
               <p className="text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-2">
                 ↳ Used in CLTD + SHGF calculations
@@ -137,7 +138,7 @@ export default function ProjectDetails() {
               </p>
             </div>
 
-            {/* Daily Temperature Range — CLTD mean-temp correction */}
+            {/* Daily Range */}
             <div className="mb-5 p-3 bg-amber-50 border border-amber-100 rounded-lg">
               <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide mb-2">
                 ↳ Used in CLTD mean-temp correction
@@ -155,14 +156,12 @@ export default function ProjectDetails() {
               </p>
               <p className="text-[10px] text-amber-500 mt-1">
                 Set 0 to use built-in seasonal defaults.
-                ASHRAE: t_mean = t_peak − range/2. Desert sites (Riyadh, Jodhpur)
-                need 30–38°F here — hardcoded 20°F understates cooling load by 5–15%.
               </p>
             </div>
 
             <hr className="border-slate-200 mb-5" />
 
-            {/* DB / WB / RH — project brief reference only */}
+            {/* Project brief reference */}
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-3">
               Project brief reference only
               <span className="block font-normal normal-case mt-0.5">
@@ -198,17 +197,27 @@ export default function ProjectDetails() {
           </div>
         </div>
 
-        {/* ── 3. System Design Parameters ── */}
+        {/* ── 3. Default System Design Parameters ── */}
         <div className="lg:col-span-8">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-bold text-gray-800 flex items-center mb-6 border-b pb-2">
+            <h3 className="text-lg font-bold text-gray-800 flex items-center mb-1 border-b pb-2">
               <span className="bg-amber-100 text-amber-700 w-8 h-8 flex items-center justify-center rounded-full mr-3 text-sm">3</span>
-              System Design Parameters
+              Default System Design Parameters
             </h3>
-            <p className="text-xs text-gray-500 mb-6">
+            <p className="text-xs text-gray-500 mb-1 mt-2">
               These values drive all load calculations across every room.
               Changes update results instantly.
             </p>
+            {/* ADP scope note */}
+            <div className="mb-5 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+              <p className="text-[10px] text-blue-700 leading-relaxed">
+                <strong>ADP and Bypass Factor</strong> set here are project-level defaults.
+                Each AHU can override ADP individually in the AHU Config tab
+                (manual value or calculated mode). The priority chain is:
+                AHU calculated → AHU manual → project default below.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <NumberControl
                 label="Safety Factor"
@@ -218,8 +227,28 @@ export default function ProjectDetails() {
                 min={0}
                 max={100}
               />
+              {/*
+                SA Duct Heat Gain & Leak Loss — ASHRAE HOF 2021 Ch.18 §17.2
+                Applied ADDITIVELY with Safety Factor to RSH → ERSH.
+                Combined multiplier = 1 + (safety + duct) / 100 (matches Excel row 80).
+                Typical: 5% for insulated duct < 30m; 10% for long/uninsulated runs.
+                Set 0 for exposed in-room air handlers (no duct loss).
+              */}
               <NumberControl
-                label="Apparatus Dew Point (ADP)"
+                label="SA Duct Heat Gain"
+                value={systemDesign.ductHeatGain ?? 5}
+                onChange={(val) => handleSystemDesignChange('ductHeatGain', val)}
+                unit="%"
+                min={0}
+                max={15}
+              />
+              {/*
+                Default ADP — project-level fallback.
+                Per-AHU override is available in AHU Config.
+                Typical CHW at 6°C supply → ADP ≈ 44–55°F.
+              */}
+              <NumberControl
+                label="Default ADP (project fallback)"
                 value={systemDesign.adp}
                 onChange={(val) => handleSystemDesignChange('adp', val)}
                 unit="°F"
@@ -227,7 +256,7 @@ export default function ProjectDetails() {
                 max={65}
               />
               <NumberControl
-                label="Bypass Factor (BF)"
+                label="Default Bypass Factor (BF)"
                 value={systemDesign.bypassFactor}
                 onChange={(val) => handleSystemDesignChange('bypassFactor', val)}
                 unit="—"
@@ -243,19 +272,6 @@ export default function ProjectDetails() {
                 min={0}
                 max={15}
               />
-              {/*
-                Return fan heat — separate from supply fan heat.
-                Supply fan heat (above) is added to room load downstream of the coil
-                (draw-through). Return fan heat is added upstream of the coil and
-                increases coil load. Typical values: 2–5% of supply fan heat for
-                systems with a small return fan; 10–20% for balanced supply/return fans.
-                Default 5% is a conservative estimate for a cleanroom recirculation AHU.
-
-                ⚠ PENDING: projectSlice.systemDesign.initialState must include
-                returnFanHeat: 5 and SYSTEM_DESIGN_BOUNDS must include a
-                returnFanHeat entry. rdsSelector must read systemDesign.returnFanHeat
-                instead of the hardcoded 0.02 multiplier.
-              */}
               <NumberControl
                 label="Return Fan Heat Allowance"
                 value={systemDesign.returnFanHeat ?? 5}
@@ -267,7 +283,7 @@ export default function ProjectDetails() {
             </div>
 
             {/* Live preview */}
-            <div className="mt-6 p-4 bg-amber-50 border border-amber-100 rounded-lg space-y-1">
+            <div className="mt-6 p-4 bg-amber-50 border border-amber-100 rounded-lg space-y-1.5">
               <p className="text-xs text-amber-800 font-medium">
                 Supply ΔT = <strong>{supplyDT.toFixed(1)} °F</strong>
                 <span className="text-amber-600 font-normal ml-1">
@@ -275,28 +291,26 @@ export default function ProjectDetails() {
                 </span>
               </p>
               <p className="text-xs text-amber-800 font-medium">
-                Safety multiplier = <strong>{safetyDisp}×</strong>
-                &nbsp;· Supply fan heat multiplier = <strong>{fanDisp}×</strong>
+                Combined ERSH multiplier = <strong>{combinedMult}×</strong>
+                <span className="text-amber-600 font-normal ml-1">
+                  = 1 + ({safetyPct}% safety + {ductPct}% duct) / 100
+                </span>
               </p>
-              {/*
-                Safety and fan heat are applied independently — not compounded.
-                Grand total = (ERSH + ERLH) × safetyMult × fanHeatMult.
-                Return fan heat is applied upstream of the coil and increases coilLoadBTU.
-              */}
-              <p className="text-[10px] text-amber-600 mt-1">
-                Safety factor applied to room loads only.
-                Supply fan heat is added after — not compounded with safety factor.
+              <p className="text-xs text-amber-800 font-medium">
+                Supply fan heat multiplier = <strong>{fanDisp}×</strong>
+              </p>
+              <p className="text-[10px] text-amber-600 mt-1 leading-relaxed">
+                Safety factor and duct heat gain are applied additively to room sensible load (ERSH).
+                Supply fan heat is added after — not compounded.
                 Return fan heat increases coil load (upstream of coil — affects CHW sizing).
+                ADP shown is the project default — individual AHUs may use a different value
+                (check AHU Config tab).
               </p>
-              <p className="text-[10px] text-amber-500 mt-1">
-                ΔT preview uses 72°F reference indoor temp (22.2°C).
-                Actual ΔT uses each room's designTemp.
-                {supplyDT <= 0 && (
-                  <span className="text-red-600 font-bold ml-2">
-                    ⚠ ADP ≥ indoor temp — supply air will be 0 CFM. Lower ADP.
-                  </span>
-                )}
-              </p>
+              {supplyDT <= 0 && (
+                <p className="text-[10px] text-red-600 font-bold mt-1">
+                  ⚠ Default ADP ≥ reference indoor temp — review AHU Config for per-AHU overrides.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -340,6 +354,12 @@ export default function ProjectDetails() {
                     ? Math.pow(1 - 6.8754e-6 * ambient.elevation, 5.2559)
                     : 1.0
                   ).toFixed(4)}
+                </span>
+              </li>
+              <li className="flex justify-between border-b border-gray-50 pb-2">
+                <span className="text-gray-500">ERSH multiplier</span>
+                <span className="font-bold text-amber-700 font-mono">
+                  {combinedMult}× ({safetyPct}%+{ductPct}%)
                 </span>
               </li>
               <li className="flex justify-between border-b border-gray-50 pb-2">

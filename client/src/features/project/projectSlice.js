@@ -21,8 +21,18 @@
  *                                       0 = use DIURNAL_RANGE_DEFAULTS by climate zone.
  *
  *   state.project.systemDesign.safetyFactor         → safety multiplier in seasonalLoads
+ *   state.project.systemDesign.ductHeatGain         → SA duct heat gain & leak loss %
+ *                                                      Applied ADDITIVELY with safetyFactor
+ *                                                      (matching Excel row 80 method).
+ *                                                      Combined multiplier = 1 + (safety + duct)/100
+ *                                                      Typical: 5% for insulated duct < 30m;
+ *                                                      10% for long or uninsulated runs.
  *   state.project.systemDesign.bypassFactor          → BF in airQuantities + psychroStatePoints
- *   state.project.systemDesign.adp                   → apparatus dew point in airQuantities + psychro
+ *   state.project.systemDesign.adp                   → PROJECT-LEVEL DEFAULT ADP (°F).
+ *                                                      This is the fallback when an AHU has no
+ *                                                      override set. Each AHU can override via
+ *                                                      ahu.adp / ahu.adpMode in AHU Config.
+ *                                                      Priority: AHU calculated > AHU manual > project default.
  *   state.project.systemDesign.adpMode               → 'manual' | 'calculated' — read by rdsSelector ADP chain
  *   state.project.systemDesign.fanHeat               → supply fan heat fraction in rdsSelector
  *   state.project.systemDesign.returnFanHeat         → return fan heat fraction in rdsSelector
@@ -40,11 +50,24 @@
  *   when ashrae.js constant names differ between versions.
  *
  *   DEFAULT_SAFETY_FACTOR_PCT  = 10  (%)  — ASHRAE allows 5–15%; 10% is common practice
+ *   DEFAULT_DUCT_HEAT_GAIN_PCT = 5   (%)  — SA duct heat gain & leak loss; ASHRAE HOF Ch.18
  *   DEFAULT_BYPASS_FACTOR      = 0.10     — typical for chilled-water AHUs; use 0.08–0.12
  *   DEFAULT_ADP                = 55  (°F) — CHW coil leaving air at ~13°C; DX: 45–50°F
  *   DEFAULT_FAN_HEAT_PCT       = 5   (%)  — supply fan heat as % of sensible room load
  *   DEFAULT_RETURN_FAN_HEAT    = 5   (%)  — return fan heat as % of supply fan heat
  *   DEFAULT_HUMID_TARGET       = 45  (%)  — fallback winter humidification RH
+ *
+ * ── ADP SCOPE — PROJECT vs PER-AHU ───────────────────────────────────────────
+ *
+ *   Project ADP is the DEFAULT — applied to all AHUs that have no override.
+ *   Per-AHU override lives in ahuSlice (ahu.adp, ahu.adpMode).
+ *   Priority chain (most specific wins):
+ *     1. ahuAdpMode = 'calculated' → calculateAdpFromLoads()
+ *     2. ahu.adp > 0               → per-AHU manual override
+ *     3. systemDesign.adp          → this field (project default)
+ *     4. 55°F hardcoded fallback
+ *   Consequence: the project-level ADP field should stay — it is the base
+ *   assumption for all AHUs that are not individually configured.
  *
  * ── AMBIENT FIELDS NOTE ────────────────────────────────────────────────────────
  *
@@ -58,46 +81,42 @@
  *   realistic ranges. String fields (adpMode) bypass numeric parsing entirely.
  *   Out-of-bounds numeric values are clamped silently with a console.warn.
  *
- * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ * ── CHANGELOG v2.4 ────────────────────────────────────────────────────────────
  *
- *   BUG-SLICE-06 — updateSystemDesign: string fields bypass parseFloat.
+ *   ductHeatGain added to systemDesign.
  *
- *     Previous code applied parseFloat(value) universally to all systemDesign
- *     fields. For string fields like adpMode:
- *       parseFloat('calculated') = NaN
- *       safe = isNaN(NaN) ? (state.systemDesign['adpMode'] ?? 0) : NaN
- *            = current value ('manual')     ← NOT the new value
- *       state.systemDesign['adpMode'] = 'manual'   ← writes old value back
+ *     Excel row 80 applies SA duct heat gain & leak loss as a separate %
+ *     additive to the safety factor on RSH → ERSH. The app previously only
+ *     applied safetyFactor, leaving out the duct gain entirely. For a 5%
+ *     duct gain + 10% safety, Excel gives 1.15× while the app was giving 1.10×
+ *     — approximately 5% understatement of ERSH for every room.
  *
- *     adpMode was permanently stuck at 'manual' regardless of UI dispatch.
+ *     Applied additively with safetyFactor in seasonalLoads.js:
+ *       safetyMult = 1 + (safetyFactor + ductHeatGain) / 100
+ *     This matches the Excel additive method (not multiplicative).
  *
- *     Fix: fields not in SYSTEM_DESIGN_BOUNDS (no numeric bounds defined)
- *     are treated as string fields and written directly without parseFloat.
- *
- * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
- *
- *   BUG-SLICE-05 — updateSystemDesign: adp < 38°F now triggers a warning.
- *
- *     Standard CHW coils achieve ADP 44–55°F. Below 38°F requires DX or glycol.
- *     A data-entry error (e.g. 32 instead of 52) halves thermalCFM, undersizing
- *     the AHU by up to 50%. A warning (not a clamp) fires for 32–37°F.
+ *     Default 5% per ASHRAE HOF 2021 Ch.18 §17.2 (typical insulated duct).
+ *     Range: 0–15%. Set 0 to disable (for exposed in-room air handlers).
  *
  * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
  *   returnFanHeat added to systemDesign.
  *
- *     The previous hardcoded 0.02 multiplier in rdsSelector (returnFanHeat =
- *     supplyFanHeat × 2%) was non-configurable and likely too conservative for
- *     most systems (typical return fans are 10–20% of supply fan power).
- *     Now exposed as a project-level input (0–25%) defaulting to 5%.
- *     Return fan heat is applied upstream of the cooling coil — it increases
- *     coilLoadBTU and therefore CHW pipe sizing.
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-SLICE-06 — updateSystemDesign: string fields bypass parseFloat.
+ *     adpMode was permanently stuck at 'manual' regardless of UI dispatch.
+ *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-SLICE-05 — updateSystemDesign: adp < 38°F now triggers a warning.
  */
 
 import { createSlice } from '@reduxjs/toolkit';
 
 // ── Inlined system design defaults ───────────────────────────────────────────
 const DEFAULT_SAFETY_FACTOR_PCT  = 10;    // %
+const DEFAULT_DUCT_HEAT_GAIN_PCT = 5;     // % — SA duct heat gain & leak loss
 const DEFAULT_BYPASS_FACTOR      = 0.10;  // dimensionless
 const DEFAULT_ADP                = 55;    // °F
 const DEFAULT_FAN_HEAT_PCT       = 5;     // % of sensible room load
@@ -110,6 +129,7 @@ const DEFAULT_HUMID_TARGET       = 45;    // %RH — fallback when room.designRH
 // bypass parseFloat, writing the value directly.
 const SYSTEM_DESIGN_BOUNDS = {
   safetyFactor:         { min: 0,    max: 50   },
+  ductHeatGain:         { min: 0,    max: 15   },  // % — SA duct heat gain & leak
   bypassFactor:         { min: 0.01, max: 0.30 },
   adp:                  { min: 32,   max: 65   },  // °F — hard lower = freezing point
   fanHeat:              { min: 0,    max: 20   },
@@ -150,11 +170,12 @@ const initialState = {
 
   systemDesign: {
     safetyFactor:         DEFAULT_SAFETY_FACTOR_PCT,
+    ductHeatGain:         DEFAULT_DUCT_HEAT_GAIN_PCT,
     bypassFactor:         DEFAULT_BYPASS_FACTOR,
     adp:                  DEFAULT_ADP,
-    adpMode:              'manual',               // 'manual' | 'calculated' — string field, no bounds
+    adpMode:              'manual',
     fanHeat:              DEFAULT_FAN_HEAT_PCT,
-    returnFanHeat:        DEFAULT_RETURN_FAN_HEAT, // % of supply fan heat; applied upstream of coil
+    returnFanHeat:        DEFAULT_RETURN_FAN_HEAT,
     humidificationTarget: DEFAULT_HUMID_TARGET,
   },
 };
@@ -239,12 +260,6 @@ const projectSlice = createSlice({
         );
       }
 
-      // Warn when ADP is below typical CHW coil range (38–55°F).
-      // Hard lower bound (32°F) is retained — ADP cannot be below the freezing
-      // point on a standard coil without icing. The warning fires for 32–37°F,
-      // which requires DX refrigerant or glycol — legitimate but rare.
-      // An accidental low ADP (e.g. 32 instead of 52) halves thermalCFM,
-      // undersizing the AHU by up to 50% for typical room conditions.
       if (field === 'adp' && clamped < 38) {
         console.warn(
           `updateSystemDesign: adp = ${clamped}°F is below the typical chilled-water ` +
@@ -272,17 +287,18 @@ export default projectSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
-export const selectProjectInfo   = (state) => state.project.info;
-export const selectAmbient       = (state) => state.project.ambient;
-export const selectSystemDesign  = (state) => state.project.systemDesign;
+export const selectProjectInfo    = (state) => state.project.info;
+export const selectAmbient        = (state) => state.project.ambient;
+export const selectSystemDesign   = (state) => state.project.systemDesign;
 
-export const selectElevation     = (state) => state.project.ambient.elevation;
-export const selectLatitude      = (state) => state.project.ambient.latitude;
-export const selectDailyRange    = (state) => state.project.ambient.dailyRange;
-export const selectSafetyFactor  = (state) => state.project.systemDesign.safetyFactor;
-export const selectBypassFactor  = (state) => state.project.systemDesign.bypassFactor;
-export const selectAdp           = (state) => state.project.systemDesign.adp;
-export const selectFanHeat       = (state) => state.project.systemDesign.fanHeat;
-export const selectReturnFanHeat = (state) => state.project.systemDesign.returnFanHeat;
-export const selectHumidTarget   = (state) => state.project.systemDesign.humidificationTarget;
-export const selectIndustry      = (state) => state.project.info.industry;
+export const selectElevation      = (state) => state.project.ambient.elevation;
+export const selectLatitude       = (state) => state.project.ambient.latitude;
+export const selectDailyRange     = (state) => state.project.ambient.dailyRange;
+export const selectSafetyFactor   = (state) => state.project.systemDesign.safetyFactor;
+export const selectDuctHeatGain   = (state) => state.project.systemDesign.ductHeatGain;
+export const selectBypassFactor   = (state) => state.project.systemDesign.bypassFactor;
+export const selectAdp            = (state) => state.project.systemDesign.adp;
+export const selectFanHeat        = (state) => state.project.systemDesign.fanHeat;
+export const selectReturnFanHeat  = (state) => state.project.systemDesign.returnFanHeat;
+export const selectHumidTarget    = (state) => state.project.systemDesign.humidificationTarget;
+export const selectIndustry       = (state) => state.project.info.industry;
