@@ -93,7 +93,6 @@ export default function RoomSidebar() {
           </span>
         </div>
       </div>
-
     </div>
   );
 }

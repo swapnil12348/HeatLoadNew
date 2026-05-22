@@ -2,20 +2,27 @@
 │   └── vite.svg
 └── src/
 │   └── app/
+│   │   └── rootReducer.js
 │   │   └── store.js
 │   └── assets/
 │   │   └── react.svg
 │   └── components/
 │   │   └── Layout/
 │   │   │   └── Header.jsx
+│   │   │   └── HeaderBadge.jsx
 │   │   │   └── RoomSidebar.jsx
+│   │   │   └── RoomSidebarItem.jsx
 │   │   │   └── TabNav.jsx
 │   │   └── UI/
 │   │   │   └── InputField.jsx
+│   │   │   └── InputGroup.jsx
 │   │   │   └── NumberControl.jsx
+│   │   │   └── StatCard.jsx
 │   └── constants/
 │   │   └── ashrae.js
 │   │   └── ashraeTables.js
+│   │   └── isoCleanroom.js
+│   │   └── ventilation.js
 │   └── features/
 │   │   └── ahu/
 │   │   │   └── ahuSlice.js
@@ -27,15 +34,36 @@
 │   │   └── project/
 │   │   │   └── projectSlice.js
 │   │   └── results/
+│   │   │   └── airQuantities.js
+│   │   │   └── heatingHumid.js
+│   │   │   └── outdoorAirLoad.js
+│   │   │   └── pipeSizing.js
+│   │   │   └── psychroStatePoints.js
 │   │   │   └── rdsSelector.js
+│   │   │   └── seasonalLoads.js
 │   │   └── room/
+│   │   │   └── AhuAssignment.jsx
 │   │   │   └── roomActions.js
 │   │   │   └── roomSlice.js
+│   └── hooks/
+│   │   └── useActiveRoom.js
+│   │   └── useNumberControl.js
+│   │   └── useProjectTotals.js
+│   │   └── useRdsRow.js
+│   │   └── useRoomSidebar.js
 │   └── pages/
 │   │   └── rds/
+│   │   │   └── sections/
+│   │   │   │   └── loadsSections.js
+│   │   │   │   └── psychroSections.js
+│   │   │   │   └── resultsSections.js
+│   │   │   │   └── setupSections.js
 │   │   │   └── RDSCellComponents.jsx
+│   │   │   └── RdsCellRenderer.jsx
 │   │   │   └── RDSConfig.js
+│   │   │   └── rdsFieldUtils.js
 │   │   │   └── RDSRow.jsx
+│   │   │   └── rdsSeasons.js
 │   │   │   └── RoomDetailPanel.jsx
 │   │   └── AHUConfig.jsx
 │   │   └── ClimateConfig.jsx
@@ -46,19 +74,22 @@
 │   │   └── ResultsPage.jsx
 │   │   └── RoomConfig.jsx
 │   └── utils/
+│   │   └── envelopeAggregator.js
 │   │   └── envelopeCalc.js
+│   │   └── envelopeHelpers.js
+│   │   └── glazingCalc.js
+│   │   └── isoValidation.js
 │   │   └── psychro.js
+│   │   └── psychroValidation.js
+│   │   └── units.js
 │   └── App.css
 │   └── App.jsx
 │   └── index.css
 │   └── main.jsx
-│   └── setupTests.js
-│   └── test-utils.jsx
 └── .gitignore
 └── eslint.config.js
 └── index.html
 └── package-lock.json
 └── package.json
-└── README.md
 └── vercel.json
 └── vite.config.js
