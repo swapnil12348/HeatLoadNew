@@ -1,5 +1,5 @@
 /**
- * isoCleanroom.js
+ * isoCleanroom.ts
  * ISO 14644-1:2015 cleanroom classification and air change requirements.
  *
  * CHANGELOG v2.1:
@@ -30,8 +30,54 @@
  *            SEMI S2-0200E, IEST-RP-CC012.2, ASHRAE HVAC Applications 2019 Ch.18
  */
 
+// ── Types & Interfaces ────────────────────────────────────────────────────────
+
+export type IsoClass = 
+  | 'ISO 1' | 'ISO 2' | 'ISO 3' | 'ISO 4' | 'ISO 5' 
+  | 'ISO 6' | 'ISO 7' | 'ISO 8' | 'ISO 9' 
+  | 'CNC' | 'Unclassified';
+
+export interface ParticleLimits {
+  '≥0.1µm': number | null;
+  '≥0.2µm': number | null;
+  '≥0.3µm': number | null;
+  '≥0.5µm': number | null;
+  '≥1µm': number | null;
+  '≥5µm': number | null;
+}
+
+export interface AcphRange {
+  min: number;
+  design: number;
+  max: number;
+  oaFraction: number;
+  flowType: string;
+  note: string;
+}
+
+export interface IsoClassDetails {
+  isoN: number | null;
+  label: string;
+  gmpGrade: string | null;
+  fedStd: string | null;
+  acph: AcphRange;
+  typicalUse: string[];
+  pressurePa: string;
+  tempRange: string;
+  rhRange: string;
+}
+
+export interface GmpGradeDetails {
+  isoAtRest: string;
+  isoInOp: string | null;
+  minAcph: number | null;
+  note: string;
+}
+
 // ── ISO 14644-1:2015 Particle Concentration Limits ───────────────────────────
-export const ISO_PARTICLE_LIMITS = {
+
+// Omitting 'CNC' and 'Unclassified' here as they don't have particle limits
+export const ISO_PARTICLE_LIMITS: Record<Exclude<IsoClass, 'CNC' | 'Unclassified'>, ParticleLimits> = {
   'ISO 1': { '≥0.1µm': 10,        '≥0.2µm': 2,       '≥0.3µm': null,    '≥0.5µm': null,     '≥1µm': null,    '≥5µm': null     },
   'ISO 2': { '≥0.1µm': 100,       '≥0.2µm': 24,      '≥0.3µm': 10,      '≥0.5µm': 4,        '≥1µm': null,    '≥5µm': null     },
   'ISO 3': { '≥0.1µm': 1000,      '≥0.2µm': 237,     '≥0.3µm': 102,     '≥0.5µm': 35,       '≥1µm': 8,       '≥5µm': null     },
@@ -44,7 +90,8 @@ export const ISO_PARTICLE_LIMITS = {
 };
 
 // ── ACPH Ranges ───────────────────────────────────────────────────────────────
-export const ACPH_RANGES = {
+
+export const ACPH_RANGES: Record<IsoClass, AcphRange> = {
   'ISO 1': {
     min:         600,
     design:      700,
@@ -139,7 +186,7 @@ export const ACPH_RANGES = {
 
 // ── Full ISO class data ───────────────────────────────────────────────────────
 
-export const ISO_CLASS_DATA = {
+export const ISO_CLASS_DATA: Record<IsoClass, IsoClassDetails> = {
 
   'ISO 1': {
     isoN:         1,
@@ -300,7 +347,7 @@ export const ISO_CLASS_DATA = {
 };
 
 // ── GMP Annex 1:2022 Grade Mapping ───────────────────────────────────────────
-export const GMP_GRADE_MAPPING = {
+export const GMP_GRADE_MAPPING: Record<string, GmpGradeDetails> = {
   'Grade A': {
     isoAtRest:   'ISO 5',
     isoInOp:     'ISO 5',
@@ -332,14 +379,16 @@ export const GMP_GRADE_MAPPING = {
 
 // ── Convenience accessors ─────────────────────────────────────────────────────
 
-export const getAcphDefaults = (isoClass) => {
-  if (isoClass && !ACPH_RANGES[isoClass]) {
+export const getAcphDefaults = (isoClass: string | null | undefined) => {
+  if (isoClass && !(isoClass as any in ACPH_RANGES)) {
     console.warn(
       `getAcphDefaults: unknown isoClass "${isoClass}". Falling back to "Unclassified". ` +
       `Valid keys: ${Object.keys(ACPH_RANGES).join(', ')}`
     );
   }
-  const range = ACPH_RANGES[isoClass] ?? ACPH_RANGES['Unclassified'];
+  const safeClass = (isoClass as IsoClass) || 'Unclassified';
+  const range = ACPH_RANGES[safeClass] ?? ACPH_RANGES['Unclassified'];
+  
   return {
     minAcph:     range.min,
     designAcph:  range.design,
@@ -347,14 +396,15 @@ export const getAcphDefaults = (isoClass) => {
   };
 };
 
-export const getIsoClassData = (isoClass) => {
-  if (isoClass && !ISO_CLASS_DATA[isoClass]) {
+export const getIsoClassData = (isoClass: string | null | undefined) => {
+  if (isoClass && !(isoClass as any in ISO_CLASS_DATA)) {
     console.warn(`getIsoClassData: unknown isoClass "${isoClass}". Falling back to "Unclassified".`);
   }
-  return ISO_CLASS_DATA[isoClass] ?? ISO_CLASS_DATA['Unclassified'];
+  const safeClass = (isoClass as IsoClass) || 'Unclassified';
+  return ISO_CLASS_DATA[safeClass] ?? ISO_CLASS_DATA['Unclassified'];
 };
 
-export const ISO_CLASS_OPTIONS = [
+export const ISO_CLASS_OPTIONS: IsoClass[] = [
   'ISO 1', 'ISO 2', 'ISO 3', 'ISO 4', 'ISO 5',
   'ISO 6', 'ISO 7', 'ISO 8', 'ISO 9', 'CNC', 'Unclassified',
 ];

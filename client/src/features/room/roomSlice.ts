@@ -1,5 +1,5 @@
 /**
- * roomSlice.js
+ * roomSlice.ts
  * Manages the list of conditioned rooms and the active room selection.
  *
  * State shape:
@@ -69,15 +69,16 @@
  *   Keep designRH default as 50 (a number). Never set it to null or undefined.
  */
 
-import { createSlice } from '@reduxjs/toolkit';
-import { ACPH_RANGES } from '../../constants/isoCleanroom';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { ACPH_RANGES, IsoClass } from '../../constants/isoCleanroom';
+import { Room, RoomState, RootState } from '../../utils/types';
 
 // ── ID generator ──────────────────────────────────────────────────────────────
-const generateRoomId = () =>
+const generateRoomId = (): string =>
   `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
 // ── Nested field setter ───────────────────────────────────────────────────────
-const setNestedValue = (obj, path, value) => {
+const setNestedValue = (obj: any, path: string, value: any) => {
   const keys = path.split('.');
   let cur = obj;
   for (let i = 0; i < keys.length - 1; i++) {
@@ -90,10 +91,8 @@ const setNestedValue = (obj, path, value) => {
 };
 
 // ── Temperature helpers ───────────────────────────────────────────────────────
-// Inlined to avoid circular imports from utils/units in the Redux slice.
-// units.js cToF() is the canonical version; keep these in sync.
-const cToF_inline = (c) => {
-  const n = parseFloat(c);
+const cToF_inline = (c: number | string): number | null => {
+  const n = parseFloat(String(c));
   return isNaN(n) ? null : parseFloat((n * 9 / 5 + 32).toFixed(1));
 };
 
@@ -103,8 +102,8 @@ const cToF_inline = (c) => {
  * Single source of truth for the default room shape.
  * designDB (°F) is derived from designTemp (°C) for psychroValidation.
  */
-const makeRoom = (id, index = 0, overrides = {}) => {
-  const base = {
+const makeRoom = (id: string, index: number = 0, overrides: Partial<Room> = {}): Room => {
+  const base: Room = {
     // ── Identity ──────────────────────────────────────────────────────────────
     id,
     name: `Room ${index + 1}`,
@@ -149,11 +148,10 @@ const makeRoom = (id, index = 0, overrides = {}) => {
     },
 
     // ── AHU assignment ────────────────────────────────────────────────────────
-    // rdsSelector reads assignedAhuIds[0] only — single AHU per room.
     assignedAhuIds: [],
   };
 
-  const merged = { ...base, ...overrides };
+  const merged = { ...base, ...overrides } as Room;
 
   // If the override included designTemp but not designDB, re-derive designDB.
   if (overrides.designTemp !== undefined && overrides.designDB === undefined) {
@@ -165,7 +163,7 @@ const makeRoom = (id, index = 0, overrides = {}) => {
 };
 
 // ── Initial state ─────────────────────────────────────────────────────────────
-const initialState = {
+const initialState: RoomState = {
   activeRoomId: 'room_default_1',
   list: [
     makeRoom('room_default_1', 0, {
@@ -194,19 +192,20 @@ const roomSlice = createSlice({
   initialState,
 
   reducers: {
-    setActiveRoom: (state, action) => {
+    setActiveRoom: (state, action: PayloadAction<string | null>) => {
       state.activeRoomId = action.payload;
     },
 
-    addRoom: (state, action) => {
+    addRoom: (state, action: PayloadAction<string | Partial<Room>>) => {
       const payload  = action.payload;
       const isLegacy = typeof payload === 'string';
       const id       = isLegacy ? payload : (payload.id ?? generateRoomId());
-      const overrides = isLegacy ? {} : (() => {
-        const o = { ...payload };
-        delete o.id;
-        return o;
-      })();
+      
+      let overrides: Partial<Room> = {};
+      if (!isLegacy && typeof payload === 'object') {
+        overrides = { ...payload };
+        delete overrides.id;
+      }
 
       const newRoom = makeRoom(id, state.list.length, overrides);
       state.list.push(newRoom);
@@ -216,12 +215,8 @@ const roomSlice = createSlice({
     /**
      * updateRoom
      * { id, field, value }  —  field supports dot-notation paths.
-     *
-     * When designTemp changes, designDB is updated automatically so
-     * psychroValidation always receives a valid °F value.
-     * Auto-derives floorArea and volume when geometry dimensions change.
      */
-    updateRoom: (state, action) => {
+    updateRoom: (state, action: PayloadAction<{ id: string; field: string; value: any }>) => {
       const { id, field, value } = action.payload;
       const room = state.list.find(r => r.id === id);
       if (!room) return;
@@ -229,16 +224,13 @@ const roomSlice = createSlice({
       setNestedValue(room, field, value);
 
       // Keep designDB (°F) in sync with designTemp (°C).
-      // Only update when designTemp changes — direct designDB edits are
-      // preserved as engineer overrides for special conditions.
-      // If value is '' or NaN, leave existing designDB rather than nulling it.
       if (field === 'designTemp') {
         const derivedDB = cToF_inline(value);
         if (derivedDB !== null) room.designDB = derivedDB;
       }
 
       if (field === 'classInOp') {
-        const acph = ACPH_RANGES[value];
+        const acph = ACPH_RANGES[value as IsoClass];
         if (acph) {
           room.minAcph    = acph.min;
           room.designAcph = acph.design;
@@ -246,9 +238,9 @@ const roomSlice = createSlice({
       }
 
       // Keep derived geometry consistent
-      const l = parseFloat(room.length)    || 0;
-      const w = parseFloat(room.width)     || 0;
-      const h = parseFloat(room.height)    || 0;
+      const l = parseFloat(String(room.length))    || 0;
+      const w = parseFloat(String(room.width))     || 0;
+      const h = parseFloat(String(room.height))    || 0;
 
       if (field === 'length' || field === 'width') {
         room.floorArea = parseFloat((l * w).toFixed(1));
@@ -258,19 +250,15 @@ const roomSlice = createSlice({
         room.volume = parseFloat((room.floorArea * h).toFixed(1));
       }
       if (field === 'floorArea') {
-        room.volume = parseFloat((parseFloat(value) * h).toFixed(1));
+        room.volume = parseFloat((parseFloat(String(value)) * h).toFixed(1));
       }
     },
 
     /**
      * setRoomAhu
      * { roomId, ahuId }  —  assigns a single AHU to a room (radio-button model).
-     * Pass ahuId: null to clear the assignment.
-     *
-     * This is the correct action for all UI AHU assignment. rdsSelector reads
-     * assignedAhuIds[0] only — multi-AHU per room is not supported.
      */
-    setRoomAhu: (state, action) => {
+    setRoomAhu: (state, action: PayloadAction<{ roomId: string; ahuId: string | null }>) => {
       const { roomId, ahuId } = action.payload;
       const room = state.list.find(r => r.id === roomId);
       if (room) room.assignedAhuIds = ahuId ? [ahuId] : [];
@@ -279,16 +267,8 @@ const roomSlice = createSlice({
     /**
      * toggleRoomAhu
      * ⚠️  DEPRECATED — DO NOT USE IN UI CODE.
-     *
-     * This reducer toggles AHU membership in assignedAhuIds, which can create
-     * multi-AHU-per-room state. rdsSelector reads assignedAhuIds[0] ONLY —
-     * any additional AHU IDs are silently ignored.
-     *
-     * AhuAssignment.jsx already uses setRoomAhu (radio-button model) correctly.
-     * This reducer is retained only to avoid breaking any legacy dispatch calls
-     * that may exist outside the audited UI files. New code must use setRoomAhu.
      */
-    toggleRoomAhu: (state, action) => {
+    toggleRoomAhu: (state, action: PayloadAction<{ roomId: string; ahuId: string }>) => {
       const { roomId, ahuId } = action.payload;
       const room = state.list.find(r => r.id === roomId);
       if (!room) return;
@@ -303,10 +283,8 @@ const roomSlice = createSlice({
     /**
      * deleteRoom
      * Never removes the last room.
-     * Use deleteRoomWithCleanup() thunk from roomActions.js — it also fires
-     * envelopeSlice.removeRoomEnvelope in the same transaction.
      */
-    deleteRoom: (state, action) => {
+    deleteRoom: (state, action: PayloadAction<string>) => {
       if (state.list.length <= 1) return;
       const id   = action.payload;
       state.list = state.list.filter(r => r.id !== id);
@@ -330,14 +308,14 @@ export default roomSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
-export const selectAllRooms = (state) => state.room.list;
+export const selectAllRooms = (state: RootState) => state.room.list;
 
-export const selectActiveRoomId = (state) => state.room.activeRoomId;
+export const selectActiveRoomId = (state: RootState) => state.room.activeRoomId;
 
-export const selectActiveRoom = (state) =>
+export const selectActiveRoom = (state: RootState) =>
   state.room.list.find(r => r.id === state.room.activeRoomId) ??
   state.room.list[0] ??
   null;
 
-export const selectRoomById = (state, id) =>
+export const selectRoomById = (state: RootState, id: string) =>
   state.room.list.find(r => r.id === id) ?? null;
