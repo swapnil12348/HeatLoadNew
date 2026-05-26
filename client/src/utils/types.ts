@@ -91,6 +91,72 @@ export interface ProjectState {
   systemDesign: SystemDesign;
 }
 
+// ── Envelope Types ──────────────────────────────────────────────
+export interface EnvelopeElement {
+  id: string;
+  label?: string;
+  orientation?: string;
+  construction?: string;
+  uPreset?: string;
+  uValue?: number;
+  area?: number;
+  scPreset?: string;
+  shgc?: number;
+  sc?: number;
+  tAdj?: number;
+  tAdjSummer?: number;
+  tAdjWinter?: number;
+  [key: string]: any;
+}
+
+export interface InternalPeople {
+  count: number;
+  sensiblePerPerson: number;
+  latentPerPerson: number;
+}
+
+export interface InternalLights {
+  wattsPerSqFt: number;
+  useSchedule: number;
+  ballastFactor: number;
+}
+
+export interface InternalEquipment {
+  kw: number;
+  sensiblePct: number;
+  latentPct: number;
+  diversityFactor: number;
+}
+
+export interface RoomInfiltration {
+  method: string;
+  achValue: number;
+  cfmValue: number;
+  doors: any[];
+}
+
+export interface RoomEnvelope {
+  elements: {
+    walls: EnvelopeElement[];
+    roofs: EnvelopeElement[];
+    glass: EnvelopeElement[];
+    skylights: EnvelopeElement[];
+    partitions: EnvelopeElement[];
+    floors: EnvelopeElement[];
+    [key: string]: EnvelopeElement[];
+  };
+  internalLoads: {
+    people: InternalPeople;
+    lights: InternalLights;
+    equipment: InternalEquipment;
+  };
+  infiltration: RoomInfiltration;
+}
+
+export interface EnvelopeState {
+  byRoomId: Record<string, RoomEnvelope>;
+}
+
 // Remember to update your RootState at the bottom of types.ts:
 // export interface RootState {
 //   room: RoomState;

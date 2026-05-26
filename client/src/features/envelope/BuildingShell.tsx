@@ -217,7 +217,7 @@ const RoofRow = ({ element, climate, tRoom, onUpdate, onRemove }: RowProps) => {
   const gains = SEASONS.map(s => calcRoofGain(element, climate, tRoom, s));
   return (
     <tr className="group hover:bg-red-50/30 border-b border-gray-100">
-      <td className="px-2 py-2 min-w-[130px]">
+      <td className="px-2 py-2 min-w-32.5">
         <CellInput type="text" value={element.label ?? ''} onChange={e => onUpdate('label', e.target.value)} />
       </td>
       <td className="px-2 py-2 w-36" colSpan={2}>

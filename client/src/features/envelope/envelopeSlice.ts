@@ -1,5 +1,5 @@
 /**
- * envelopeSlice.js
+ * envelopeSlice.ts
  * Manages per-room envelope data: building elements (walls, glazing, etc.)
  * and internal loads (people, lights, equipment, infiltration).
  *
@@ -61,10 +61,11 @@
  *   encodes this. Only unpressurized rooms should have non-zero achValue.
  */
 
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { RoomEnvelope, EnvelopeState, RootState, EnvelopeElement, InternalPeople, InternalLights, InternalEquipment, RoomInfiltration } from '../../utils/types';
 
 // ── Default envelope factory ──────────────────────────────────────────────────
-const createRoomEnvelope = () => ({
+const createRoomEnvelope = (): RoomEnvelope => ({
   elements: {
     walls:      [],
     roofs:      [],
@@ -104,13 +105,13 @@ const createRoomEnvelope = () => ({
 // ── ISO classification guard ──────────────────────────────────────────────────
 // Returns true for any room with an ISO cleanroom classification.
 // Used by initializeRoom to enforce achValue = 0 for classified rooms.
-const isIsoClassified = (room) => {
+const isIsoClassified = (room: any): boolean => {
   const cls = room?.classInOp ?? '';
   return cls !== '' && cls !== 'Unclassified';
 };
 
 // ── Initial state ─────────────────────────────────────────────────────────────
-const initialState = {
+const initialState: EnvelopeState = {
   byRoomId: {
     room_default_1: createRoomEnvelope(),
   },
@@ -131,10 +132,10 @@ const envelopeSlice = createSlice({
      *
      * Guards against re-initialization — existing envelope is never overwritten.
      */
-    initializeRoom: (state, action) => {
+    initializeRoom: (state, action: PayloadAction<string | { id: string; room: any }>) => {
       const isLegacy = typeof action.payload === 'string';
-      const roomId   = isLegacy ? action.payload : action.payload.id;
-      const room     = isLegacy ? null            : action.payload.room;
+      const roomId   = isLegacy ? (action.payload as string) : (action.payload as { id: string }).id;
+      const room     = isLegacy ? null : (action.payload as { room: any }).room;
 
       if (state.byRoomId[roomId]) return;
 
@@ -155,7 +156,7 @@ const envelopeSlice = createSlice({
      * Append a new element to a category array.
      * { roomId, category, element }  —  category: 'walls' | 'roofs' | 'glass' | etc.
      */
-    addEnvelopeElement: (state, action) => {
+    addEnvelopeElement: (state, action: PayloadAction<{ roomId: string; category: string; element: any }>) => {
       const { roomId, category, element } = action.payload;
       if (!state.byRoomId[roomId]) {
         state.byRoomId[roomId] = createRoomEnvelope();
@@ -171,11 +172,11 @@ const envelopeSlice = createSlice({
      * Edit a single field on an existing element.
      * { roomId, category, id, field, value }
      */
-    updateEnvelopeElement: (state, action) => {
+    updateEnvelopeElement: (state, action: PayloadAction<{ roomId: string; category: string; id: string; field: string; value: any }>) => {
       const { roomId, category, id, field, value } = action.payload;
       const roomEnv = state.byRoomId[roomId];
       if (!roomEnv) return;
-      const item = roomEnv.elements[category]?.find(e => e.id === id);
+      const item = roomEnv.elements[category]?.find((e: EnvelopeElement) => e.id === id);
       if (item) item[field] = value;
     },
 
@@ -183,11 +184,11 @@ const envelopeSlice = createSlice({
      * removeEnvelopeElement
      * { roomId, category, id }
      */
-    removeEnvelopeElement: (state, action) => {
+    removeEnvelopeElement: (state, action: PayloadAction<{ roomId: string; category: string; id: string }>) => {
       const { roomId, category, id } = action.payload;
       const roomEnv = state.byRoomId[roomId];
       if (!roomEnv) return;
-      roomEnv.elements[category] = roomEnv.elements[category].filter(e => e.id !== id);
+      roomEnv.elements[category] = roomEnv.elements[category].filter((e: EnvelopeElement) => e.id !== id);
     },
 
     /**
@@ -198,7 +199,7 @@ const envelopeSlice = createSlice({
      * Uses Object.assign (merge) so callers can update a single field
      * without passing the entire sub-object.
      */
-    updateInternalLoad: (state, action) => {
+    updateInternalLoad: (state, action: PayloadAction<{ roomId: string; type: 'people' | 'lights' | 'equipment'; data: any }>) => {
       const { roomId, type, data } = action.payload;
       if (!state.byRoomId[roomId]) {
         state.byRoomId[roomId] = createRoomEnvelope();
@@ -212,12 +213,12 @@ const envelopeSlice = createSlice({
      * Update a single field on the infiltration object.
      * { roomId, field, value }
      */
-    updateInfiltration: (state, action) => {
+    updateInfiltration: (state, action: PayloadAction<{ roomId: string; field: keyof RoomInfiltration; value: any }>) => {
       const { roomId, field, value } = action.payload;
       if (!state.byRoomId[roomId]) {
         state.byRoomId[roomId] = createRoomEnvelope();
       }
-      state.byRoomId[roomId].infiltration[field] = value;
+      (state.byRoomId[roomId].infiltration as any)[field] = value;
     },
 
     /**
@@ -226,7 +227,7 @@ const envelopeSlice = createSlice({
      * Do not call from UI directly — always go through the thunk so both
      * roomSlice and envelopeSlice stay in sync.
      */
-    removeRoomEnvelope: (state, action) => {
+    removeRoomEnvelope: (state, action: PayloadAction<string>) => {
       delete state.byRoomId[action.payload];
     },
   },
@@ -246,12 +247,13 @@ export default envelopeSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
-export const selectEnvelopeByRoomId = (state, roomId) =>
+export const selectEnvelopeByRoomId = (state: RootState, roomId: string): RoomEnvelope =>
   state.envelope.byRoomId[roomId] ?? createRoomEnvelope();
 
-export const selectActiveEnvelope = (state) => {
+export const selectActiveEnvelope = (state: RootState): RoomEnvelope => {
   const id = state.room.activeRoomId;
+  if (!id) return createRoomEnvelope();
   return state.envelope.byRoomId[id] ?? createRoomEnvelope();
 };
 
-export const selectAllEnvelopes = (state) => state.envelope.byRoomId;
+export const selectAllEnvelopes = (state: RootState) => state.envelope.byRoomId;
