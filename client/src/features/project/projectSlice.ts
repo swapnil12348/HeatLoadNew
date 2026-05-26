@@ -1,5 +1,5 @@
 /**
- * projectSlice.js
+ * projectSlice.ts
  * Project-level identity, site reference data, and system design parameters.
  * These fields drive every room calculation downstream via rdsSelector.
  *
@@ -112,7 +112,8 @@
  *   BUG-SLICE-05 — updateSystemDesign: adp < 38°F now triggers a warning.
  */
 
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { ProjectState, RootState } from '../../utils/types';
 
 // ── Inlined system design defaults ───────────────────────────────────────────
 const DEFAULT_SAFETY_FACTOR_PCT  = 10;    // %
@@ -124,10 +125,13 @@ const DEFAULT_RETURN_FAN_HEAT    = 5;     // % of supply fan heat
 const DEFAULT_HUMID_TARGET       = 45;    // %RH — fallback when room.designRH unset
 
 // ── Bounds definitions ────────────────────────────────────────────────────────
+// Define a type for our boundary objects so TS knows they have min and max
+type NumericBounds = Record<string, { min: number; max: number }>;
+
 // Only NUMERIC fields appear here. String fields (adpMode) are intentionally
 // absent — updateSystemDesign uses this absence to identify string fields and
 // bypass parseFloat, writing the value directly.
-const SYSTEM_DESIGN_BOUNDS = {
+const SYSTEM_DESIGN_BOUNDS: NumericBounds = {
   safetyFactor:         { min: 0,    max: 50   },
   ductHeatGain:         { min: 0,    max: 15   },  // % — SA duct heat gain & leak
   bypassFactor:         { min: 0.01, max: 0.30 },
@@ -137,7 +141,7 @@ const SYSTEM_DESIGN_BOUNDS = {
   humidificationTarget: { min: 0,    max: 95   },
 };
 
-const AMBIENT_BOUNDS = {
+const AMBIENT_BOUNDS: NumericBounds = {
   elevation:        { min: -1400, max: 30000 },
   latitude:         { min: -90,   max: 90    },
   dailyRange:       { min: 0,     max: 60    },
@@ -146,10 +150,11 @@ const AMBIENT_BOUNDS = {
   relativeHumidity: { min: 0,     max: 100   },
 };
 
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const clamp = (value: number, min: number, max: number): number => 
+  Math.min(max, Math.max(min, value));
 
 // ── Initial state ─────────────────────────────────────────────────────────────
-const initialState = {
+const initialState: ProjectState = {
   info: {
     projectName:       '',
     projectLocation:   '',
@@ -186,23 +191,23 @@ const projectSlice = createSlice({
   initialState,
 
   reducers: {
-    updateProjectInfo: (state, action) => {
+    updateProjectInfo: (state, action: PayloadAction<{ field: string; value: any }>) => {
       const { field, value } = action.payload;
       if (!(field in state.info)) {
         console.warn(`updateProjectInfo: unknown field "${field}"`);
         return;
       }
-      state.info[field] = typeof value === 'string' ? value.trim() : value;
+      (state.info as any)[field] = typeof value === 'string' ? value.trim() : value;
     },
 
-    updateAmbient: (state, action) => {
+    updateAmbient: (state, action: PayloadAction<{ field: string; value: any }>) => {
       const { field, value } = action.payload;
       if (!(field in state.ambient)) {
         console.warn(`updateAmbient: unknown field "${field}"`);
         return;
       }
       const parsed = parseFloat(value);
-      const safe   = isNaN(parsed) ? (state.ambient[field] ?? 0) : parsed;
+      const safe   = isNaN(parsed) ? ((state.ambient as any)[field] ?? 0) : parsed;
       const bounds = AMBIENT_BOUNDS[field];
       if (bounds) {
         const clamped = clamp(safe, bounds.min, bounds.max);
@@ -211,9 +216,9 @@ const projectSlice = createSlice({
             `updateAmbient: "${field}" = ${safe} clamped to [${bounds.min}, ${bounds.max}] → ${clamped}`
           );
         }
-        state.ambient[field] = clamped;
+        (state.ambient as any)[field] = clamped;
       } else {
-        state.ambient[field] = safe;
+        (state.ambient as any)[field] = safe;
       }
     },
 
@@ -227,7 +232,7 @@ const projectSlice = createSlice({
      * Numeric fields: parsed, clamped to SYSTEM_DESIGN_BOUNDS, and field-specific
      *   warnings applied (adp below CHW range, safetyFactor = 0).
      */
-    updateSystemDesign: (state, action) => {
+    updateSystemDesign: (state, action: PayloadAction<{ field: string; value: any }>) => {
       const { field, value } = action.payload;
       if (!(field in state.systemDesign)) {
         console.warn(`updateSystemDesign: unknown field "${field}"`);
@@ -239,12 +244,12 @@ const projectSlice = createSlice({
       // String fields have no entry in SYSTEM_DESIGN_BOUNDS.
       // Bypass numeric parsing entirely — write the value directly.
       if (!bounds) {
-        state.systemDesign[field] = value;
+        (state.systemDesign as any)[field] = value;
         return;
       }
 
       const parsed  = parseFloat(value);
-      const safe    = isNaN(parsed) ? (state.systemDesign[field] ?? 0) : parsed;
+      const safe    = isNaN(parsed) ? ((state.systemDesign as any)[field] ?? 0) : parsed;
       const clamped = clamp(safe, bounds.min, bounds.max);
 
       if (clamped !== safe) {
@@ -269,7 +274,7 @@ const projectSlice = createSlice({
         );
       }
 
-      state.systemDesign[field] = clamped;
+      (state.systemDesign as any)[field] = clamped;
     },
 
     resetProject: () => initialState,
@@ -287,18 +292,18 @@ export default projectSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
-export const selectProjectInfo    = (state) => state.project.info;
-export const selectAmbient        = (state) => state.project.ambient;
-export const selectSystemDesign   = (state) => state.project.systemDesign;
+export const selectProjectInfo    = (state: RootState) => state.project.info;
+export const selectAmbient        = (state: RootState) => state.project.ambient;
+export const selectSystemDesign   = (state: RootState) => state.project.systemDesign;
 
-export const selectElevation      = (state) => state.project.ambient.elevation;
-export const selectLatitude       = (state) => state.project.ambient.latitude;
-export const selectDailyRange     = (state) => state.project.ambient.dailyRange;
-export const selectSafetyFactor   = (state) => state.project.systemDesign.safetyFactor;
-export const selectDuctHeatGain   = (state) => state.project.systemDesign.ductHeatGain;
-export const selectBypassFactor   = (state) => state.project.systemDesign.bypassFactor;
-export const selectAdp            = (state) => state.project.systemDesign.adp;
-export const selectFanHeat        = (state) => state.project.systemDesign.fanHeat;
-export const selectReturnFanHeat  = (state) => state.project.systemDesign.returnFanHeat;
-export const selectHumidTarget    = (state) => state.project.systemDesign.humidificationTarget;
-export const selectIndustry       = (state) => state.project.info.industry;
+export const selectElevation      = (state: RootState) => state.project.ambient.elevation;
+export const selectLatitude       = (state: RootState) => state.project.ambient.latitude;
+export const selectDailyRange     = (state: RootState) => state.project.ambient.dailyRange;
+export const selectSafetyFactor   = (state: RootState) => state.project.systemDesign.safetyFactor;
+export const selectDuctHeatGain   = (state: RootState) => state.project.systemDesign.ductHeatGain;
+export const selectBypassFactor   = (state: RootState) => state.project.systemDesign.bypassFactor;
+export const selectAdp            = (state: RootState) => state.project.systemDesign.adp;
+export const selectFanHeat        = (state: RootState) => state.project.systemDesign.fanHeat;
+export const selectReturnFanHeat  = (state: RootState) => state.project.systemDesign.returnFanHeat;
+export const selectHumidTarget    = (state: RootState) => state.project.systemDesign.humidificationTarget;
+export const selectIndustry       = (state: RootState) => state.project.info.industry;

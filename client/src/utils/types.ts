@@ -56,6 +56,48 @@ export interface AHU {
   notes: string;
 }
 
+export interface ProjectInfo {
+  projectName: string;
+  projectLocation: string;
+  customerName: string;
+  consultantName: string;
+  industry: string;
+  keyAccountManager: string;
+}
+
+export interface AmbientParams {
+  elevation: number;
+  latitude: number;
+  dailyRange: number;
+  dryBulbTemp: number;
+  wetBulbTemp: number;
+  relativeHumidity: number;
+}
+
+export interface SystemDesign {
+  safetyFactor: number;
+  ductHeatGain: number;
+  bypassFactor: number;
+  adp: number;
+  adpMode: 'manual' | 'calculated' | string;
+  fanHeat: number;
+  returnFanHeat: number;
+  humidificationTarget: number;
+}
+
+export interface ProjectState {
+  info: ProjectInfo;
+  ambient: AmbientParams;
+  systemDesign: SystemDesign;
+}
+
+// Remember to update your RootState at the bottom of types.ts:
+// export interface RootState {
+//   room: RoomState;
+//   ahu: AhuState;
+//   project: ProjectState;
+// }
+
 export interface AhuState {
   list: AHU[];
 }
@@ -71,4 +113,5 @@ export interface AhuState {
 export interface RootState {
   room: RoomState;
   ahu: AhuState;
+  project: ProjectState;
 }

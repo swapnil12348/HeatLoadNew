@@ -22,11 +22,11 @@
 │   │   └── constants/
 │   │   │   └── ashrae.js
 │   │   │   └── ashraeTables.js
-│   │   │   └── isoCleanroom.js
+│   │   │   └── isoCleanroom.ts
 │   │   │   └── ventilation.js
 │   │   └── features/
 │   │   │   └── ahu/
-│   │   │   │   └── ahuSlice.js
+│   │   │   │   └── ahuSlice.ts
 │   │   │   └── climate/
 │   │   │   │   └── climateSlice.js
 │   │   │   └── envelope/
@@ -45,7 +45,7 @@
 │   │   │   └── room/
 │   │   │   │   └── AhuAssignment.jsx
 │   │   │   │   └── roomActions.js
-│   │   │   │   └── roomSlice.js
+│   │   │   │   └── roomSlice.ts
 │   │   └── hooks/
 │   │   │   └── useActiveRoom.js
 │   │   │   └── useNumberControl.js
@@ -82,7 +82,8 @@
 │   │   │   └── isoValidation.js
 │   │   │   └── psychro.js
 │   │   │   └── psychroValidation.js
-│   │   │   └── units.js
+│   │   │   └── types.ts
+│   │   │   └── units.ts
 │   │   └── App.css
 │   │   └── App.jsx
 │   │   └── index.css
@@ -92,6 +93,8 @@
 │   └── index.html
 │   └── package-lock.json
 │   └── package.json
+│   └── tsconfig.json
+│   └── tsconfig.node.json
 │   └── vercel.json
 │   └── vite.config.js
 └── package-lock.json
