@@ -1,5 +1,5 @@
 /**
- * BuildingShell.jsx
+ * BuildingShell.tsx
  * Full ASHRAE CLTD/CLF envelope element editor.
  *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
@@ -28,13 +28,13 @@
  *     input is now the shgc field. SC is shown as a read-only reference.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, ChangeEvent } from 'react';
 import { useDispatch }           from 'react-redux';
 import {
   addEnvelopeElement,
   updateEnvelopeElement,
   removeEnvelopeElement,
-} from '../../features/envelope/envelopeSlice';
+} from './envelopeSlice';
 import {
   ORIENTATIONS,
   WALL_CONSTRUCTIONS,
@@ -53,9 +53,63 @@ import {
   calcSkylightGain,
 } from '../../utils/glazingCalc';
 
+// ── Types & Interfaces ───────────────────────────────────────────────────────
+
+interface EnvelopeElement {
+  id: string;
+  label?: string;
+  orientation?: string;
+  construction?: string;
+  uPreset?: string;
+  uValue?: number;
+  area?: number;
+  scPreset?: string;
+  shgc?: number;
+  sc?: number;
+  tAdj?: number;
+  tAdjSummer?: number;
+  tAdjWinter?: number;
+  [key: string]: any; // Catch-all for other dynamic properties
+}
+
+interface RowProps {
+  element: EnvelopeElement;
+  climate: any; // We use 'any' here temporarily until climate is fully integrated
+  tRoom: number;
+  onUpdate: (field: string, val: any) => void;
+  onRemove: () => void;
+  isSkylights?: boolean;
+}
+
+interface CellInputProps {
+  value: string | number | null;
+  onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  type?: string;
+  step?: string;
+  className?: string;
+}
+
+interface SelectOption {
+  value: string | number | readonly string[] | undefined | null;
+  label: string;
+}
+
+interface CellSelectProps {
+  value: string | number | null;
+  onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
+  options: (string | SelectOption)[];
+}
+
+interface BuildingShellProps {
+  roomId: string;
+  elements: Record<string, EnvelopeElement[]>;
+  climate: any;
+  tRoom: number;
+}
+
 // ── Seasons ──────────────────────────────────────────────────────────────────
 const SEASONS = ['summer', 'monsoon', 'winter'];
-const SEASON_COLORS = {
+const SEASON_COLORS: Record<string, string> = {
   summer:  'text-orange-600 bg-orange-50 border-orange-200',
   monsoon: 'text-sky-600    bg-sky-50    border-sky-200',
   winter:  'text-blue-600   bg-blue-50   border-blue-200',
@@ -73,7 +127,7 @@ const CATEGORIES = [
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const BtuBadge = ({ value }) => {
+const BtuBadge = ({ value }: { value: number }) => {
   const rounded = Math.round(value);
   const color   = rounded > 0
     ? 'text-red-600 bg-red-50 border-red-200'
@@ -85,7 +139,7 @@ const BtuBadge = ({ value }) => {
   );
 };
 
-const CellInput = ({ value, onChange, type = 'number', step = '0.01', className = '' }) => (
+const CellInput = ({ value, onChange, type = 'number', step = '0.01', className = '' }: CellInputProps) => (
   <input
     type={type}
     step={step}
@@ -95,7 +149,7 @@ const CellInput = ({ value, onChange, type = 'number', step = '0.01', className 
   />
 );
 
-const CellSelect = ({ value, onChange, options }) => (
+const CellSelect = ({ value, onChange, options }: CellSelectProps) => (
   <select
     value={value ?? ''}
     onChange={onChange}
@@ -104,50 +158,50 @@ const CellSelect = ({ value, onChange, options }) => (
     {options.map(opt =>
       typeof opt === 'string'
         ? <option key={opt} value={opt}>{opt}</option>
-        : <option key={opt.value} value={opt.value}>{opt.label}</option>
+        : <option key={String(opt.value)} value={String(opt.value ?? '')}>{opt.label}</option>
     )}
   </select>
 );
 
 // ── Per-category row renderers ───────────────────────────────────────────────
 
-const WallRow = ({ element, climate, tRoom, onUpdate, onRemove }) => {
+const WallRow = ({ element, climate, tRoom, onUpdate, onRemove }: RowProps) => {
   const gains = SEASONS.map(s => calcWallGain(element, climate, tRoom, s));
   return (
     <tr className="group hover:bg-orange-50/30 border-b border-gray-100">
       <td className="px-2 py-2 min-w-[130px]">
-        <CellInput type="text" value={element.label} onChange={e => onUpdate('label', e.target.value)} />
+        <CellInput type="text" value={element.label ?? ''} onChange={e => onUpdate('label', e.target.value)} />
       </td>
       <td className="px-2 py-2 w-20">
         <CellSelect
-          value={element.orientation}
+          value={element.orientation ?? ''}
           onChange={e => onUpdate('orientation', e.target.value)}
           options={ORIENTATIONS}
         />
       </td>
       <td className="px-2 py-2 w-24">
         <CellSelect
-          value={element.construction}
+          value={element.construction ?? ''}
           onChange={e => onUpdate('construction', e.target.value)}
           options={WALL_CONSTRUCTIONS}
         />
       </td>
       <td className="px-2 py-2 w-28">
         <CellSelect
-          value={element.uPreset}
+          value={element.uPreset ?? ''}
           onChange={e => {
             const preset = U_VALUE_PRESETS.walls.find(p => p.label === e.target.value);
             onUpdate('uPreset', e.target.value);
-            if (preset?.value !== null) onUpdate('uValue', preset.value);
+            if (preset?.value !== null && preset?.value !== undefined) onUpdate('uValue', preset.value);
           }}
           options={U_VALUE_PRESETS.walls.map(p => ({ value: p.label, label: p.label }))}
         />
       </td>
       <td className="px-2 py-2 w-16">
-        <CellInput value={element.uValue} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.uValue ?? ''} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
       </td>
       <td className="px-2 py-2 w-20">
-        <CellInput value={element.area} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.area ?? ''} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
       </td>
       {gains.map((g, i) => (
         <td key={i} className="px-2 py-2 text-center w-24"><BtuBadge value={g} /></td>
@@ -159,36 +213,36 @@ const WallRow = ({ element, climate, tRoom, onUpdate, onRemove }) => {
   );
 };
 
-const RoofRow = ({ element, climate, tRoom, onUpdate, onRemove }) => {
+const RoofRow = ({ element, climate, tRoom, onUpdate, onRemove }: RowProps) => {
   const gains = SEASONS.map(s => calcRoofGain(element, climate, tRoom, s));
   return (
     <tr className="group hover:bg-red-50/30 border-b border-gray-100">
       <td className="px-2 py-2 min-w-[130px]">
-        <CellInput type="text" value={element.label} onChange={e => onUpdate('label', e.target.value)} />
+        <CellInput type="text" value={element.label ?? ''} onChange={e => onUpdate('label', e.target.value)} />
       </td>
       <td className="px-2 py-2 w-36" colSpan={2}>
         <CellSelect
-          value={element.construction}
+          value={element.construction ?? ''}
           onChange={e => onUpdate('construction', e.target.value)}
           options={ROOF_CONSTRUCTIONS}
         />
       </td>
       <td className="px-2 py-2 w-28">
         <CellSelect
-          value={element.uPreset}
+          value={element.uPreset ?? ''}
           onChange={e => {
             const preset = U_VALUE_PRESETS.roofs.find(p => p.label === e.target.value);
             onUpdate('uPreset', e.target.value);
-            if (preset?.value !== null) onUpdate('uValue', preset.value);
+            if (preset?.value !== null && preset?.value !== undefined) onUpdate('uValue', preset.value);
           }}
           options={U_VALUE_PRESETS.roofs.map(p => ({ value: p.label, label: p.label }))}
         />
       </td>
       <td className="px-2 py-2 w-16">
-        <CellInput value={element.uValue} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.uValue ?? ''} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
       </td>
       <td className="px-2 py-2 w-20">
-        <CellInput value={element.area} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.area ?? ''} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
       </td>
       {gains.map((g, i) => (
         <td key={i} className="px-2 py-2 text-center w-24"><BtuBadge value={g} /></td>
@@ -200,30 +254,22 @@ const RoofRow = ({ element, climate, tRoom, onUpdate, onRemove }) => {
   );
 };
 
-/**
- * GlassRow / SkylightRow
- * Wired to SHGC (element.shgc) not SC.
- * - Preset selector uses GLAZING_OPTIONS (has both shgc + sc columns).
- * - On preset change: writes both shgc AND sc for full backward compat.
- * - Manual override edits element.shgc directly (resolveShgc() prefers it).
- * - SC is shown as a read-only derived reference (SC ≈ SHGC / 0.87).
- */
-const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) => {
+const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }: RowProps) => {
   const calcFn = isSkylights ? calcSkylightGain : calcGlassGain;
   const gains  = SEASONS.map(s => calcFn(element, climate, tRoom, s));
 
-  const displayShgc = parseFloat(element.shgc) || parseFloat(element.sc) * 0.87 || 0;
+  const displayShgc = parseFloat(String(element.shgc)) || parseFloat(String(element.sc)) * 0.87 || 0;
   const displaySc   = (displayShgc / 0.87).toFixed(2);
 
   return (
     <tr className="group hover:bg-sky-50/30 border-b border-gray-100">
       <td className="px-2 py-2 min-w-[130px]">
-        <CellInput type="text" value={element.label} onChange={e => onUpdate('label', e.target.value)} />
+        <CellInput type="text" value={element.label ?? ''} onChange={e => onUpdate('label', e.target.value)} />
       </td>
       {!isSkylights && (
         <td className="px-2 py-2 w-20">
           <CellSelect
-            value={element.orientation}
+            value={element.orientation ?? ''}
             onChange={e => onUpdate('orientation', e.target.value)}
             options={ORIENTATIONS}
           />
@@ -231,21 +277,21 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
       )}
       <td className="px-2 py-2 w-28" colSpan={isSkylights ? 2 : 1}>
         <CellSelect
-          value={element.uPreset}
+          value={element.uPreset ?? ''}
           onChange={e => {
             const preset = U_VALUE_PRESETS.glass.find(p => p.label === e.target.value);
             onUpdate('uPreset', e.target.value);
-            if (preset?.value !== null) onUpdate('uValue', preset.value);
+            if (preset?.value !== null && preset?.value !== undefined) onUpdate('uValue', preset.value);
           }}
           options={U_VALUE_PRESETS.glass.map(p => ({ value: p.label, label: p.label }))}
         />
       </td>
       <td className="px-2 py-2 w-16">
-        <CellInput value={element.uValue} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.uValue ?? ''} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
       </td>
       <td className="px-2 py-2 w-32">
         <CellSelect
-          value={element.scPreset}
+          value={element.scPreset ?? ''}
           onChange={e => {
             const opt = GLAZING_OPTIONS.find(o => o.label === e.target.value);
             onUpdate('scPreset', e.target.value);
@@ -275,7 +321,7 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
         <span className="text-[10px] text-gray-400 font-mono">{displaySc}</span>
       </td>
       <td className="px-2 py-2 w-20">
-        <CellInput value={element.area} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.area ?? ''} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
       </td>
       {gains.map((g, i) => (
         <td key={i} className="px-2 py-2 text-center w-24">
@@ -294,12 +340,7 @@ const GlassRow = ({ element, isSkylights, climate, tRoom, onUpdate, onRemove }) 
   );
 };
 
-/**
- * PartitionRow
- * Used for both partitions and floors — shows per-season heat gain.
- * tAdjSummer and tAdjWinter are separate inputs; falls back to legacy tAdj.
- */
-const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
+const PartitionRow = ({ element, tRoom, onUpdate, onRemove }: RowProps) => {
   const gains = SEASONS.map(s => calcPartitionGain(element, tRoom, s));
 
   const tAdjSummer = element.tAdjSummer ?? element.tAdj ?? 85;
@@ -308,24 +349,24 @@ const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
   return (
     <tr className="group hover:bg-purple-50/30 border-b border-gray-100">
       <td className="px-2 py-2 min-w-[130px]">
-        <CellInput type="text" value={element.label} onChange={e => onUpdate('label', e.target.value)} />
+        <CellInput type="text" value={element.label ?? ''} onChange={e => onUpdate('label', e.target.value)} />
       </td>
       <td className="px-2 py-2 w-28" colSpan={2}>
         <CellSelect
-          value={element.uPreset}
+          value={element.uPreset ?? ''}
           onChange={e => {
             const preset = U_VALUE_PRESETS.partitions.find(p => p.label === e.target.value);
             onUpdate('uPreset', e.target.value);
-            if (preset?.value !== null) onUpdate('uValue', preset.value);
+            if (preset?.value !== null && preset?.value !== undefined) onUpdate('uValue', preset.value);
           }}
           options={U_VALUE_PRESETS.partitions.map(p => ({ value: p.label, label: p.label }))}
         />
       </td>
       <td className="px-2 py-2 w-16">
-        <CellInput value={element.uValue} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.uValue ?? ''} step="0.01" onChange={e => onUpdate('uValue', parseFloat(e.target.value) || 0)} />
       </td>
       <td className="px-2 py-2 w-20">
-        <CellInput value={element.area} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
+        <CellInput value={element.area ?? ''} step="1" onChange={e => onUpdate('area', parseFloat(e.target.value) || 0)} />
       </td>
       <td className="px-2 py-2 w-20">
         <div className="flex items-center gap-1">
@@ -360,7 +401,7 @@ const PartitionRow = ({ element, tRoom, onUpdate, onRemove }) => {
 };
 
 // ── Column headers per category ──────────────────────────────────────────────
-const HEADERS = {
+const HEADERS: Record<string, string[]> = {
   walls:      ['Label', 'Orient.', 'Mass', 'Construction Preset', 'U-Value', 'Area (ft²)'],
   roofs:      ['Label', 'Construction', '', 'Insulation Preset', 'U-Value', 'Area (ft²)'],
   glass:      ['Label', 'Orient.', 'Glazing Preset', 'U-Value', 'SHGC Preset', 'SHGC', 'SC ref', 'Area (ft²)'],
@@ -370,7 +411,7 @@ const HEADERS = {
 };
 
 // ── Section totals row ───────────────────────────────────────────────────────
-const SectionTotals = ({ elements, category, climate, tRoom }) => {
+const SectionTotals = ({ elements, category, climate, tRoom }: { elements: EnvelopeElement[], category: string, climate: any, tRoom: number }) => {
   const totals = SEASONS.map(season =>
     elements.reduce((sum, el) => {
       if (category === 'walls')      return sum + calcWallGain(el, climate, tRoom, season);
@@ -403,23 +444,23 @@ const SectionTotals = ({ elements, category, climate, tRoom }) => {
 };
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export default function BuildingShell({ roomId, elements, climate, tRoom }) {
-  const dispatch = useDispatch();
+export default function BuildingShell({ roomId, elements, climate, tRoom }: BuildingShellProps) {
+  const dispatch = useDispatch<any>();
   const [activeCategory, setActiveCategory] = useState('walls');
 
   const handleAdd = useCallback(() => {
     dispatch(addEnvelopeElement({
       roomId,
       category: activeCategory,
-      element: { ...DEFAULT_ELEMENTS[activeCategory] },
+      element: { ...(DEFAULT_ELEMENTS as Record<string, any>)[activeCategory] },
     }));
   }, [dispatch, roomId, activeCategory]);
 
-  const handleUpdate = useCallback((category, id, field, value) => {
+  const handleUpdate = useCallback((category: string, id: string, field: string, value: any) => {
     dispatch(updateEnvelopeElement({ roomId, category, id, field, value }));
   }, [dispatch, roomId]);
 
-  const handleRemove = useCallback((category, id) => {
+  const handleRemove = useCallback((category: string, id: string) => {
     dispatch(removeEnvelopeElement({ roomId, category, id }));
   }, [dispatch, roomId]);
 
@@ -499,8 +540,8 @@ export default function BuildingShell({ roomId, elements, climate, tRoom }) {
               </tr>
             ) : (
               <>
-                {activeElements.map(el => {
-                  const commonProps = {
+                {activeElements.map((el: EnvelopeElement) => {
+                  const commonProps: RowProps = {
                     element:  el,
                     climate,
                     tRoom,
