@@ -1,5 +1,5 @@
 /**
- * HeaderBadge.jsx
+ * HeaderBadge.tsx
  * Responsibility: Render a single ASHRAE standard reference badge.
  *
  * Pure presentational — no props beyond the standard string.
@@ -8,7 +8,13 @@
  * (e.g. ResultsPage, ProjectDetails reference card).
  */
 
-const HeaderBadge = ({ standard }) => (
+// 1. We create an interface to define exactly what props this component accepts
+interface HeaderBadgeProps {
+  standard: string;
+}
+
+// 2. We tell the component to expect HeaderBadgeProps, and promise it will return a JSX.Element
+const HeaderBadge = ({ standard }: HeaderBadgeProps) => (
   <span className="
     inline-block
     text-[10px] font-bold tracking-widest uppercase

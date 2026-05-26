@@ -1,5 +1,5 @@
 /**
- * useRoomSidebar.js
+ * useRoomSidebar.ts
  * Responsibility: All selector and dispatch logic for the room sidebar.
  *
  * Separates data concerns from rendering so RoomSidebarItem
@@ -46,9 +46,23 @@ import {
   addNewRoom,
   deleteRoomWithCleanup,
 }                                   from '../features/room/roomActions';
+// Import the Room type!
+import { Room } from '../utils/types';
 
-const useRoomSidebar = () => {
-  const dispatch     = useDispatch();
+// ── RETURN TYPE INTERFACE ───────────────────────────────────────────────────
+// This guarantees that any component calling useRoomSidebar() will get exact types
+interface UseRoomSidebarReturn {
+  rooms: Room[];
+  activeRoomId: string | null;
+  totalAreaM2: number;
+  onAddRoom: () => void;
+  onSelectRoom: (id: string) => void;
+  onDeleteRoom: (id: string, name: string) => void;
+}
+
+const useRoomSidebar = (): UseRoomSidebarReturn => {
+  // Using <any> here temporarily because your roomActions.js thunks are still JavaScript
+  const dispatch     = useDispatch<any>();
   const rooms        = useSelector(selectAllRooms);
   const activeRoomId = useSelector(selectActiveRoomId);
 
@@ -56,20 +70,20 @@ const useRoomSidebar = () => {
   // Use for sidebar footer display only — see changelog note on source alignment
   // with useProjectTotals before using this value on a results page.
   const totalAreaM2 = rooms.reduce(
-    (sum, r) => sum + (parseFloat(r.floorArea) || 0), 0
+    (sum, r) => sum + (parseFloat(String(r.floorArea)) || 0), 0
   );
 
   const onAddRoom = useCallback(() => {
     dispatch(addNewRoom());
   }, [dispatch]);
 
-  const onSelectRoom = useCallback((id) => {
+  const onSelectRoom = useCallback((id: string) => {
     dispatch(setActiveRoom(id));
   }, [dispatch]);
 
   // deleteRoomWithCleanup removes from roomSlice AND envelopeSlice atomically.
   // Using deleteRoom() directly would leave orphaned envelope data behind.
-  const onDeleteRoom = useCallback((id, name) => {
+  const onDeleteRoom = useCallback((id: string, name: string) => {
     if (window.confirm(`Delete "${name || 'this room'}"? This cannot be undone.`)) {
       dispatch(deleteRoomWithCleanup(id));
     }

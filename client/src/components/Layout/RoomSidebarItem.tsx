@@ -1,5 +1,5 @@
 /**
- * RoomSidebarItem.jsx
+ * RoomSidebarItem.tsx
  * Responsibility: Render a single room entry in the sidebar list.
  *
  * Pure presentational component — zero Redux, zero dispatch.
@@ -18,13 +18,23 @@
 
 import { memo }            from 'react';
 import { ChevronRight, X } from 'lucide-react';
+// Import the Room type we created earlier!
+import { Room }            from '../../utils/types';
+
+// Tell TypeScript exactly what props this component accepts
+interface RoomSidebarItemProps {
+  room: Room;
+  isActive: boolean;
+  onSelect: () => void;
+  onDelete: (id: string, name: string) => void;
+}
 
 const RoomSidebarItem = ({
   room,
   isActive,
   onSelect,
   onDelete,
-}) => {
+}: RoomSidebarItemProps) => {
   const isActiveClass = isActive
     ? 'bg-blue-50 border-l-4 border-blue-600'
     : 'border-l-4 border-transparent hover:bg-gray-50';
@@ -59,7 +69,7 @@ const RoomSidebarItem = ({
             {/* floorArea is stored in m² by roomSlice (SI units) */}
             <span>
               {room.floorArea
-                ? `${parseFloat(room.floorArea).toLocaleString(undefined, { maximumFractionDigits: 1 })} m²`
+                ? `${parseFloat(String(room.floorArea)).toLocaleString(undefined, { maximumFractionDigits: 1 })} m²`
                 : '— m²'
               }
             </span>

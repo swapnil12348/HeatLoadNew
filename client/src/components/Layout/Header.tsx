@@ -1,5 +1,5 @@
 /**
- * Header.jsx
+ * Header.tsx
  * Responsibility: App-level header — title, subtitle, ASHRAE standard badges.
  *
  * Fixes vs old version:
@@ -62,7 +62,7 @@ export default function Header() {
 
         {/* ── ASHRAE standard badges ───────────────────────────────────── */}
         <div className="mt-2.5 flex flex-wrap gap-2">
-          {ASHRAE_STANDARDS.map((standard) => (
+          {ASHRAE_STANDARDS.map((standard: string) => (
             <HeaderBadge key={standard} standard={standard} />
           ))}
         </div>

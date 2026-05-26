@@ -110,8 +110,5 @@ export interface AhuState {
 
 // A temporary root state type so our selectors don't complain.
 // Later, when you configure your Redux store, this will be generated automatically.
-export interface RootState {
-  room: RoomState;
-  ahu: AhuState;
-  project: ProjectState;
-}
+// This imports the automatically generated RootState and exports it to the rest of the app!
+export type { RootState } from '../app/store';

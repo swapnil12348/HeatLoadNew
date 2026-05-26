@@ -1,5 +1,5 @@
 /**
- * RoomSidebar.jsx
+ * RoomSidebar.tsx
  * Responsibility: Render the project room list sidebar.
  *
  * Thin shell — owns only layout structure:
@@ -69,7 +69,7 @@ export default function RoomSidebar() {
           </div>
         ) : (
           <ul className="divide-y divide-gray-50" role="list" aria-label="Project rooms">
-            {rooms.map((room) => (
+            {rooms.map((room: any) => (
               <RoomSidebarItem
                 key={room.id}
                 room={room}
