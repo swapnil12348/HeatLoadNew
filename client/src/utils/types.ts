@@ -112,3 +112,22 @@ export interface AhuState {
 // Later, when you configure your Redux store, this will be generated automatically.
 // This imports the automatically generated RootState and exports it to the rest of the app!
 export type { RootState } from '../app/store';
+
+export interface SeasonCondition {
+  db: number | string;
+  rh: number | string;
+  time: string;
+  month: string;
+  gr: number | null;
+  dp: number | null;
+  wb: number | null;
+}
+
+export interface ClimateState {
+  outside: {
+    summer: SeasonCondition;
+    monsoon: SeasonCondition;
+    winter: SeasonCondition;
+    [key: string]: SeasonCondition; 
+  };
+}

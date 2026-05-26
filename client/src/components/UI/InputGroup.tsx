@@ -1,5 +1,5 @@
 /**
- * InputGroup.jsx
+ * InputGroup.tsx
  * Responsibility: Labelled numeric input with inline unit suffix.
  *
  * Used for climate and project detail fields where a simple
@@ -7,7 +7,29 @@
  * For increment/decrement controls use NumberControl instead.
  */
 
-const InputGroup = ({ label, value, onChange, unit, type = 'number', step = '1', className = '' }) => (
+import { ChangeEvent } from 'react';
+
+// Define the exact props this component accepts
+interface InputGroupProps {
+  label: string;
+  value: string | number;
+  // This tells TS the event specifically comes from an input field
+  onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  unit?: string;               // Optional, some inputs might not have units
+  type?: string;               // Optional, defaults to 'number'
+  step?: string | number;      // Optional, defaults to '1'
+  className?: string;          // Optional, defaults to ''
+}
+
+const InputGroup = ({
+  label,
+  value,
+  onChange,
+  unit,
+  type = 'number',
+  step = '1',
+  className = '',
+}: InputGroupProps) => (
   <div className={`flex flex-col space-y-1 ${className}`}>
     <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">
       {label}

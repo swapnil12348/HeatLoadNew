@@ -70,7 +70,7 @@
  */
 
 // ── App-level Standard Badges ──────────────────────────────────────────────
-export const ASHRAE_STANDARDS = [
+export const ASHRAE_STANDARDS: readonly string[] = [
   "ASHRAE 62.1 Ventilation",
   "ASHRAE 55 Comfort",
   "ASHRAE 90.1 Lighting",
@@ -83,7 +83,7 @@ export const MOTOR_HEAT_FRACTIONS = {
   MOTOR_OUT_SPACE:            0.88,
   MOTOR_IN_SPACE_DRIVEN_OUT:  0.12,
   MOTOR_IN_AIR_STREAM:        1.00,
-};
+} as const; // This tells TS: "These numbers will never change, make them readonly"
 
 const ASHRAE = {
 
@@ -214,6 +214,6 @@ const ASHRAE = {
   DUCT_HEAT_GAIN_PCT:        0.05,
   MOTOR_LOAD_FACTOR:         0.88,
 
-};
+} as const; // This tells TS: "These numbers will never change, make them readonly"
 
 export default ASHRAE;

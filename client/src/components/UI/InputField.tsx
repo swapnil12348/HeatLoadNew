@@ -1,5 +1,5 @@
 /**
- * InputField.jsx
+ * InputField.tsx
  * Responsibility: Labelled text input or select dropdown.
  *
  * NOTE: This component does not appear to be used in the current codebase —
@@ -13,6 +13,21 @@
  *   </InputField>
  */
 
+import { ChangeEvent, ReactNode } from 'react';
+
+// Define the exact props this component accepts
+interface InputFieldProps {
+  label: string;
+  name: string;
+  value: string | number;
+  // This tells TS the event comes from either an input field or a dropdown
+  onChange: (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void;
+  placeholder?: string; // The '?' means this prop is optional
+  children?: ReactNode;
+  fullWidth?: boolean;
+  type?: string;
+}
+
 const InputField = ({
   label,
   name,
@@ -22,7 +37,7 @@ const InputField = ({
   children,
   fullWidth = false,
   type = 'text',
-}) => (
+}: InputFieldProps) => (
   <div className={fullWidth ? 'col-span-1 md:col-span-2' : 'col-span-1'}>
     <label className="block text-sm font-semibold text-gray-700 mb-1.5">{label}</label>
     {type === 'select' ? (

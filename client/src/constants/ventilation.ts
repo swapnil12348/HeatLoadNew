@@ -1,5 +1,5 @@
 /**
- * ventilation.js
+ * ventilation.ts
  * ASHRAE 62.1-2022 Ventilation Rate Procedure — Table 6-1
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
@@ -26,7 +26,31 @@
  * Reference: ANSI/ASHRAE Standard 62.1-2022, Section 6.2 — VRP
  */
 
-export const VENTILATION_CATEGORIES = {
+// ── TYPES & INTERFACES ────────────────────────────────────────────────────────
+export interface VentCategory {
+  label: string;
+  rp: number;
+  ra: number;
+  defaultEz: number;
+  minAch: number;
+  note: string;
+}
+
+export type VentCategoryId =
+  | 'general'
+  | 'conference'
+  | 'pharma'
+  | 'semicon'
+  | 'battery'
+  | 'battery-leadacid'
+  | 'solar'
+  | 'warehouse'
+  | 'corridor'
+  | 'utility'
+  | 'gowning'
+  | 'canteen';
+
+export const VENTILATION_CATEGORIES: Record<VentCategoryId, VentCategory> = {
 
   // ── General / Office ───────────────────────────────────────────────────────
   general: {
@@ -190,16 +214,24 @@ export const VENTILATION_CATEGORIES = {
 
 // ── Convenience accessor ──────────────────────────────────────────────────────
 
-export const getRpRa = (ventCategory) => {
-  if (ventCategory && !VENTILATION_CATEGORIES[ventCategory]) {
+interface RpRaReturn {
+  rp: number;
+  ra: number;
+  label: string;
+  ez: number;
+  minAch: number;
+}
+
+export const getRpRa = (ventCategory: string | null | undefined): RpRaReturn => {
+  if (ventCategory && !(ventCategory as VentCategoryId in VENTILATION_CATEGORIES)) {
     console.warn(
       `getRpRa: unknown ventCategory "${ventCategory}". Falling back to "general". ` +
       `Valid keys: ${Object.keys(VENTILATION_CATEGORIES).join(', ')}`
     );
   }
 
-  const cat = VENTILATION_CATEGORIES[ventCategory]
-    ?? VENTILATION_CATEGORIES.general;
+  const safeCategory = (ventCategory as VentCategoryId) || 'general';
+  const cat = VENTILATION_CATEGORIES[safeCategory] ?? VENTILATION_CATEGORIES.general;
 
   return {
     rp:     cat.rp,
@@ -217,11 +249,16 @@ export const getRpRa = (ventCategory) => {
  * Returns Voz = Vbz / Ez — the zone OA intake rate (CFM).
  * Rounding is the caller's responsibility.
  */
-export const calculateVbz = (ventCategory, pplCount, floorAreaFt2, ezOverride) => {
+export const calculateVbz = (
+  ventCategory: string | null | undefined, 
+  pplCount: number | string, 
+  floorAreaFt2: number | string, 
+  ezOverride?: number
+): number => {
   const { rp, ra, ez } = getRpRa(ventCategory);
   const effectiveEz = ezOverride ?? ez;
-  const vbz = (rp * (parseFloat(pplCount)    || 0))
-            + (ra * (parseFloat(floorAreaFt2) || 0));
+  const vbz = (rp * (parseFloat(String(pplCount))    || 0))
+            + (ra * (parseFloat(String(floorAreaFt2)) || 0));
   return vbz / effectiveEz;
 };
 
@@ -232,10 +269,13 @@ export const calculateVbz = (ventCategory, pplCount, floorAreaFt2, ezOverride) =
  * ventilation category (NFPA 855, OSHA, GMP Annex 1 etc.).
  * airQuantities.js takes max(calculateVbz, calculateMinAchCfm, exhaustMakeup).
  */
-export const calculateMinAchCfm = (ventCategory, volumeFt3) => {
+export const calculateMinAchCfm = (
+  ventCategory: string | null | undefined, 
+  volumeFt3: number | string
+): number => {
   const { minAch } = getRpRa(ventCategory);
   if (!minAch || !volumeFt3) return 0;
-  return (minAch * (parseFloat(volumeFt3) || 0)) / 60;
+  return (minAch * (parseFloat(String(volumeFt3)) || 0)) / 60;
 };
 
 // ── UI option list ────────────────────────────────────────────────────────────

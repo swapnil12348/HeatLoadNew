@@ -1,5 +1,5 @@
 /**
- * NumberControl.jsx
+ * NumberControl.tsx
  * Responsibility: Labelled numeric input with increment/decrement buttons.
  *
  * Presentational component only — all clamping/stepping logic lives in
@@ -17,6 +17,18 @@
 
 import useNumberControl from '../../hooks/useNumberControl';
 
+// Define exactly what props are allowed
+interface NumberControlProps {
+  label: string;
+  value: number | string;
+  // This expects the new number/string value, not a raw HTML event
+  onChange: (newValue: number | string) => void;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
 const NumberControl = ({
   label,
   value,
@@ -25,7 +37,7 @@ const NumberControl = ({
   min  = 0,
   max  = Infinity,
   step = 1,
-}) => {
+}: NumberControlProps) => {
   const {
     handleIncrement,
     handleDecrement,

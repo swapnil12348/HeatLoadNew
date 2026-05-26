@@ -71,7 +71,7 @@ export const CALCULATION_METHOD = {
 // Source: ASHRAE HOF 2021, Ch.18, Table 1
 // Reference: 40°N latitude, July 15, peak hour (15:00 solar time)
 // tRoom = 78°F, tOutdoorMean = 85°F
-export const WALL_CLTD = {
+export const WALL_CLTD: Record<string, Record<string, number>> = {
   N:  { light: 12, medium:  9, heavy:  6 },
   NE: { light: 22, medium: 17, heavy: 12 },
   E:  { light: 33, medium: 26, heavy: 18 },
@@ -98,14 +98,14 @@ export const WALL_CLTD = {
  * a general seasonal adapter. Write a separate steady-state winter path:
  *   return u * area * (tOutdoor - tRoom);
  */
-export const WALL_CLTD_SEASONAL = {
+export const WALL_CLTD_SEASONAL: Record<string, number> = {
   summer:  1.00,
   monsoon: 0.85,
 };
 
 // ── Roof CLTD (°F) ───────────────────────────────────────────────────────────
 // Source: ASHRAE HOF 2021, Ch.18, Table 4
-export const ROOF_CLTD = {
+export const ROOF_CLTD: Record<string, number> = {
   'No insulation':                     54,
   '1" insulation':                     40,
   '2" insulation':                     30,
@@ -122,7 +122,7 @@ export const ROOF_CLTD = {
  * ROOF_CLTD_SEASONAL — summer and monsoon multipliers only.
  * ⚠️  Winter key INTENTIONALLY ABSENT — same invariant as WALL_CLTD_SEASONAL.
  */
-export const ROOF_CLTD_SEASONAL = {
+export const ROOF_CLTD_SEASONAL: Record<string, number> = {
   summer:  1.00,
   monsoon: 0.80,
 };
@@ -130,7 +130,7 @@ export const ROOF_CLTD_SEASONAL = {
 // ── CLTD Latitude Month (LM) Correction ──────────────────────────────────────
 // Source: ASHRAE Cooling & Heating Load Calculation Manual, Table B-6
 // Reference: 40°N (all zeros). Positive = higher load than reference.
-export const CLTD_LM = {
+export const CLTD_LM: Record<number, Record<string, number>> = {
    0: { N:  1, NE: -2, E: -5, SE: -3, S: -7, SW: -3, W: -5, NW: -2 },
   10: { N:  0, NE: -1, E: -3, SE: -2, S: -5, SW: -2, W: -3, NW: -1 },
   20: { N: -1, NE:  0, E: -2, SE: -1, S: -3, SW: -1, W: -2, NW:  0 },
@@ -153,7 +153,7 @@ export const CLTD_LM = {
  * glazingCalc.js getGlassCLTD() will log a console.error if this is reached
  * for any unknown season key.
  */
-export const GLASS_CLTD = {
+export const GLASS_CLTD: Record<string, number> = {
   summer:  15,
   monsoon: 12,
 };
@@ -162,7 +162,7 @@ export const GLASS_CLTD = {
 // Source: ASHRAE HOF 2021 Ch.27 Tables 15–19
 // Reference: 32°N, July 15, maximum hour, clear glass (SC = 1.0).
 // Multiply by SC or SHGC in glazingCalc.js for actual glazing.
-export const SHGF = {
+export const SHGF: Record<string, Record<string, number>> = {
   N:          { summer:  25, monsoon:  20, winter:  12 },
   NE:         { summer:  95, monsoon:  80, winter:  35 },
   E:          { summer: 205, monsoon: 170, winter:  70 },
@@ -182,7 +182,7 @@ export const SHGF = {
 // 24°N and 36°N values interpolated from ASHRAE HOF 2021 Ch.27 source tables.
 // Southern hemisphere: envelopeHelpers.js swaps N↔S orientations before
 // calling interpolateLatitude() with Math.abs(latitude).
-export const SHGF_LATITUDE_FACTOR = {
+export const SHGF_LATITUDE_FACTOR: Record<number, Record<string, number>> = {
    0: { N: 0.60, NE: 1.00, E: 1.00, SE: 0.82, S: 0.38, SW: 0.82, W: 1.00, NW: 1.00, Horizontal: 1.06 },
   10: { N: 0.72, NE: 1.00, E: 1.00, SE: 0.88, S: 0.55, SW: 0.88, W: 1.00, NW: 1.00, Horizontal: 1.04 },
   20: { N: 0.88, NE: 1.00, E: 1.00, SE: 0.95, S: 0.78, SW: 0.95, W: 1.00, NW: 1.00, Horizontal: 1.01 },
@@ -199,7 +199,7 @@ export const SHGF_LATITUDE_FACTOR = {
 // ── Diurnal Range Defaults (°F) ───────────────────────────────────────────────
 // Used when projectSlice.ambient.dailyRange = 0 (engineer did not override).
 // tOutdoorMean = tPeak − dailyRange/2 (ASHRAE HOF 2021 Ch.18)
-export const DIURNAL_RANGE_DEFAULTS = {
+export const DIURNAL_RANGE_DEFAULTS: Record<string, number> = {
   summer:  18,
   monsoon: 12,
   winter:  20,
@@ -211,7 +211,7 @@ export const DIURNAL_RANGE_DEFAULTS = {
  * Linear interpolation between the two nearest latitude breakpoints.
  * Warns on missing key rather than silently returning 0.
  */
-export const interpolateLatitude = (table, lat, key) => {
+export const interpolateLatitude = (table: Record<number, Record<string, number>>, lat: number, key: string): number => {
   const latitudes = Object.keys(table).map(Number).sort((a, b) => a - b);
 
   if (lat <= latitudes[0]) {
@@ -264,7 +264,7 @@ export const interpolateLatitude = (table, lat, key) => {
 //     continuously — the room never cools down, so heat storage is irrelevant.
 //     All internal heat enters the cooling load immediately: use CLF = 1.0.
 //     Using CLF_INTERNAL['heavy'] = 0.75 for a 24/7 fab understates load by 25%.
-export const CLF = {
+export const CLF: Record<string, Record<string, number>> = {
   N:          { light: 0.73, medium: 0.62, heavy: 0.49 },
   NE:         { light: 0.38, medium: 0.30, heavy: 0.22 },
   E:          { light: 0.47, medium: 0.38, heavy: 0.28 },
@@ -277,11 +277,11 @@ export const CLF = {
 };
 
 // CLF for unshaded glass at peak hour (interior shading absent)
-export const CLF_UNSHADED = 1.0;
+export const CLF_UNSHADED: number = 1.0;
 
 // CLF for internal gains (people, lights, equipment) — office/occupied-period rooms only.
 // See ⚠️ note above about 24/7 facilities.
-export const CLF_INTERNAL = {
+export const CLF_INTERNAL: Record<string, number> = {
   light:  0.97,
   medium: 0.90,
   heavy:  0.75,
@@ -308,7 +308,7 @@ export const SC_OPTIONS = GLAZING_OPTIONS.map(g => ({ label: g.label, value: g.s
 
 // ── U-Value Presets (BTU/hr·ft²·°F) ──────────────────────────────────────────
 // Source: ASHRAE HOF 2021 Ch.25; ASHRAE 90.1-2022 envelope requirements.
-export const U_VALUE_PRESETS = {
+export const U_VALUE_PRESETS: Record<string, { label: string; value: number | null }[]> = {
   walls: [
     { label: '8" Concrete Block (uninsulated)',            value: 0.48 },
     { label: '8" Concrete Block + 1" insulation',         value: 0.22 },
@@ -363,7 +363,7 @@ export const U_VALUE_PRESETS = {
 
 // ── Slab-on-Grade F-Factor (BTU/hr·ft·°F) ────────────────────────────────────
 // Source: ASHRAE HOF 2021, Ch.18, Table 12
-export const SLAB_F_FACTOR = {
+export const SLAB_F_FACTOR: Record<string, number> = {
   'Uninsulated':                          0.73,
   'R-5 vertical insulation (2 ft deep)':  0.55,
   'R-10 vertical insulation (2 ft deep)': 0.45,
@@ -378,7 +378,7 @@ export const SLAB_F_FACTOR = {
 //     seasonalLoads.js reads diversityFactor from envelopeSlice state directly.
 //     Do NOT also multiply by ASHRAE.PROCESS_DIVERSITY_FACTOR — that is a
 //     global fallback for rooms where no per-type factor is specified.
-export const EQUIPMENT_LOAD_DENSITY = {
+export const EQUIPMENT_LOAD_DENSITY: Record<string, { wPerFt2: number; diversityFactor: number }> = {
   'Semiconductor fab — light tools':   { wPerFt2:  50, diversityFactor: 0.70 },
   'Semiconductor fab — heavy tools':   { wPerFt2: 200, diversityFactor: 0.65 },
   'Pharma process — general':          { wPerFt2:  30, diversityFactor: 0.75 },
@@ -397,10 +397,10 @@ export const EQUIPMENT_LOAD_DENSITY = {
 };
 
 // ── Orientation & Construction Options ───────────────────────────────────────
-export const ORIENTATIONS       = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-export const WALL_CONSTRUCTIONS = ['light', 'medium', 'heavy'];
-export const ROOF_CONSTRUCTIONS = Object.keys(ROOF_CLTD);
-export const ROOM_MASS_OPTIONS  = ['light', 'medium', 'heavy'];
+export const ORIENTATIONS: string[]       = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+export const WALL_CONSTRUCTIONS: string[] = ['light', 'medium', 'heavy'];
+export const ROOF_CONSTRUCTIONS: string[] = Object.keys(ROOF_CLTD);
+export const ROOM_MASS_OPTIONS: string[]  = ['light', 'medium', 'heavy'];
 
 // ── CLTD Correction Formula ───────────────────────────────────────────────────
 /**
@@ -421,11 +421,11 @@ export const ROOM_MASS_OPTIONS  = ['light', 'medium', 'heavy'];
  * @returns {number} corrected CLTD (°F) — may be negative
  */
 export const correctCLTD = (
-  baseCltd,
-  tRoom,
-  tOutdoorMean,
-  lmCorrection = 0,
-) => {
+  baseCltd: number,
+  tRoom: number,
+  tOutdoorMean: number,
+  lmCorrection: number = 0,
+): number => {
   return baseCltd + (78 - tRoom) + (tOutdoorMean - 85) + lmCorrection;
 };
 

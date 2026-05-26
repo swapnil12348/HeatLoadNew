@@ -1,5 +1,5 @@
 /**
- * climateSlice.js
+ * climateSlice.ts
  * Manages outdoor design conditions for three seasons.
  *
  * State shape:
@@ -58,21 +58,22 @@
  *     No calculation correctness impact — gr/dp/wb are display-only fields.
  */
 
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import {
   calculateGrains,
   calculateDewPoint,
   calculateWetBulb,
 } from '../../utils/psychro';
+import { ClimateState, RootState, SeasonCondition } from '../../utils/types';
 
 // ── Derive display fields at sea level ───────────────────────────────────────
 // gr, dp, wb are for ClimateConfig display only. Elevation = 0 is the
 // meteorological convention for weather station data. Actual load calculations
 // always call calculateGrains(db, rh, elevation) with real site elevation.
 // Returns nulls on invalid input so the UI can show "—" rather than wrong numbers.
-const deriveFields = (db, rh) => {
-  const safeDb = parseFloat(db);
-  const safeRh = parseFloat(rh);
+const deriveFields = (db: number | string, rh: number | string) => {
+  const safeDb = parseFloat(String(db));
+  const safeRh = parseFloat(String(rh));
 
   if (isNaN(safeDb) || isNaN(safeRh)) {
     return { gr: null, dp: null, wb: null };
@@ -86,7 +87,7 @@ const deriveFields = (db, rh) => {
 };
 
 // ── Initial state ─────────────────────────────────────────────────────────────
-const initialState = {
+const initialState: ClimateState = {
   outside: {
     summer: {
       db:    109.9,    // °F — ASHRAE 0.4% design dry-bulb, Delhi 28°N
@@ -131,11 +132,12 @@ const climateSlice = createSlice({
      * If db or rh is cleared (empty string → NaN), derived fields are set
      * to null rather than being computed from 0°F.
      */
-    updateOutsideCondition: (state, action) => {
+    updateOutsideCondition: (state, action: PayloadAction<{ season: string; field: keyof SeasonCondition; value: any }>) => {
       const { season, field, value } = action.payload;
       if (!state.outside[season]) return;
 
-      state.outside[season][field] = value;
+      // Casting the specific season to any to bypass strict type indexing for dynamic object assignment
+      (state.outside[season] as any)[field] = value;
 
       if (field === 'db' || field === 'rh') {
         const db      = state.outside[season].db;
@@ -155,7 +157,7 @@ export default climateSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
-export const selectClimate = (state) => state.climate;
+export const selectClimate = (state: RootState) => state.climate;
 
-export const selectSeasonConditions = (state, season) =>
+export const selectSeasonConditions = (state: RootState, season: string): SeasonCondition | Record<string, never> =>
   state.climate.outside[season] ?? {};

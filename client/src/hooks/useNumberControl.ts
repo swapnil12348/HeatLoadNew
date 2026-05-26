@@ -1,7 +1,7 @@
 /**
- * useNumberControl.js
+ * useNumberControl.ts
  * Encapsulates all clamping / stepping logic for numeric inputs.
- * Keeps NumberControl.jsx a pure presentational component.
+ * Keeps NumberControl.tsx a pure presentational component.
  *
  * ── DESIGN RATIONALE ─────────────────────────────────────────────────────────
  *
@@ -29,22 +29,37 @@
  *   uses room.designRH != null (not || 50) so 0 passes through correctly.
  *
  *   For a dry-room RH control: pass min=0, max=100. The hook is correct.
- *
- * @param {object} params
- * @param {number|string} params.value     - current value
- * @param {function}      params.onChange  - called with new value
- * @param {number}        [params.min=0]   - minimum allowed value
- * @param {number}        [params.max]     - maximum allowed value (default: no max)
- * @param {number}        [params.step=1]  - increment/decrement step
  */
+
+import { ChangeEvent, FocusEvent } from 'react';
+
+// Define the inputs for the hook
+interface UseNumberControlProps {
+  value: number | string;
+  onChange: (newValue: number | string) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+// Define exactly what this hook returns to the component
+interface UseNumberControlReturn {
+  handleIncrement: () => void;
+  handleDecrement: () => void;
+  handleChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  handleBlur: (e: FocusEvent<HTMLInputElement>) => void;
+  isAtMin: boolean;
+  isAtMax: boolean;
+}
+
 const useNumberControl = ({
   value,
   onChange,
   min    = 0,
   max    = Infinity,
   step   = 1,
-}) => {
-  const safeVal = (v) => parseFloat(v) || 0;
+}: UseNumberControlProps): UseNumberControlReturn => {
+  const safeVal = (v: number | string): number => parseFloat(String(v)) || 0;
 
   const handleIncrement = () => {
     const next = safeVal(value) + step;
@@ -58,13 +73,13 @@ const useNumberControl = ({
 
   // Allow free typing — clamp only on blur.
   // Dispatching a string during typing is safe: all Redux fields use parseFloat().
-  const handleChange = (e) => {
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     onChange(e.target.value);
   };
 
   // On blur, enforce min/max so Redux never receives an out-of-range value.
   // NaN (empty field) → min. This is correct for all numeric HVAC fields.
-  const handleBlur = (e) => {
+  const handleBlur = (e: FocusEvent<HTMLInputElement>) => {
     let v = parseFloat(e.target.value);
     if (isNaN(v)) v = min;
     v = Math.max(min, v);
