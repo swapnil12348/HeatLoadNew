@@ -38,8 +38,37 @@ export interface RoomState {
   list: Room[];
 }
 
+export interface AHU {
+  id: string;
+  name: string;
+  tag: string;
+  type: 'Recirculating' | 'DOAS' | 'MAU' | 'FCU' | string;
+  capacityTR: number;
+  heatingCapKW: number;
+  supplyFanCFM: number;
+  returnFanCFM: number;
+  outerAirCFM: number;
+  bypassFactor: number;
+  adpMode: 'manual' | 'calculated';
+  adp: number;
+  filterClass: string;
+  location: string;
+  notes: string;
+}
+
+export interface AhuState {
+  list: AHU[];
+}
+
+// Ensure your RootState (at the very bottom of types.ts) looks like this now:
+// export interface RootState {
+//   room: RoomState;
+//   ahu: AhuState;
+// }
+
 // A temporary root state type so our selectors don't complain.
 // Later, when you configure your Redux store, this will be generated automatically.
 export interface RootState {
   room: RoomState;
+  ahu: AhuState;
 }

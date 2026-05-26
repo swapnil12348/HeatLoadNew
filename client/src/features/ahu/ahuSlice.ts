@@ -1,5 +1,5 @@
 /**
- * ahuSlice.js
+ * ahuSlice.ts
  * Manages the list of Air Handling Units in the project.
  *
  * State shape:
@@ -67,10 +67,12 @@
  *     delete AHUs MUST call deleteAhuWithCleanup, never deleteAHU directly.
  */
 
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+// Make sure this import matches exactly where your types.ts is located!
+import { AHU, AhuState, RootState } from '../../utils/types';
 
 // ── AHU factory ───────────────────────────────────────────────────────────────
-const makeAhu = (id, index = 0, overrides = {}) => ({
+const makeAhu = (id: string, index: number = 0, overrides: Partial<AHU> = {}): AHU => ({
   // ── Identity ──────────────────────────────────────────────────────────────
   id,
   name: `AHU-${String(index + 1).padStart(2, '0')}`,
@@ -105,7 +107,7 @@ const makeAhu = (id, index = 0, overrides = {}) => ({
 });
 
 // ── Initial state ─────────────────────────────────────────────────────────────
-const initialState = {
+const initialState: AhuState = {
   list: [
     makeAhu('ahu1', 0, { name: 'AHU-01', type: 'Recirculating' }),
     makeAhu('ahu2', 1, { name: 'AHU-02', type: 'DOAS' }),
@@ -123,7 +125,7 @@ const ahuSlice = createSlice({
      * Adds a new recirculating AHU with a generated ID.
      * Pass object overrides to pre-set type/name.
      */
-    addAHU: (state, action) => {
+    addAHU: (state, action: PayloadAction<Partial<AHU> | undefined>) => {
       const overrides = action.payload ?? {};
       const id = `ahu_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
       state.list.push(makeAhu(id, state.list.length, overrides));
@@ -134,10 +136,13 @@ const ahuSlice = createSlice({
      * { id, field, value }
      * Supports any field in the AHU object including 'type' and 'adpMode'.
      */
-    updateAHU: (state, action) => {
+    updateAHU: (state, action: PayloadAction<{ id: string; field: string; value: any }>) => {
       const { id, field, value } = action.payload;
       const ahu = state.list.find(a => a.id === id);
-      if (ahu) ahu[field] = value;
+      if (ahu) {
+        // Casting ahu to any to support dynamic dot notation or string indexing
+        (ahu as any)[field] = value;
+      }
     },
 
     /**
@@ -153,7 +158,7 @@ const ahuSlice = createSlice({
      *   1. Clears all room.assignedAhuIds references via setRoomAhu({ ahuId: null })
      *   2. Then dispatches this reducer as the final step
      */
-    deleteAHU: (state, action) => {
+    deleteAHU: (state, action: PayloadAction<string>) => {
       state.list = state.list.filter(a => a.id !== action.payload);
     },
   },
@@ -165,7 +170,7 @@ export default ahuSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
-export const selectAllAHUs = (state) => state.ahu.list;
+export const selectAllAHUs = (state: RootState) => state.ahu.list;
 
-export const selectAhuById = (state, id) =>
+export const selectAhuById = (state: RootState, id: string) =>
   state.ahu.list.find(a => a.id === id) ?? null;
