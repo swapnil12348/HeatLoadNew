@@ -70,12 +70,13 @@ function App() {
         {/* 2. Application routes — wrapped in AppLayout */}
         <Route element={<AppLayout />}>
           <Route path="/project"  element={<ProjectDetails />} />
+          <Route path="/rds"      element={<RDSPage />}        />
           <Route path="/ahu"      element={<AHUConfig />}      />
           <Route path="/room"     element={<RoomConfig />}     />
           <Route path="/climate"  element={<ClimateConfig />}  />
           <Route path="/envelope" element={<EnvelopeConfig />} />
           <Route path="/results"  element={<ResultsPage />}    />
-          <Route path="/rds"      element={<RDSPage />}        />
+          
         </Route>
 
         {/* 3. Catch-all */}
