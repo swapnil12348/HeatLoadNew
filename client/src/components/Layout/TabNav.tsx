@@ -1,5 +1,5 @@
 /**
- * TabNav.jsx
+ * TabNav.tsx
  * Responsibility: Application tab navigation bar.
  *
  * Lives inside AppLayout's fixed-height flex column as a sibling to <main>.
@@ -24,14 +24,22 @@
 
 import { NavLink } from 'react-router-dom';
 
+// Tell TypeScript exactly what data a Tab needs to contain
+interface TabItem {
+  id: string;
+  label: string;
+  path: string;
+}
+
 export default function TabNav() {
-  const tabs = [
+  // Apply our new interface to the tabs array
+  const tabs: TabItem[] = [
     { id: 'project',  label: 'Project Info',       path: '/project'  },
+    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'climate',  label: 'Climate',            path: '/climate'  },
     { id: 'room',     label: 'Room Geometry',      path: '/room'     },
     { id: 'envelope', label: 'Envelope & Loads',   path: '/envelope' },
     { id: 'ahu',      label: 'AHU Config',         path: '/ahu'      },
-    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'results',  label: 'Results',            path: '/results'  },
   ];
 

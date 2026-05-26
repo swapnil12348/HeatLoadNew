@@ -20,7 +20,7 @@ export default function Header() {
     <header
       role="banner"
       className="
-        bg-gradient-to-br from-[#1e3a5f] via-[#0f4c81] to-[#1565c0]
+        bg-linear-to-br from-[#1e3a5f] via-[#0f4c81] to-[#1565c0]
         border-b-[3px] border-amber-400
         shrink-0
       "
