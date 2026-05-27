@@ -1,5 +1,5 @@
 /**
- * heatingHumid.js
+ * heatingHumid.ts
  * Responsibility: Winter heating load and humidification system sizing.
  *
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 18
@@ -132,6 +132,31 @@
 
 import { calculateGrains, sensibleFactor, latentFactor } from '../../utils/psychro';
 import { GR_PER_LB, KW_TO_BTU_HR }                       from '../../utils/units';
+import { ClimateState }                                  from '../../utils/types';
+
+// ── Types & Interfaces ────────────────────────────────────────────────────────
+export interface HeatingHumidResult {
+  heatingCapBTU: number;
+  heatingCap: string;
+  heatingCapMBH: string;
+  preheatCapBTU: number;
+  preheatCap: string;
+  terminalHeatingCap: string;
+  extraHeatingCap: string;
+  needsHeating: boolean;
+  hwFlowRate: string;
+  chwFlowRate: string;
+  humidDeltaGr: string;
+  humidGrTarget: string;
+  winterGrOut: string;
+  mixedAirGr: string;
+  humidLbsPerHr: string;
+  humidKw: string;
+  humidLoadBTU: number;
+  needsHumidification: boolean;
+  highHumidificationLoad: boolean;
+  humidWarning: string | null;
+}
 
 // ── Module constants ──────────────────────────────────────────────────────────
 
@@ -182,7 +207,7 @@ const HIGH_HUMID_DELTA_GR = 40;
  *                                         Positive = net heat gain in winter
  * @param {number} supplyAir             - total supply air CFM
  * @param {number} freshAirCFM           - outdoor air CFM (from airQuantities.js)
- * @param {object} climate               - full climate Redux state
+ * @param {ClimateState} climate         - full climate Redux state
  * @param {number} dbInF                 - room design dry-bulb (°F)
  * @param {number} humidificationTarget  - target indoor RH% for winter sizing
  * @param {number} altCf                 - altitude correction factor (dimensionless)
@@ -193,46 +218,19 @@ const HIGH_HUMID_DELTA_GR = 40;
  *                                         0   = 100% OA system (pharma / semiconductor)
  *                                         0.8 = 80% recirculation (typical office AHU)
  *                                         Default 0 is conservative (max humidification).
- *
- * @returns {{
- *   heatingCapBTU:         number,   magnitude of heating required (BTU/hr)
- *   heatingCap:            string,   heating capacity (kW), toFixed(2)
- *   heatingCapMBH:         string,   heating capacity (MBH = kBTU/hr), toFixed(2)
- *   preheatCapBTU:         number,   OA preheat load (BTU/hr)
- *   preheatCap:            string,   OA preheat capacity (kW), toFixed(2)
- *   terminalHeatingCap:    string,   terminal reheat capacity (kW)
- *   extraHeatingCap:       string,   +10% safety on terminal heat (kW)
- *   hwFlowRate:            string,   hot water flow rate (USGPM), toFixed(1)
- *   chwFlowRate:           string,   chilled water flow rate (USGPM), toFixed(1)
- *                                    NOTE: rdsSelector uses pipes.chw.flowGPM from
- *                                    pipeSizing.js (coilLoadBTU basis) for output.
- *                                    This field uses grandTotal basis — for direct
- *                                    consumers only, not the RDS row.
- *   humidDeltaGr:          string,   gr/lb to add for humidification, toFixed(1)
- *   humidGrTarget:         string,   target indoor gr/lb, toFixed(1)
- *   winterGrOut:           string,   outdoor winter gr/lb, toFixed(1)
- *   mixedAirGr:            string,   mixed-air gr/lb entering humidifier, toFixed(1)
- *   humidLbsPerHr:         string,   water mass to add (lb/hr), toFixed(2)
- *   humidKw:               string,   humidifier power (kW), toFixed(2)
- *   humidLoadBTU:          number,   latent humidification load (BTU/hr)
- *   needsHumidification:   boolean,  true if Δgr > 0
- *   needsHeating:          boolean,  true if net heat loss in winter
- *   highHumidificationLoad:boolean,  true if Δgr > 40 gr/lb (sub-5%RH warning)
- *   humidWarning:          string|null, human-readable warning for UI
- * }}
  */
 export const calculateHeatingHumid = (
-  ershWinter,
-  supplyAir,
-  freshAirCFM,
-  climate,
-  dbInF,
-  humidificationTarget,
-  altCf,
-  elevation              = 0,
-  grandTotal             = 0,
-  recirculationFraction  = 0,
-) => {
+  ershWinter: number,
+  supplyAir: number,
+  freshAirCFM: number,
+  climate: ClimateState,
+  dbInF: number,
+  humidificationTarget: number,
+  altCf: number,
+  elevation: number = 0,
+  grandTotal: number = 0,
+  recirculationFraction: number = 0,
+): HeatingHumidResult => {
   const Cs = sensibleFactor(elevation);
   const Cl = latentFactor(elevation);
 
@@ -248,8 +246,8 @@ export const calculateHeatingHumid = (
   const extraHeatingCap    = (parseFloat(heatingCap) * 1.1).toFixed(2);
 
   // ── 2. OA preheat load ────────────────────────────────────────────────────
-  const winterOut      = climate?.outside?.winter || {};
-  const parsedWinterDb = parseFloat(winterOut.db);
+  const winterOut      = climate?.outside?.winter || {} as any;
+  const parsedWinterDb = parseFloat(String(winterOut.db));
   const winterDbOut    = !isNaN(parsedWinterDb) ? parsedWinterDb : 45;
   const preheatDeltaT  = Math.max(0, dbInF - winterDbOut);
   const preheatCapBTU  = Math.round(Cs * (freshAirCFM || 0) * preheatDeltaT);
@@ -269,7 +267,7 @@ export const calculateHeatingHumid = (
   // ── 4. Humidification load ────────────────────────────────────────────────
 
   // Outdoor winter humidity ratio
-  const parsedWinterRh = parseFloat(winterOut.rh);
+  const parsedWinterRh = parseFloat(String(winterOut.rh));
   const winterRhOut    = !isNaN(parsedWinterRh) ? parsedWinterRh : 30;
   const winterGrOut    = calculateGrains(winterDbOut, winterRhOut, elevation);
 
@@ -293,7 +291,7 @@ export const calculateHeatingHumid = (
 
   // Flag high humidification load (sub-5%RH territory)
   const highHumidificationLoad = humidDeltaGr > HIGH_HUMID_DELTA_GR;
-  let humidWarning = null;
+  let humidWarning: string | null = null;
   if (highHumidificationLoad) {
     humidWarning =
       `High humidification load: Δgr = ${humidDeltaGr.toFixed(1)} gr/lb ` +
