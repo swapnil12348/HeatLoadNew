@@ -3,40 +3,40 @@
 │   │   └── vite.svg
 │   └── src/
 │   │   └── app/
-│   │   │   └── rootReducer.js
-│   │   │   └── store.js
+│   │   │   └── rootReducer.ts
+│   │   │   └── store.ts
 │   │   └── assets/
 │   │   │   └── react.svg
 │   │   └── components/
 │   │   │   └── Layout/
-│   │   │   │   └── Header.jsx
-│   │   │   │   └── HeaderBadge.jsx
-│   │   │   │   └── RoomSidebar.jsx
-│   │   │   │   └── RoomSidebarItem.jsx
-│   │   │   │   └── TabNav.jsx
+│   │   │   │   └── Header.tsx
+│   │   │   │   └── HeaderBadge.tsx
+│   │   │   │   └── RoomSidebar.tsx
+│   │   │   │   └── RoomSidebarItem.tsx
+│   │   │   │   └── TabNav.tsx
 │   │   │   └── UI/
-│   │   │   │   └── InputField.jsx
-│   │   │   │   └── InputGroup.jsx
-│   │   │   │   └── NumberControl.jsx
-│   │   │   │   └── StatCard.jsx
+│   │   │   │   └── InputField.tsx
+│   │   │   │   └── InputGroup.tsx
+│   │   │   │   └── NumberControl.tsx
+│   │   │   │   └── StatCard.tsx
 │   │   └── constants/
-│   │   │   └── ashrae.js
-│   │   │   └── ashraeTables.js
+│   │   │   └── ashrae.ts
+│   │   │   └── ashraeTables.ts
 │   │   │   └── isoCleanroom.ts
-│   │   │   └── ventilation.js
+│   │   │   └── ventilation.ts
 │   │   └── features/
 │   │   │   └── ahu/
 │   │   │   │   └── ahuSlice.ts
 │   │   │   └── climate/
-│   │   │   │   └── climateSlice.js
+│   │   │   │   └── climateSlice.ts
 │   │   │   └── envelope/
-│   │   │   │   └── BuildingShell.jsx
-│   │   │   │   └── envelopeSlice.js
+│   │   │   │   └── BuildingShell.tsx
+│   │   │   │   └── envelopeSlice.ts
 │   │   │   └── project/
-│   │   │   │   └── projectSlice.js
+│   │   │   │   └── projectSlice.ts
 │   │   │   └── results/
-│   │   │   │   └── airQuantities.js
-│   │   │   │   └── heatingHumid.js
+│   │   │   │   └── airQuantities.ts
+│   │   │   │   └── heatingHumid.ts
 │   │   │   │   └── outdoorAirLoad.js
 │   │   │   │   └── pipeSizing.js
 │   │   │   │   └── psychroStatePoints.js
@@ -48,10 +48,10 @@
 │   │   │   │   └── roomSlice.ts
 │   │   └── hooks/
 │   │   │   └── useActiveRoom.js
-│   │   │   └── useNumberControl.js
+│   │   │   └── useNumberControl.ts
 │   │   │   └── useProjectTotals.js
 │   │   │   └── useRdsRow.js
-│   │   │   └── useRoomSidebar.js
+│   │   │   └── useRoomSidebar.ts
 │   │   └── pages/
 │   │   │   └── rds/
 │   │   │   │   └── sections/
