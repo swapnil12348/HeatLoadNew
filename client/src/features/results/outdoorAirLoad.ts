@@ -1,5 +1,5 @@
 /**
- * outdoorAirLoad.js
+ * outdoorAirLoad.ts
  * Responsibility: Outdoor air (fresh air) heat load on the AHU cooling/heating coil.
  *
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 18
@@ -21,14 +21,14 @@
  *
  *   BUG-OA-01 [MEDIUM]: Hardcoded 4.5 replaced with AIR_MASS_FACTOR import.
  *   BUG-OA-02 [MEDIUM]: sensibleFactor(elevation) / latentFactor(elevation)
- *     imported from psychro.js replacing ambiguous ASHRAE constant names.
+ *     imported from psychro.ts replacing ambiguous ASHRAE constant names.
  *   BUG-OA-03 [LOW]: oaTotal vs oaSensible+oaLatent divergence documented.
- *     rdsSelector.js should use oaTotal for coil sizing.
+ *     rdsSelector.ts should use oaTotal for coil sizing.
  *   BUG-OA-04 [INFO]: Ventilation effectiveness (Ez) documented.
  *
  * ── DISTINCTION — Infiltration vs Outdoor Air Load ────────────────────────────
  *
- *   Infiltration (seasonalLoads.js):
+ *   Infiltration (seasonalLoads.ts):
  *     Uncontrolled air leakage — acts directly on the ROOM.
  *
  *   Outdoor Air Load (this module):
@@ -61,90 +61,108 @@ import {
   latentFactor,
   altitudeCorrectionFactor,
 } from '../../utils/psychro';
+
+// @ts-ignore - Ignore missing types until heatingHumid.js is converted
 import { AIR_MASS_FACTOR } from './heatingHumid';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type Season = 'summer' | 'monsoon' | 'winter';
+
+export interface ClimateState {
+  outside?: Record<string, { db?: string | number; rh?: string | number }>;
+  // The rest of the climate state isn't used by this module.
+}
+
+export interface OutdoorAirResult {
+  oaSensible: number; // sensible OA coil load (BTU/hr), signed
+  oaLatent: number; // latent OA coil load (BTU/hr), floored at 0 for cooling
+  oaLatentSigned: number; // latent OA load signed (for heating/humidification)
+  oaTotal: number; // enthalpy-based OA load (BTU/hr), signed [authoritative]
+  oaEnthalpyDelta: number; // h_outdoor − h_room (BTU/lb)
+  cfmOA: number; // outdoor air CFM echoed for traceability
+  dbOut: number; // outdoor dry-bulb used (°F)
+  grOut: number; // outdoor humidity ratio (gr/lb)
+  grIn: number; // indoor humidity ratio (gr/lb)
+  hOut: number; // outdoor air enthalpy (BTU/lb)
+  hIn: number; // indoor air enthalpy (BTU/lb)
+  methodNote: string; // reminder that oaTotal is authoritative for coil sizing
+}
+
+export type AllSeasonsOutdoorAirLoads = Record<Season, OutdoorAirResult>;
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
- * calculateOutdoorAirLoad()
+ * calculateOutdoorAirLoad
  *
  * Computes the sensible, latent, and total enthalpy load imposed on the
  * AHU coil by conditioning the required outdoor air quantity.
  *
- * @param {number} freshAirCFM    - outdoor air CFM (Ez-corrected, from airQuantities.js)
- * @param {object} climate        - full climate Redux state (state.climate)
- * @param {string} season         - 'summer' | 'monsoon' | 'winter'
- * @param {number} dbInF          - room design dry-bulb (°F)
- * @param {number} rhIn           - room design relative humidity (%)
- * @param {number} [elevation=0]  - site elevation (ft). altCf is derived internally
- *                                  from elevation to guarantee Cs/Cl and oaTotal
- *                                  use the same air density basis.
- *
- * @returns {{
- *   oaSensible:       number,  sensible OA coil load (BTU/hr), signed
- *   oaLatent:         number,  latent OA coil load (BTU/hr), floored at 0 for cooling
- *   oaLatentSigned:   number,  latent OA load signed (for heating/humidification)
- *   oaTotal:          number,  enthalpy-based OA load (BTU/hr), signed [authoritative]
- *   oaEnthalpyDelta:  number,  h_outdoor − h_room (BTU/lb)
- *   cfmOA:            number,  outdoor air CFM echoed for traceability
- *   dbOut:            number,  outdoor dry-bulb used (°F)
- *   grOut:            number,  outdoor humidity ratio (gr/lb)
- *   grIn:             number,  indoor humidity ratio (gr/lb)
- *   hOut:             number,  outdoor air enthalpy (BTU/lb)
- *   hIn:              number,  indoor air enthalpy (BTU/lb)
- *   methodNote:       string,  reminder that oaTotal is authoritative for coil sizing
- * }}
+ * @param freshAirCFM   - outdoor air CFM (Ez-corrected, from airQuantities.ts)
+ * @param climate       - full climate Redux state (state.climate)
+ * @param season        - 'summer' | 'monsoon' | 'winter'
+ * @param dbInF         - room design dry-bulb (°F)
+ * @param rhIn          - room design relative humidity (%)
+ * @param elevation     - site elevation (ft). altCf is derived internally.
  */
 export const calculateOutdoorAirLoad = (
-  freshAirCFM,
-  climate,
-  season,
-  dbInF,
-  rhIn,
-  elevation = 0,
-) => {
+  freshAirCFM: number | null | undefined,
+  climate: ClimateState | null | undefined,
+  season: Season,
+  dbInF: number | string,
+  rhIn: number | string,
+  elevation: number | string = 0
+): OutdoorAirResult => {
   // Guard — no fresh air means no OA load
   if (!freshAirCFM || freshAirCFM <= 0) {
     return {
-      oaSensible:      0,
-      oaLatent:        0,
-      oaLatentSigned:  0,
-      oaTotal:         0,
+      oaSensible: 0,
+      oaLatent: 0,
+      oaLatentSigned: 0,
+      oaTotal: 0,
       oaEnthalpyDelta: 0,
-      cfmOA:           0,
-      dbOut:           0,
-      grOut:           0,
-      grIn:            0,
-      hOut:            0,
-      hIn:             0,
-      methodNote:      '',
+      cfmOA: 0,
+      dbOut: 0,
+      grOut: 0,
+      grIn: 0,
+      hOut: 0,
+      hIn: 0,
+      methodNote: '',
     };
   }
 
+  // Parse dbInF and rhIn once
+  const dbInFNum = typeof dbInF === 'string' ? parseFloat(dbInF) : dbInF;
+  const rhInNum = typeof rhIn === 'string' ? parseFloat(rhIn) : rhIn;
+  const elevationNum = typeof elevation === 'string' ? parseFloat(elevation) : elevation;
+
   // altCf derived internally — guarantees oaTotal and Cs/Cl use the same
   // site pressure basis. Passing elevation once is the single source of truth.
-  const altCf = altitudeCorrectionFactor(elevation);
-  const Cs    = sensibleFactor(elevation);
-  const Cl    = latentFactor(elevation);
+  const altCf = altitudeCorrectionFactor(elevationNum);
+  const Cs = sensibleFactor(elevationNum);
+  const Cl = latentFactor(elevationNum);
 
   // ── Outdoor conditions ────────────────────────────────────────────────────
   const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
-  const dbOut   = parseFloat(outdoor.db) || 95;
-  const rhOut   = parseFloat(outdoor.rh) || 40;
+  const dbOut = parseFloat(String(outdoor.db)) || 95;
+  const rhOut = parseFloat(String(outdoor.rh)) || 40;
 
-  const grOut = calculateGrains(dbOut, rhOut, elevation);
-  const hOut  = calculateEnthalpy(dbOut, grOut);
+  const grOut = calculateGrains(dbOut, rhOut, elevationNum);
+  const hOut = calculateEnthalpy(dbOut, grOut);
 
   // ── Indoor conditions ─────────────────────────────────────────────────────
-  const grIn = calculateGrains(dbInF, rhIn, elevation);
-  const hIn  = calculateEnthalpy(dbInF, grIn);
+  const grIn = calculateGrains(dbInFNum, rhInNum, elevationNum);
+  const hIn = calculateEnthalpy(dbInFNum, grIn);
 
   // ── Sensible OA load ──────────────────────────────────────────────────────
-  const oaSensible = Math.round(Cs * freshAirCFM * (dbOut - dbInF));
+  const oaSensible = Math.round(Cs * freshAirCFM * (dbOut - dbInFNum));
 
   // ── Latent OA load ────────────────────────────────────────────────────────
-  const rawLatent      = Cl * freshAirCFM * (grOut - grIn);
-  const oaLatent       = Math.round(Math.max(0, rawLatent));
+  const rawLatent = Cl * freshAirCFM * (grOut - grIn);
+  const oaLatent = Math.round(Math.max(0, rawLatent));
   const oaLatentSigned = Math.round(rawLatent);
 
   // ── Total enthalpy-based OA load (authoritative for coil sizing) ──────────
@@ -161,44 +179,40 @@ export const calculateOutdoorAirLoad = (
     oaLatentSigned,
     oaTotal,
     oaEnthalpyDelta: parseFloat(oaEnthalpyDelta.toFixed(2)),
-    cfmOA:  freshAirCFM,
+    cfmOA: freshAirCFM,
     dbOut,
-    grOut:  parseFloat(grOut.toFixed(1)),
-    grIn:   parseFloat(grIn.toFixed(1)),
-    hOut:   parseFloat(hOut.toFixed(2)),
-    hIn:    parseFloat(hIn.toFixed(2)),
-    methodNote: 'Use oaTotal for coil capacity sizing. oaSensible + oaLatent are for display breakdown only.',
+    grOut: parseFloat(grOut.toFixed(1)),
+    grIn: parseFloat(grIn.toFixed(1)),
+    hOut: parseFloat(hOut.toFixed(2)),
+    hIn: parseFloat(hIn.toFixed(2)),
+    methodNote:
+      'Use oaTotal for coil capacity sizing. oaSensible + oaLatent are for display breakdown only.',
   };
 };
 
 // ── Per-season convenience wrapper ───────────────────────────────────────────
 
 /**
- * calculateAllSeasonOALoads()
+ * calculateAllSeasonOALoads
  *
  * Runs calculateOutdoorAirLoad() for all three seasons in one call.
- * Consumed by rdsSelector.js.
- *
- * @param {number} freshAirCFM   - outdoor air CFM (Ez-corrected)
- * @param {object} climate       - full climate Redux state
- * @param {number} dbInF         - room design dry-bulb (°F)
- * @param {number} rhIn          - room design RH (%)
- * @param {number} [elevation=0] - site elevation (ft)
- *
- * @returns {{ summer: OAResult, monsoon: OAResult, winter: OAResult }}
+ * Consumed by rdsSelector.ts.
  */
 export const calculateAllSeasonOALoads = (
-  freshAirCFM,
-  climate,
-  dbInF,
-  rhIn,
-  elevation = 0,
-) => {
-  const seasons = ['summer', 'monsoon', 'winter'];
+  freshAirCFM: number | null | undefined,
+  climate: ClimateState | null | undefined,
+  dbInF: number | string,
+  rhIn: number | string,
+  elevation: number | string = 0
+): AllSeasonsOutdoorAirLoads => {
+  const seasons: Season[] = ['summer', 'monsoon', 'winter'];
+
+  // Type assertion here because Object.fromEntries typing isn't always smart enough
+  // to infer that we strictly created an AllSeasonsOutdoorAirLoads.
   return Object.fromEntries(
-    seasons.map(season => [
+    seasons.map((season) => [
       season,
       calculateOutdoorAirLoad(freshAirCFM, climate, season, dbInF, rhIn, elevation),
     ])
-  );
+  ) as AllSeasonsOutdoorAirLoads;
 };

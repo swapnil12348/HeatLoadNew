@@ -1,5 +1,5 @@
 /**
- * psychroStatePoints.js
+ * psychroStatePoints.ts
  * Responsibility: Psychrometric state points for all AHU air streams.
  *
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 1 (Psychrometrics)
@@ -28,7 +28,7 @@
  *
  * ── CHANGELOG v2.0 ────────────────────────────────────────────────────────────
  *
- *   FIX PSP-01: calculateRH(dbF, grains, elevFt) from psychro.js replaces
+ *   FIX PSP-01: calculateRH(dbF, grains, elevFt) from psychro.ts replaces
  *     local rhFromGrains — uses Hyland-Wexler equation, correct for sub-zero DP.
  *
  *   FIX PSP-02: Winter uses heating mode — ADP-bypass model does not apply.
@@ -63,87 +63,132 @@ import {
   calculateRH,
 } from '../../utils/psychro';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type Season = 'summer' | 'monsoon' | 'winter';
+
+export interface ClimateState {
+  outside?: Record<string, { db?: string | number; rh?: string | number }>;
+}
+
+export interface AirStatePoint {
+  db: string;
+  wb: string;
+  gr: string;
+  enth: string;
+  rh: string;
+  db_num: number;
+  wb_num: number;
+  gr_num: number;
+  enth_num: number;
+  rh_num: number;
+}
+
+export interface PsychroStateResult {
+  amb: AirStatePoint;
+  fa: AirStatePoint;
+  ra: AirStatePoint;
+  ma: AirStatePoint;
+  cl: AirStatePoint;
+  sa: AirStatePoint;
+  sensibleHeatRatio: string;
+  contactFactor: string;
+}
+
+export interface AllSeasonsStateResult {
+  [key: string]: string; // Dynamically generated keys like `amb_db_summer`
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
  * Compute the full psychrometric state for one air point.
- * calculateRH from psychro.js uses the Hyland-Wexler saturation pressure
+ * calculateRH from psychro.ts uses the Hyland-Wexler saturation pressure
  * equation — correct for sub-zero dew point conditions (1%RH critical facilities).
  *
- * @param {number} dbF       - dry-bulb temperature (°F)
- * @param {number} grains    - humidity ratio (gr/lb)
- * @param {number} elevation - site elevation (ft)
+ * @param dbF       - dry-bulb temperature (°F)
+ * @param grains    - humidity ratio (gr/lb)
+ * @param elevation - site elevation (ft)
  */
-const computeStatePoint = (dbF, grains, elevation = 0) => {
-  const rh   = calculateRH(dbF, grains, elevation);
-  const wb   = calculateWetBulb(dbF, rh, elevation);
+const computeStatePoint = (
+  dbF: number,
+  grains: number,
+  elevation: number = 0
+): AirStatePoint => {
+  const rh = calculateRH(dbF, grains, elevation);
+  const wb = calculateWetBulb(dbF, rh, elevation);
   const enth = calculateEnthalpy(dbF, grains);
 
   return {
-    db:   dbF.toFixed(1),
-    wb:   wb.toFixed(1),
-    gr:   grains.toFixed(1),
+    db: dbF.toFixed(1),
+    wb: wb.toFixed(1),
+    gr: grains.toFixed(1),
     enth: enth.toFixed(2),
-    rh:   rh.toFixed(1),
-    db_num:   dbF,
-    wb_num:   wb,
-    gr_num:   grains,
+    rh: rh.toFixed(1),
+    db_num: dbF,
+    wb_num: wb,
+    gr_num: grains,
     enth_num: enth,
-    rh_num:   rh,
+    rh_num: rh,
   };
 };
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
- * calculatePsychroStatePoints()
+ * calculatePsychroStatePoints
  *
- * @param {object} climate        - full climate state (state.climate)
- * @param {string} season         - 'summer' | 'monsoon' | 'winter'
- * @param {number} dbInF          - room design dry-bulb (°F)
- * @param {number} rhIn           - room design RH (%)
- * @param {number} adpF           - apparatus dew point (°F)
- * @param {number} bf             - bypass factor (0–1)
- * @param {number} freshAirCFM    - fresh air CFM (freshAirCheck)
- * @param {number} supplyAir      - total supply air CFM
- * @param {number} elevation      - site elevation (ft)
+ * @param climate        - full climate state (state.climate)
+ * @param season         - 'summer' | 'monsoon' | 'winter'
+ * @param dbInF          - room design dry-bulb (°F)
+ * @param rhIn           - room design RH (%)
+ * @param adpF           - apparatus dew point (°F)
+ * @param bf             - bypass factor (0–1)
+ * @param freshAirCFM    - fresh air CFM (freshAirCheck)
+ * @param supplyAir      - total supply air CFM
+ * @param elevation      - site elevation (ft)
  */
 export const calculatePsychroStatePoints = (
-  climate,
-  season,
-  dbInF,
-  rhIn,
-  adpF,
-  bf,
-  freshAirCFM,
-  supplyAir,
-  elevation = 0,
-) => {
+  climate: ClimateState | undefined | null,
+  season: Season,
+  dbInF: number,
+  rhIn: number,
+  adpF: number,
+  bf: number,
+  freshAirCFM: number,
+  supplyAir: number,
+  elevation: number = 0
+): PsychroStateResult => {
   // ── 1. Ambient / outdoor ───────────────────────────────────────────────────
   const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
-  const ambDB   = parseFloat(outdoor.db) || 95;
-  const ambRH   = parseFloat(outdoor.rh) || 40;
-  const ambGr   = calculateGrains(ambDB, ambRH, elevation);
-  const amb     = computeStatePoint(ambDB, ambGr, elevation);
+  const ambDB = parseFloat(String(outdoor.db)) || 95;
+  const ambRH = parseFloat(String(outdoor.rh)) || 40;
+  const ambGr = calculateGrains(ambDB, ambRH, elevation);
+  const amb = computeStatePoint(ambDB, ambGr, elevation);
 
   // ── 2. Fresh air ───────────────────────────────────────────────────────────
-  const fa = { ...amb };
+  const fa: AirStatePoint = { ...amb };
 
   // ── 3. Return air (room setpoint) ──────────────────────────────────────────
   const raGr = calculateGrains(dbInF, rhIn, elevation);
-  const ra   = computeStatePoint(dbInF, raGr, elevation);
+  const ra = computeStatePoint(dbInF, raGr, elevation);
 
   // ── 4. Mixed air (RA + FA blend by CFM fraction) ───────────────────────────
   const totalCFM = Math.max(1, supplyAir);
-  const faCFM    = Math.min(freshAirCFM, totalCFM);
-  const raCFM    = Math.max(0, totalCFM - faCFM);
+  const faCFM = Math.min(freshAirCFM, totalCFM);
+  const raCFM = Math.max(0, totalCFM - faCFM);
 
   const maDB = (raCFM * dbInF + faCFM * ambDB) / totalCFM;
-  const maGr = (raCFM * raGr  + faCFM * ambGr) / totalCFM;
-  const ma   = computeStatePoint(maDB, maGr, elevation);
+  const maGr = (raCFM * raGr + faCFM * ambGr) / totalCFM;
+  const ma = computeStatePoint(maDB, maGr, elevation);
 
   // ── 5 + 6: Season-aware coil leaving and supply air ───────────────────────
-  let cl, sa, shr, contactFactor;
+  let cl: AirStatePoint;
+  let sa: AirStatePoint;
+  let shr: number;
+  let contactFactor: number;
 
   if (season === 'winter') {
     // Winter heating mode — cooling coil is OFF.
@@ -159,39 +204,36 @@ export const calculatePsychroStatePoints = (
     // coil is off. Setting (1 - bf) in winter would imply 10% of air
     // bypasses a coil that is not operating — physically meaningless.
     contactFactor = 1.0;
-
   } else {
     // Cooling mode: summer and monsoon
-    const grADP  = calculateGrains(adpF, 100, elevation);
-    const clDB   = adpF;
-    const clGr   = grADP;
+    const grADP = calculateGrains(adpF, 100, elevation);
+    const clDB = adpF;
+    const clGr = grADP;
     const clEnth = calculateEnthalpy(clDB, clGr);
     cl = {
-      db:       clDB.toFixed(1),
-      wb:       clDB.toFixed(1),   // WB = DB at saturation
-      gr:       clGr.toFixed(1),
-      enth:     clEnth.toFixed(2),
-      rh:       '100.0',
-      db_num:   clDB,
-      wb_num:   clDB,
-      gr_num:   clGr,
+      db: clDB.toFixed(1),
+      wb: clDB.toFixed(1), // WB = DB at saturation
+      gr: clGr.toFixed(1),
+      enth: clEnth.toFixed(2),
+      rh: '100.0',
+      db_num: clDB,
+      wb_num: clDB,
+      gr_num: clGr,
       enth_num: clEnth,
-      rh_num:   100,
+      rh_num: 100,
     };
 
     // Supply air: ADP-bypass blend (ASHRAE HOF Ch.18)
     const saDB = clDB * (1 - bf) + dbInF * bf;
-    const saGr = clGr * (1 - bf) + raGr  * bf;
+    const saGr = clGr * (1 - bf) + raGr * bf;
     sa = computeStatePoint(saDB, saGr, elevation);
 
     // Coil SHR — moist-air Cp = 0.240 + 0.444×W captures ~1.8% correction
     // over dry-air Cp = 0.240 alone at typical HVAC conditions.
-    const cpMoist  = 0.240 + 0.444 * (raGr / 7000);
+    const cpMoist = 0.240 + 0.444 * (raGr / 7000);
     const enthDiff = ra.enth_num - sa.enth_num;
     const sensDiff = cpMoist * (dbInF - saDB);
-    shr = enthDiff > 0
-      ? Math.min(1, Math.max(0, sensDiff / enthDiff))
-      : 1.0;
+    shr = enthDiff > 0 ? Math.min(1, Math.max(0, sensDiff / enthDiff)) : 1.0;
 
     contactFactor = 1 - bf;
   }
@@ -204,69 +246,76 @@ export const calculatePsychroStatePoints = (
     cl,
     sa,
     sensibleHeatRatio: shr.toFixed(3),
-    contactFactor:     contactFactor.toFixed(3),
+    contactFactor: contactFactor.toFixed(3),
   };
 };
 
 // ── All-seasons wrapper ───────────────────────────────────────────────────────
 
 /**
- * calculateAllSeasonStatePoints()
+ * calculateAllSeasonStatePoints
  *
  * Runs calculatePsychroStatePoints() for all three seasons.
  * coil_shr and coil_contactFactor are derived from SUMMER ONLY —
  * these are cooling coil design parameters, not winter heating performance.
  */
 export const calculateAllSeasonStatePoints = (
-  climate,
-  dbInF,
-  rhIn,
-  adpF,
-  bf,
-  freshAirCFM,
-  supplyAir,
-  elevation = 0,
-) => {
-  const SEASONS = ['summer', 'monsoon', 'winter'];
-  const fields  = {};
+  climate: ClimateState | undefined | null,
+  dbInF: number,
+  rhIn: number,
+  adpF: number,
+  bf: number,
+  freshAirCFM: number,
+  supplyAir: number,
+  elevation: number = 0
+): AllSeasonsStateResult => {
+  const SEASONS: Season[] = ['summer', 'monsoon', 'winter'];
+  const fields: Record<string, string> = {};
 
-  SEASONS.forEach(season => {
+  SEASONS.forEach((season) => {
     const pts = calculatePsychroStatePoints(
-      climate, season, dbInF, rhIn, adpF, bf,
-      freshAirCFM, supplyAir, elevation,
+      climate,
+      season,
+      dbInF,
+      rhIn,
+      adpF,
+      bf,
+      freshAirCFM,
+      supplyAir,
+      elevation
     );
 
-    fields[`amb_db_${season}`]   = pts.amb.db;
-    fields[`amb_wb_${season}`]   = pts.amb.wb;
-    fields[`amb_gr_${season}`]   = pts.amb.gr;
+    fields[`amb_db_${season}`] = pts.amb.db;
+    fields[`amb_wb_${season}`] = pts.amb.wb;
+    fields[`amb_gr_${season}`] = pts.amb.gr;
     fields[`amb_enth_${season}`] = pts.amb.enth;
 
-    fields[`fa_db_${season}`]    = pts.fa.db;
-    fields[`fa_wb_${season}`]    = pts.fa.wb;
-    fields[`fa_gr_${season}`]    = pts.fa.gr;
-    fields[`fa_enth_${season}`]  = pts.fa.enth;
+    fields[`fa_db_${season}`] = pts.fa.db;
+    fields[`fa_wb_${season}`] = pts.fa.wb;
+    fields[`fa_gr_${season}`] = pts.fa.gr;
+    fields[`fa_enth_${season}`] = pts.fa.enth;
 
-    fields[`ra_db_${season}`]    = pts.ra.db;
-    fields[`ra_wb_${season}`]    = pts.ra.wb;
-    fields[`ra_gr_${season}`]    = pts.ra.gr;
+    fields[`ra_db_${season}`] = pts.ra.db;
+    fields[`ra_wb_${season}`] = pts.ra.wb;
+    fields[`ra_gr_${season}`] = pts.ra.gr;
 
-    fields[`ma_db_${season}`]    = pts.ma.db;
-    fields[`ma_wb_${season}`]    = pts.ma.wb;
-    fields[`ma_gr_${season}`]    = pts.ma.gr;
-    fields[`ma_enth_${season}`]  = pts.ma.enth;
+    fields[`ma_db_${season}`] = pts.ma.db;
+    fields[`ma_wb_${season}`] = pts.ma.wb;
+    fields[`ma_gr_${season}`] = pts.ma.gr;
+    fields[`ma_enth_${season}`] = pts.ma.enth;
 
-    fields[`coilLeave_db_${season}`]   = pts.cl.db;
-    fields[`coilLeave_wb_${season}`]   = pts.cl.wb;
-    fields[`coilLeave_gr_${season}`]   = pts.cl.gr;
+    fields[`coilLeave_db_${season}`] = pts.cl.db;
+    fields[`coilLeave_wb_${season}`] = pts.cl.wb;
+    fields[`coilLeave_gr_${season}`] = pts.cl.gr;
     fields[`coilLeave_enth_${season}`] = pts.cl.enth;
 
-    fields[`sa_db_${season}`]    = pts.sa.db;
-    fields[`sa_wb_${season}`]    = pts.sa.wb;
-    fields[`sa_gr_${season}`]    = pts.sa.gr;
-    fields[`sa_enth_${season}`]  = pts.sa.enth;
+    fields[`sa_db_${season}`] = pts.sa.db;
+    fields[`sa_wb_${season}`] = pts.sa.wb;
+    fields[`sa_gr_${season}`] = pts.sa.gr;
+    fields[`sa_enth_${season}`] = pts.sa.enth;
 
     if (season === 'summer') {
-      fields['coil_shr']           = pts.sensibleHeatRatio;
+      fields['coil_shr'] = pts.sensibleHeatRatio;
       fields['coil_contactFactor'] = pts.contactFactor;
     }
   });

@@ -1,5 +1,5 @@
 /**
- * psychroValidation.js
+ * psychroValidation.ts
  * Runtime validation layer for psychrometric state points in critical facilities.
  *
  * CHANGELOG v2.3:
@@ -15,7 +15,7 @@
  *       'Invalid design conditions' error before any humidity check ran.
  *       Every room failed humidity validation unconditionally.
  *
- *       Primary fix: roomSlice.js now derives and stores designDB (°F) from
+ *       Primary fix: roomSlice.ts now derives and stores designDB (°F) from
  *       designTemp (°C) and keeps it in sync via updateRoom().
  *
  *       Secondary fix here: if designDB is still absent (legacy persisted
@@ -24,7 +24,7 @@
  *       against incomplete room objects regardless of roomSlice version.
  *
  *     BUG B — calculateDewPoint(NaN, rh) returns 0 (not null):
- *       psychro.js calculateDewPoint() returns 0 for non-numeric input (legacy-safe).
+ *       psychro.ts calculateDewPoint() returns 0 for non-numeric input (legacy-safe).
  *       If Bug A occurred, db = NaN → calculateDewPoint returned 0 → dpC = −17.8°C
  *       → compared against dpCMax = −40 → false positives for every dry room.
  *
@@ -39,10 +39,10 @@
  *
  * CHANGELOG v2.1:
  *
- *   CRITICAL-01 — Removed import of saturationPressure from psychro.js.
+ *   CRITICAL-01 — Removed import of saturationPressure from psychro.ts.
  *   HIGH-05     — HUMIDITY_STANDARDS updated for current industry practice.
  *   MEDIUM-01   — validateSupplyAirState() now accepts elevFt parameter.
- *   MEDIUM-02 (in psychro.js) — calculateDewPoint returns null for out-of-range.
+ *   MEDIUM-02 (in psychro.ts) — calculateDewPoint returns null for out-of-range.
  */
 
 import {
@@ -55,111 +55,174 @@ import {
 } from './psychro';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface HumidityStandard {
+  label: string;
+  standard: string;
+  tempMin: number;
+  tempMax: number;
+  rhMin?: number;
+  rhMax?: number;
+  dpCMax?: number;
+  dpFMin?: number;
+  dpFMax?: number;
+  rhApprox?: number;
+  note?: string;
+}
+
+export interface ValidationResult<T = Record<string, any>> {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  computed: T;
+}
+
+export interface RoomValidationState {
+  name?: string;
+  designDB?: number | string;
+  designTemp?: number | string;
+  designRH?: number | string;
+  sensLoad?: number;
+}
+
+export interface SupplyAirState {
+  grains?: number | string;
+  dbF?: number | string;
+  cfm?: number | string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Reference humidity standards for critical facilities
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const HUMIDITY_STANDARDS = {
-
+export const HUMIDITY_STANDARDS: Record<string, HumidityStandard> = {
   'semiconductor-litho': {
-    label:    'Semiconductor — Lithography Bay',
+    label: 'Semiconductor — Lithography Bay',
     standard: 'SEMI S2-0200, ASHRAE 2019 Applications Ch.18',
-    tempMin:  66, tempMax: 72,
-    rhMin:    35, rhMax:   45,
-    note:     'Photoresist requires tight RH — 1%RH deviation degrades CD uniformity',
+    tempMin: 66,
+    tempMax: 72,
+    rhMin: 35,
+    rhMax: 45,
+    note: 'Photoresist requires tight RH — 1%RH deviation degrades CD uniformity',
   },
   'semiconductor-dry': {
-    label:    'Semiconductor — Dry Etch / Diffusion',
+    label: 'Semiconductor — Dry Etch / Diffusion',
     standard: 'SEMI S2-0200',
-    tempMin:  66, tempMax: 74,
-    rhMin:    30, rhMax:   50,
-    note:     'Less sensitive to RH than litho; temperature control dominates',
+    tempMin: 66,
+    tempMax: 74,
+    rhMin: 30,
+    rhMax: 50,
+    note: 'Less sensitive to RH than litho; temperature control dominates',
   },
   'semiconductor-amhs': {
-    label:    'Semiconductor — AMHS Corridors',
+    label: 'Semiconductor — AMHS Corridors',
     standard: 'SEMI E10, facility practice',
-    tempMin:  68, tempMax: 76,
-    rhMin:    35, rhMax:   55,
-    note:     'Wider tolerances acceptable; contaminants more critical than RH',
+    tempMin: 68,
+    tempMax: 76,
+    rhMin: 35,
+    rhMax: 55,
+    note: 'Wider tolerances acceptable; contaminants more critical than RH',
   },
   'pharma-dry-powder': {
-    label:    'Pharma — Dry Powder Filling',
+    label: 'Pharma — Dry Powder Filling',
     standard: 'ISPE Baseline Guide Vol.5, WHO TRS 961 Annex 5',
-    tempMin:  59, tempMax: 77,
-    rhMin:    1,  rhMax:   20,
-    note:     'Products with hygroscopic API may require <5%RH. Verify with process engineer.',
+    tempMin: 59,
+    tempMax: 77,
+    rhMin: 1,
+    rhMax: 20,
+    note: 'Products with hygroscopic API may require <5%RH. Verify with process engineer.',
   },
   'pharma-tablet': {
-    label:    'Pharma — Tablet Compression',
+    label: 'Pharma — Tablet Compression',
     standard: 'ISPE Baseline Guide Vol.5, FDA Guidance',
-    tempMin:  59, tempMax: 77,
-    rhMin:    25, rhMax:   50,
-    note:     'Standard range; hygroscopic APIs may require lower bound',
+    tempMin: 59,
+    tempMax: 77,
+    rhMin: 25,
+    rhMax: 50,
+    note: 'Standard range; hygroscopic APIs may require lower bound',
   },
   'pharma-lyo': {
-    label:    'Pharma — Lyophilisation (Freeze-Dry) Loading',
+    label: 'Pharma — Lyophilisation (Freeze-Dry) Loading',
     standard: 'ISPE Good Practice Guide: Lyophilization',
-    tempMin:  59, tempMax: 68,
-    rhMin:    1,  rhMax:   10,
-    note:     'Must prevent pre-freeze moisture absorption.',
+    tempMin: 59,
+    tempMax: 68,
+    rhMin: 1,
+    rhMax: 10,
+    note: 'Must prevent pre-freeze moisture absorption.',
   },
   'battery-liion-electrode': {
-    label:    'Battery — Li-ion Electrode Slurry & Coating',
+    label: 'Battery — Li-ion Electrode Slurry & Coating',
     standard: 'Industry practice, IEC 62133 facility guidance',
-    tempMin:  64, tempMax: 77,
-    rhMin:    1,  rhMax:   10,
-    note:     'Cathode slurry (NMC/LFP) sensitive to moisture',
+    tempMin: 64,
+    tempMax: 77,
+    rhMin: 1,
+    rhMax: 10,
+    note: 'Cathode slurry (NMC/LFP) sensitive to moisture',
   },
   'battery-liion-assembly': {
-    label:    'Battery — Li-ion Cell Assembly (Dry Room)',
+    label: 'Battery — Li-ion Cell Assembly (Dry Room)',
     standard: 'Industry practice (CATL/Panasonic/Samsung SDI, 2024)',
-    tempMin:  64, tempMax: 77,
-    dpCMax:   -40,
+    tempMin: 64,
+    tempMax: 77,
+    dpCMax: -40,
     rhApprox: 0.4,
-    note:     'Control by frost-point instrument (chilled mirror). '
-            + 'Standard Li-ion: −40°C DP / 70°F ≈ 0.4%RH.',
+    note: 'Control by frost-point instrument (chilled mirror). Standard Li-ion: −40°C DP / 70°F ≈ 0.4%RH.',
   },
   'battery-solidstate': {
-    label:    'Battery — Solid-State Cell Assembly',
+    label: 'Battery — Solid-State Cell Assembly',
     standard: 'Emerging practice (2024)',
-    tempMin:  64, tempMax: 72,
-    dpCMax:   -40,
+    tempMin: 64,
+    tempMax: 72,
+    dpCMax: -40,
     rhApprox: 0.1,
-    note:     'Sulfide-based electrolytes react with moisture at ppm levels.',
+    note: 'Sulfide-based electrolytes react with moisture at ppm levels.',
   },
   'battery-leadacid': {
-    label:    'Battery — Lead-Acid Formation / Charging (Exide / EnerSys)',
+    label: 'Battery — Lead-Acid Formation / Charging (Exide / EnerSys)',
     standard: 'OSHA 29 CFR 1926.403(i), IEEE 1184-2006, NFPA 70 Art.480',
-    tempMin:  60, tempMax: 90,
-    rhMin:    10, rhMax:   70,
-    note:     'H₂ evolution during formation charging requires minimum 1 CFM/ft² supply. '
-            + 'Do NOT use desiccant dehumidification — sub-10%RH is not required.',
+    tempMin: 60,
+    tempMax: 90,
+    rhMin: 10,
+    rhMax: 70,
+    note: 'H₂ evolution during formation charging requires minimum 1 CFM/ft² supply. Do NOT use desiccant dehumidification — sub-10%RH is not required.',
   },
   'iso-8-cleanroom': {
-    label:    'ISO 8 Cleanroom (general)',
+    label: 'ISO 8 Cleanroom (general)',
     standard: 'ISO 14644-1, ASHRAE 170',
-    tempMin:  68, tempMax: 77,
-    rhMin:    30, rhMax:   60,
-    note:     'Occupant comfort and process requirements often conflict.',
+    tempMin: 68,
+    tempMax: 77,
+    rhMin: 30,
+    rhMax: 60,
+    note: 'Occupant comfort and process requirements often conflict.',
   },
   'iso-7-cleanroom': {
-    label:    'ISO 7 Cleanroom',
+    label: 'ISO 7 Cleanroom',
     standard: 'ISO 14644-1',
-    tempMin:  66, tempMax: 74,
-    rhMin:    30, rhMax:   55,
+    tempMin: 66,
+    tempMax: 74,
+    rhMin: 30,
+    rhMax: 55,
   },
   'iso-6-cleanroom': {
-    label:    'ISO 6 Cleanroom',
+    label: 'ISO 6 Cleanroom',
     standard: 'ISO 14644-1',
-    tempMin:  66, tempMax: 72,
-    rhMin:    30, rhMax:   50,
+    tempMin: 66,
+    tempMax: 72,
+    rhMin: 30,
+    rhMax: 50,
   },
   'data-center': {
-    label:    'Data Centre (ASHRAE A1 class)',
+    label: 'Data Centre (ASHRAE A1 class)',
     standard: 'ASHRAE TC 9.9 Thermal Guidelines 2021',
-    tempMin:  59, tempMax: 95,
-    rhMin:    8,  rhMax:   80,
-    dpFMin:   -4, dpFMax:  59,
-    note:     'ASHRAE A1 allows widest range.',
+    tempMin: 59,
+    tempMax: 95,
+    rhMin: 8,
+    rhMax: 80,
+    dpFMin: -4,
+    dpFMax: 59,
+    note: 'ASHRAE A1 allows widest range.',
   },
 };
 
@@ -167,8 +230,12 @@ export const HUMIDITY_STANDARDS = {
 // Validation result factory
 // ─────────────────────────────────────────────────────────────────────────────
 
-const makeResult = (errors = [], warnings = [], computed = {}) => ({
-  valid:    errors.length === 0,
+const makeResult = <T extends Record<string, any>>(
+  errors: string[] = [],
+  warnings: string[] = [],
+  computed: T = {} as T
+): ValidationResult<T> => ({
+  valid: errors.length === 0,
   errors,
   warnings,
   computed,
@@ -178,21 +245,26 @@ const makeResult = (errors = [], warnings = [], computed = {}) => ({
 // validateStatePoint
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
-  const errors   = [];
-  const warnings = [];
+export const validateStatePoint = (
+  dbF: number | string,
+  rh: number | string,
+  grains: number | string | null = null,
+  elevFt: number | string = 0
+) => {
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
-  const dbFNum = parseFloat(dbF);
-  const rhNum  = parseFloat(rh);
+  const dbFNum = parseFloat(String(dbF));
+  const rhNum = parseFloat(String(rh));
 
   if (isNaN(dbFNum)) errors.push('Dry-bulb temperature is not a valid number.');
-  if (isNaN(rhNum))  errors.push('Relative humidity is not a valid number.');
+  if (isNaN(rhNum)) errors.push('Relative humidity is not a valid number.');
   if (errors.length) return makeResult(errors, warnings);
 
-  if (rhNum < 0)     errors.push(`RH cannot be negative (got ${rhNum}%).`);
-  if (rhNum > 100)   errors.push(`RH exceeds 100% (got ${rhNum.toFixed(1)}%).`);
+  if (rhNum < 0) errors.push(`RH cannot be negative (got ${rhNum}%).`);
+  if (rhNum > 100) errors.push(`RH exceeds 100% (got ${rhNum.toFixed(1)}%).`);
   if (dbFNum < -100) errors.push(`DB temperature ${dbFNum}°F is below psychrometric model range.`);
-  if (dbFNum >  250) errors.push(`DB temperature ${dbFNum}°F is above psychrometric model range.`);
+  if (dbFNum > 250) errors.push(`DB temperature ${dbFNum}°F is above psychrometric model range.`);
 
   const computed_grains = calculateGrains(dbFNum, rhNum, elevFt);
 
@@ -212,9 +284,9 @@ export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
   const computed_rh = grains !== null ? calculateRH(dbFNum, grains, elevFt) : null;
 
   if (grains !== null) {
-    const providedGrains = parseFloat(grains);
-    const grainsFromRh   = computed_grains;
-    const discrepancy    = Math.abs(providedGrains - grainsFromRh);
+    const providedGrains = parseFloat(String(grains));
+    const grainsFromRh = computed_grains;
+    const discrepancy = Math.abs(providedGrains - grainsFromRh);
 
     if (discrepancy > 2.0) {
       warnings.push(
@@ -228,13 +300,13 @@ export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
   if (rhNum > 0 && rhNum < 1) {
     warnings.push(
       `RH=${rhNum.toFixed(2)}% is below 1%. Use a calibrated chilled-mirror instrument. ` +
-      `Frost point: ${computed_dp}°F (${((computed_dp - 32) * 5/9).toFixed(1)}°C).`
+      `Frost point: ${computed_dp}°F (${(((computed_dp - 32) * 5) / 9).toFixed(1)}°C).`
     );
   }
 
   if (computed_dp < 32) {
     warnings.push(
-      `Dew/frost point ${computed_dp}°F (${((computed_dp - 32) * 5/9).toFixed(1)}°C) ` +
+      `Dew/frost point ${computed_dp}°F (${(((computed_dp - 32) * 5) / 9).toFixed(1)}°C) ` +
       `is below freezing — this is a FROST POINT.`
     );
   }
@@ -246,7 +318,7 @@ export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
   }
 
   return makeResult(errors, warnings, {
-    grains:   computed_grains,
+    grains: computed_grains,
     dewPoint: computed_dp,
   });
 };
@@ -266,9 +338,9 @@ export const validateStatePoint = (dbF, rh, grains = null, elevFt = 0) => {
  * to fire before any humidity check runs, producing a misleading
  * 'Invalid design conditions' error for every room.
  */
-export const validateRoomHumidity = (room, standardKey) => {
-  const errors   = [];
-  const warnings = [];
+export const validateRoomHumidity = (room: RoomValidationState, standardKey: string) => {
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
   const standard = HUMIDITY_STANDARDS[standardKey];
   if (!standard) {
@@ -276,15 +348,16 @@ export const validateRoomHumidity = (room, standardKey) => {
     return makeResult([], warnings);
   }
 
-  const rh       = parseFloat(room.designRH);
+  const rh = parseFloat(String(room.designRH));
   const roomName = room.name || 'Room';
 
   // Accept designDB (°F) first; fall back to converting designTemp (°C).
   // Conversion: designTemp × 9/5 + 32 (exact per ASHRAE IP units).
-  const rawDB = room.designDB != null
-    ? parseFloat(room.designDB)
-    : room.designTemp != null
-      ? parseFloat(room.designTemp) * 9 / 5 + 32
+  const rawDB =
+    room.designDB != null
+      ? parseFloat(String(room.designDB))
+      : room.designTemp != null
+      ? parseFloat(String(room.designTemp)) * (9 / 5) + 32
       : NaN;
   const db = rawDB;
 
@@ -335,7 +408,7 @@ export const validateRoomHumidity = (room, standardKey) => {
           `Cannot validate against dpCMax=${standard.dpCMax}°C. Use specialist tool.`
         );
       } else {
-        const dpC = (dpRaw - 32) * 5 / 9;
+        const dpC = ((dpRaw - 32) * 5) / 9;
         if (dpC > standard.dpCMax) {
           errors.push(
             `${roomName} frost point ${dpC.toFixed(1)}°C exceeds maximum for ${standard.label} ` +
@@ -364,22 +437,27 @@ export const validateRoomHumidity = (room, standardKey) => {
  * sensibleFactor(elevFt) replaces hardcoded 1.08.
  * Mirrors the designDB fallback from validateRoomHumidity for legacy room objects.
  */
-export const validateSupplyAirState = (supply, room, elevFt = 0) => {
-  const errors   = [];
-  const warnings = [];
+export const validateSupplyAirState = (
+  supply: SupplyAirState,
+  room: RoomValidationState,
+  elevFt: number | string = 0
+) => {
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
-  const supplyGrains = parseFloat(supply.grains);
-  const supplyDB     = parseFloat(supply.dbF);
-  const supplyCFM    = parseFloat(supply.cfm);
+  const supplyGrains = parseFloat(String(supply.grains));
+  const supplyDB = parseFloat(String(supply.dbF));
+  const supplyCFM = parseFloat(String(supply.cfm));
 
   // Accept designDB (°F) first; fall back to converting designTemp (°C).
-  const rawRoomDB = room.designDB != null
-    ? parseFloat(room.designDB)
-    : room.designTemp != null
-      ? parseFloat(room.designTemp) * 9 / 5 + 32
+  const rawRoomDB =
+    room.designDB != null
+      ? parseFloat(String(room.designDB))
+      : room.designTemp != null
+      ? parseFloat(String(room.designTemp)) * (9 / 5) + 32
       : NaN;
   const roomDB = rawRoomDB;
-  const roomRH = parseFloat(room.designRH);
+  const roomRH = parseFloat(String(room.designRH));
 
   if ([supplyGrains, supplyDB, supplyCFM, roomDB, roomRH].some(isNaN)) {
     errors.push('validateSupplyAirState: one or more inputs are not valid numbers.');
@@ -413,7 +491,7 @@ export const validateSupplyAirState = (supply, room, elevFt = 0) => {
 
   if (supplyCFM > 0 && room.sensLoad) {
     const deltaT = roomDB - supplyDB;
-    const sf     = sensibleFactor(elevFt);
+    const sf = sensibleFactor(elevFt);
     const availableSensible = sf * supplyCFM * deltaT;
     if (availableSensible < room.sensLoad * 0.9) {
       warnings.push(
@@ -436,16 +514,16 @@ export const validateSupplyAirState = (supply, room, elevFt = 0) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const validateHumidificationCapacity = (
-  requiredLbHr,
-  availableLbHr,
-  safetyFactor = 1.25,
+  requiredLbHr: number | string,
+  availableLbHr: number | string,
+  safetyFactor: number | string = 1.25
 ) => {
-  const errors   = [];
-  const warnings = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
-  const req   = parseFloat(requiredLbHr);
-  const avail = parseFloat(availableLbHr);
-  const sf    = parseFloat(safetyFactor);
+  const req = parseFloat(String(requiredLbHr));
+  const avail = parseFloat(String(availableLbHr));
+  const sf = parseFloat(String(safetyFactor));
 
   if (isNaN(req) || isNaN(avail)) {
     errors.push('validateHumidificationCapacity: invalid input values.');
@@ -465,13 +543,13 @@ export const validateHumidificationCapacity = (
     warnings.push(
       `Humidifier may be significantly oversized. ` +
       `Design requirement: ${designCapacity.toFixed(1)} lb/hr. ` +
-      `Installed capacity: ${avail.toFixed(1)} lb/hr (${(avail/designCapacity).toFixed(1)}× design).`
+      `Installed capacity: ${avail.toFixed(1)} lb/hr (${(avail / designCapacity).toFixed(1)}× design).`
     );
   }
 
   return makeResult(errors, warnings, {
     requiredWithSF: designCapacity,
-    margin:         avail - designCapacity,
-    marginPct:      ((avail - designCapacity) / designCapacity * 100).toFixed(1),
+    margin: avail - designCapacity,
+    marginPct: (((avail - designCapacity) / designCapacity) * 100).toFixed(1),
   });
 };
