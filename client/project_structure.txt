@@ -2,55 +2,55 @@
 │   └── vite.svg
 └── src/
 │   └── app/
-│   │   └── rootReducer.js
-│   │   └── store.js
+│   │   └── rootReducer.ts
+│   │   └── store.ts
 │   └── assets/
 │   │   └── react.svg
 │   └── components/
 │   │   └── Layout/
-│   │   │   └── Header.jsx
-│   │   │   └── HeaderBadge.jsx
-│   │   │   └── RoomSidebar.jsx
-│   │   │   └── RoomSidebarItem.jsx
-│   │   │   └── TabNav.jsx
+│   │   │   └── Header.tsx
+│   │   │   └── HeaderBadge.tsx
+│   │   │   └── RoomSidebar.tsx
+│   │   │   └── RoomSidebarItem.tsx
+│   │   │   └── TabNav.tsx
 │   │   └── UI/
-│   │   │   └── InputField.jsx
-│   │   │   └── InputGroup.jsx
-│   │   │   └── NumberControl.jsx
-│   │   │   └── StatCard.jsx
+│   │   │   └── InputField.tsx
+│   │   │   └── InputGroup.tsx
+│   │   │   └── NumberControl.tsx
+│   │   │   └── StatCard.tsx
 │   └── constants/
-│   │   └── ashrae.js
-│   │   └── ashraeTables.js
-│   │   └── isoCleanroom.js
-│   │   └── ventilation.js
+│   │   └── ashrae.ts
+│   │   └── ashraeTables.ts
+│   │   └── isoCleanroom.ts
+│   │   └── ventilation.ts
 │   └── features/
 │   │   └── ahu/
-│   │   │   └── ahuSlice.js
+│   │   │   └── ahuSlice.ts
 │   │   └── climate/
-│   │   │   └── climateSlice.js
+│   │   │   └── climateSlice.ts
 │   │   └── envelope/
-│   │   │   └── BuildingShell.jsx
-│   │   │   └── envelopeSlice.js
+│   │   │   └── BuildingShell.tsx
+│   │   │   └── envelopeSlice.ts
 │   │   └── project/
-│   │   │   └── projectSlice.js
+│   │   │   └── projectSlice.ts
 │   │   └── results/
-│   │   │   └── airQuantities.js
-│   │   │   └── heatingHumid.js
-│   │   │   └── outdoorAirLoad.js
-│   │   │   └── pipeSizing.js
-│   │   │   └── psychroStatePoints.js
-│   │   │   └── rdsSelector.js
-│   │   │   └── seasonalLoads.js
+│   │   │   └── airQuantities.ts
+│   │   │   └── heatingHumid.ts
+│   │   │   └── outdoorAirLoad.ts
+│   │   │   └── pipeSizing.ts
+│   │   │   └── psychroStatePoints.ts
+│   │   │   └── rdsSelector.ts
+│   │   │   └── seasonalLoads.ts
 │   │   └── room/
 │   │   │   └── AhuAssignment.jsx
 │   │   │   └── roomActions.js
-│   │   │   └── roomSlice.js
+│   │   │   └── roomSlice.ts
 │   └── hooks/
 │   │   └── useActiveRoom.js
-│   │   └── useNumberControl.js
+│   │   └── useNumberControl.ts
 │   │   └── useProjectTotals.js
 │   │   └── useRdsRow.js
-│   │   └── useRoomSidebar.js
+│   │   └── useRoomSidebar.ts
 │   └── pages/
 │   │   └── rds/
 │   │   │   └── sections/
@@ -74,14 +74,15 @@
 │   │   └── ResultsPage.jsx
 │   │   └── RoomConfig.jsx
 │   └── utils/
-│   │   └── envelopeAggregator.js
-│   │   └── envelopeCalc.js
-│   │   └── envelopeHelpers.js
-│   │   └── glazingCalc.js
-│   │   └── isoValidation.js
-│   │   └── psychro.js
-│   │   └── psychroValidation.js
-│   │   └── units.js
+│   │   └── envelopeAggregator.ts
+│   │   └── envelopeCalc.ts
+│   │   └── envelopeHelpers.ts
+│   │   └── glazingCalc.ts
+│   │   └── isoValidation.ts
+│   │   └── psychro.ts
+│   │   └── psychroValidation.ts
+│   │   └── types.ts
+│   │   └── units.ts
 │   └── App.css
 │   └── App.jsx
 │   └── index.css
@@ -91,5 +92,7 @@
 └── index.html
 └── package-lock.json
 └── package.json
+└── tsconfig.json
+└── tsconfig.node.json
 └── vercel.json
 └── vite.config.js
