@@ -1,5 +1,5 @@
 /**
- * envelopeCalc.js
+ * envelopeCalc.ts
  * Opaque envelope heat gain / loss calculations.
  *
  * Reference: ASHRAE Handbook — Fundamentals (2021), Ch.18 & 28
@@ -13,12 +13,12 @@
  *     from floorArea × height (both SI), which produced a value in m³ labelled
  *     as ft³. For a 300 m³ room (= 10,764 ft³), cfmInf was 35.9× too low.
  *
- *     Fix: caller (seasonalLoads.js) now passes volumeFt3 already converted via
- *     m3ToFt3(). calcInfiltrationGain receives pre-converted ft³ directly.
+ *     Fix: caller (seasonalLoads.ts) now passes volumeFt3 already converted.
+ *     calcInfiltrationGain receives pre-converted ft³ directly.
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
- *   LOW-01 FIX — Import path for psychro.js corrected (was '../utils/psychro').
+ *   LOW-01 FIX — Import path for psychro corrected.
  *
  * ── SIGN CONVENTION (all functions) ──────────────────────────────────────────
  *
@@ -32,15 +32,8 @@
  *
  *   calcWallGain() passes orientation directly to WALL_CLTD[orientation] for
  *   the CLTD table lookup. For the LM correction, getLM(latitude, orientation)
- *   in envelopeHelpers.js is responsible for swapping N↔S (and NE↔SE, NW↔SW)
+ *   in envelopeHelpers is responsible for swapping N↔S (and NE↔SE, NW↔SW)
  *   when latitude < 0.
- *
- *   ⚠️  The CLTD base value lookup also requires the swapped orientation for
- *       southern hemisphere — a N-facing wall in Sydney receives the same low
- *       sun as a S-facing wall in Delhi. Verify that envelopeHelpers.getLM()
- *       applies the orientation swap BEFORE the CLTD table is read, or that
- *       calcWallGain passes the effective orientation to WALL_CLTD.
- *       → To be confirmed in envelopeHelpers.js audit.
  */
 
 import {
@@ -52,9 +45,55 @@ import {
   correctCLTD,
 } from '../constants/ashraeTables';
 
-import { sensibleFactor, latentFactor }                    from './psychro';
-import { getMeanOutdoorTemp, getLM, swapForHemisphere }    from './envelopeHelpers';
-import { m3ToFt3 }                                         from './units';
+// @ts-ignore - Ignore missing types until psychro.js is converted
+import { sensibleFactor, latentFactor } from './psychro';
+// @ts-ignore - Ignore missing types until envelopeHelpers.js is converted
+import { getMeanOutdoorTemp, getLM, swapForHemisphere } from './envelopeHelpers';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type Season = 'summer' | 'monsoon' | 'winter';
+
+export interface Wall {
+  area?: string | number;
+  uValue?: string | number;
+  orientation?: string;
+  construction?: string;
+}
+
+export interface Roof {
+  area?: string | number;
+  uValue?: string | number;
+  construction?: string;
+}
+
+export interface Partition {
+  area?: string | number;
+  uValue?: string | number;
+  tAdjWinter?: string | number;
+  tAdjSummer?: string | number;
+  tAdj?: string | number;
+}
+
+export interface Infiltration {
+  achValue?: string | number;
+}
+
+export interface ClimateState {
+  outside?: Record<string, { db?: string | number }>;
+}
+
+export interface RoomState {
+  pressurized?: boolean;
+}
+
+export interface InfiltrationResult {
+  sensible: number;
+  latent: number;
+  cfm: number;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal guard helpers
@@ -63,60 +102,59 @@ import { m3ToFt3 }                                         from './units';
 /**
  * safeTemp(v, fallback)
  * Safe temperature parser — catches both undefined/null AND NaN.
- * Used in calcPartitionGain for adjacent space temperature fields.
+ * Overloaded to ensure proper TypeScript return types.
  */
-const safeTemp = (v, fallback) => {
-  const n = parseFloat(v);
+function safeTemp(v: any, fallback: number): number;
+function safeTemp(v: any, fallback: null): number | null;
+function safeTemp(v: any, fallback: number | null): number | null {
+  if (v === null || v === undefined) return fallback;
+  const n = typeof v === 'string' ? parseFloat(v) : Number(v);
   return isNaN(n) ? fallback : n;
-};
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Wall Heat Gain / Heat Loss
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * calcWallGain(wall, climate, tRoom, season, latitude?, dailyRange?)
+ * calcWallGain
  *
  * Summer/monsoon: CLTD method (ASHRAE HOF 2021, Ch.18 & Ch.28).
  * Winter: steady-state conduction Q = U × A × (T_outdoor − T_room).
- *
- * @param {object} wall       - wall element from envelopeSlice
- * @param {object} climate    - climate state from climateSlice
- * @param {number} tRoom      - room design dry-bulb (°F)
- * @param {string} season     - 'summer' | 'monsoon' | 'winter'
- * @param {number} latitude   - site latitude (degrees; negative = south)
- * @param {number} dailyRange - diurnal range (°F); 0 = use DIURNAL_RANGE_DEFAULTS
- * @returns {number} heat gain/loss (BTU/hr); negative = heat loss outward
  */
 export const calcWallGain = (
-  wall,
-  climate,
-  tRoom,
-  season,
-  latitude   = 28,
-  dailyRange = 0,
-) => {
-  const area = parseFloat(wall.area)   || 0;
-  const u    = parseFloat(wall.uValue) || 0;
+  wall: Wall,
+  climate: ClimateState,
+  tRoom: number,
+  season: Season,
+  latitude: number = 28,
+  dailyRange: number = 0
+): number => {
+  const area = parseFloat(String(wall.area)) || 0;
+  const u = parseFloat(String(wall.uValue)) || 0;
   if (area === 0 || u === 0) return 0;
 
-  const orientation  = wall.orientation  || 'N';
+  const orientation = wall.orientation || 'N';
   const construction = wall.construction || 'medium';
-  const dbOut        = parseFloat(climate?.outside?.[season]?.db) || 95;
+  const dbOut = parseFloat(String(climate?.outside?.[season]?.db)) || 95;
 
   if (season === 'winter') {
     return u * area * (dbOut - tRoom);
   }
 
   // Use hemisphere-swapped orientation for BOTH the WALL_CLTD base lookup
-  // and the LM correction (getLM swaps internally). Without this, a S-facing
-  // wall in Sydney (latitude < 0) would get the low NH-summer S-facing CLTD
-  // instead of the correct high-sun N-facing equivalent.
+  // and the LM correction
   const effectiveOrientation = swapForHemisphere(orientation, latitude);
-  const baseCLTD     = WALL_CLTD[effectiveOrientation]?.[construction] ?? 15;
-  const seasonMult   = WALL_CLTD_SEASONAL[season] ?? 1.0;
+  
+  // Cast table to any to bypass indexing errors if ashraeTables isn't perfectly typed
+  const cltdTable: any = WALL_CLTD;
+  const baseCLTD = cltdTable[effectiveOrientation]?.[construction] ?? 15;
+  
+  const seasonalTable: any = WALL_CLTD_SEASONAL;
+  const seasonMult = seasonalTable[season] ?? 1.0;
+  
   const tMeanOutdoor = getMeanOutdoorTemp(dbOut, season, dailyRange);
-  const lm           = getLM(latitude, orientation);
+  const lm = getLM(latitude, orientation);
 
   const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, lm) * seasonMult;
   return u * area * correctedCLTD;
@@ -127,41 +165,37 @@ export const calcWallGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * calcRoofGain(roof, climate, tRoom, season, latitude?, dailyRange?)
+ * calcRoofGain
  *
  * Roofs have no orientation LM correction (horizontal surface).
  * Summer/monsoon: CLTD method. Winter: steady-state U×A×ΔT.
- *
- * @param {object} roof       - roof element from envelopeSlice
- * @param {object} climate    - climate state from climateSlice
- * @param {number} tRoom      - room design dry-bulb (°F)
- * @param {string} season     - 'summer' | 'monsoon' | 'winter'
- * @param {number} latitude   - site latitude (unused for roofs — no orientation)
- * @param {number} dailyRange - diurnal range (°F)
- * @returns {number} heat gain/loss (BTU/hr); negative = heat loss
  */
 export const calcRoofGain = (
-  roof,
-  climate,
-  tRoom,
-  season,
-  latitude   = 28,
-  dailyRange = 0,
-) => {
-  const area = parseFloat(roof.area)   || 0;
-  const u    = parseFloat(roof.uValue) || 0;
+  roof: Roof,
+  climate: ClimateState,
+  tRoom: number,
+  season: Season,
+  latitude: number = 28, // Unused logic-wise but kept for signature consistency
+  dailyRange: number = 0
+): number => {
+  const area = parseFloat(String(roof.area)) || 0;
+  const u = parseFloat(String(roof.uValue)) || 0;
   if (area === 0 || u === 0) return 0;
 
   const construction = roof.construction || '2" insulation';
-  const dbOut        = parseFloat(climate?.outside?.[season]?.db) || 95;
+  const dbOut = parseFloat(String(climate?.outside?.[season]?.db)) || 95;
 
   if (season === 'winter') {
     return u * area * (dbOut - tRoom);
   }
 
-  const baseCLTD      = ROOF_CLTD[construction] ?? 30;
-  const seasonMult    = ROOF_CLTD_SEASONAL[season] ?? 1.0;
-  const tMeanOutdoor  = getMeanOutdoorTemp(dbOut, season, dailyRange);
+  const cltdTable: any = ROOF_CLTD;
+  const baseCLTD = cltdTable[construction] ?? 30;
+  
+  const seasonalTable: any = ROOF_CLTD_SEASONAL;
+  const seasonMult = seasonalTable[season] ?? 1.0;
+  
+  const tMeanOutdoor = getMeanOutdoorTemp(dbOut, season, dailyRange);
 
   const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, 0) * seasonMult;
   return u * area * correctedCLTD;
@@ -172,35 +206,29 @@ export const calcRoofGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * calcPartitionGain(element, tRoom, season?)
+ * calcPartitionGain
  *
  * Season-aware adjacent temperature selection:
  *   Summer/monsoon: tAdjSummer → tAdj → 85°F fallback
  *   Winter:         tAdjWinter → tAdj → 65°F fallback
- *
- * safeTemp() handles NaN from parseFloat(undefined) for missing fields.
- *
- * @param {object} element - partition/floor element from envelopeSlice
- * @param {number} tRoom   - room design dry-bulb (°F)
- * @param {string} season  - 'summer' | 'monsoon' | 'winter'
- * @returns {number} heat transfer (BTU/hr); positive = into space, negative = heat loss
  */
-export const calcPartitionGain = (element, tRoom, season = 'summer') => {
-  const area = parseFloat(element.area)   || 0;
-  const u    = parseFloat(element.uValue) || 0;
+export const calcPartitionGain = (
+  element: Partition,
+  tRoom: number,
+  season: Season = 'summer'
+): number => {
+  const area = parseFloat(String(element.area)) || 0;
+  const u = parseFloat(String(element.uValue)) || 0;
   if (area === 0 || u === 0) return 0;
 
-  let tAdj;
+  let tAdj: number;
+  
   if (season === 'winter') {
     const tAdjWinter = safeTemp(element.tAdjWinter, null);
-    tAdj = tAdjWinter !== null
-      ? tAdjWinter
-      : safeTemp(element.tAdj, 65);
+    tAdj = tAdjWinter !== null ? tAdjWinter : safeTemp(element.tAdj, 65);
   } else {
     const tAdjSummer = safeTemp(element.tAdjSummer, null);
-    tAdj = tAdjSummer !== null
-      ? tAdjSummer
-      : safeTemp(element.tAdj, 85);
+    tAdj = tAdjSummer !== null ? tAdjSummer : safeTemp(element.tAdj, 85);
   }
 
   return u * area * (tAdj - tRoom);
@@ -211,27 +239,23 @@ export const calcPartitionGain = (element, tRoom, season = 'summer') => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * calcSlabGain(perimeterFt, insulationType?, tRoom, tGround?)
+ * calcSlabGain
  *
  * ASHRAE F-factor method (HOF 2021 Ch.18, Table 12):
  *   Q_slab = F × perimeter_ft × (tGround − tRoom)
- *
- * @param {number} perimeterFt    - exposed slab perimeter (ft)
- * @param {string} insulationType - key from SLAB_F_FACTOR (default 'Uninsulated')
- * @param {number} tRoom          - room design dry-bulb (°F)
- * @param {number} tGround        - ground temperature (°F, default 55°F)
- * @returns {number} heat transfer (BTU/hr); negative = heat loss to ground
  */
 export const calcSlabGain = (
-  perimeterFt,
-  insulationType = 'Uninsulated',
-  tRoom,
-  tGround = 55,
-) => {
-  const perimeter = parseFloat(perimeterFt) || 0;
+  perimeterFt: string | number,
+  insulationType: string = 'Uninsulated',
+  tRoom: number,
+  tGround: number = 55
+): number => {
+  const perimeter = parseFloat(String(perimeterFt)) || 0;
   if (perimeter === 0) return 0;
 
-  const fFactor = SLAB_F_FACTOR[insulationType] ?? SLAB_F_FACTOR['Uninsulated'];
+  const slabTable: any = SLAB_F_FACTOR;
+  const fFactor = slabTable[insulationType] ?? slabTable['Uninsulated'];
+  
   return fFactor * perimeter * (tGround - tRoom);
 };
 
@@ -240,36 +264,27 @@ export const calcSlabGain = (
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * calcInfiltrationGain(inf, room, volumeFt3, dbOut, tRoom, grIn, grOut, elevFt)
+ * calcInfiltrationGain
  *
  * Computes sensible and latent infiltration loads from envelope ACH value.
  * Returns zeros for pressurized rooms or when ACH = 0.
- *
- * @param {object} inf       - envelope.infiltration object (source of achValue)
- * @param {object} room      - room state — used only for pressurized check
- * @param {number} volumeFt3 - room volume in ft³ (pre-converted by caller)
- * @param {number} dbOut     - outdoor dry-bulb (°F)
- * @param {number} tRoom     - room design dry-bulb (°F)
- * @param {number} grIn      - indoor humidity ratio (gr/lb), elevation-corrected
- * @param {number} grOut     - outdoor humidity ratio (gr/lb), elevation-corrected
- * @param {number} elevFt    - site elevation (ft)
- * @returns {{ sensible: number, latent: number, cfm: number }} BTU/hr, signed
  */
 export const calcInfiltrationGain = (
-  inf,
-  room,
-  volumeFt3,
-  dbOut,
-  tRoom,
-  grIn,
-  grOut,
-  elevFt = 0,
-) => {
+  inf: Infiltration | undefined | null,
+  room: RoomState | undefined | null,
+  volumeFt3: number,
+  dbOut: number,
+  tRoom: number,
+  grIn: number,
+  grOut: number,
+  elevFt: number = 0
+): InfiltrationResult => {
   const isPressurized = room?.pressurized ?? false;
   if (isPressurized) return { sensible: 0, latent: 0, cfm: 0 };
 
-  const achInf = parseFloat(inf?.achValue) || 0;
-  const cfm    = (volumeFt3 * achInf) / 60;
+  const achInf = parseFloat(String(inf?.achValue)) || 0;
+  const cfm = (volumeFt3 * achInf) / 60;
+  
   if (cfm <= 0) return { sensible: 0, latent: 0, cfm: 0 };
 
   const sf = sensibleFactor(elevFt);
@@ -277,7 +292,7 @@ export const calcInfiltrationGain = (
 
   return {
     sensible: Math.round(sf * cfm * (dbOut - tRoom)),
-    latent:   Math.round(lf * cfm * Math.max(0, grOut - grIn)),
+    latent: Math.round(lf * cfm * Math.max(0, grOut - grIn)),
     cfm,
   };
 };

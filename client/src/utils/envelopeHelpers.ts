@@ -1,10 +1,10 @@
 /**
- * envelopeHelpers.js
+ * envelopeHelpers.ts
  * Internal helpers shared across envelope calculation modules.
  *
  * ⚠️  Not part of the public API. Import only from:
- *       envelopeCalc.js
- *       glazingCalc.js
+ *       envelopeCalc.ts
+ *       glazingCalc.ts
  *
  * Reference: ASHRAE Handbook — Fundamentals (2021), Ch.18 & 27
  *
@@ -19,11 +19,11 @@
  *     N ↔ S,  NE ↔ SE,  NW ↔ SW,  E and W unchanged (symmetric about equator)
  *
  *   This swap must be applied consistently to ALL orientation-dependent table lookups:
- *     • WALL_CLTD base value (envelopeCalc.js — uses swapForHemisphere exported here)
+ *     • WALL_CLTD base value (envelopeCalc.ts — uses swapForHemisphere exported here)
  *     • CLTD_LM correction (getLM — applied internally)
  *     • SHGF base value (getCorrectedSHGF — applied internally)
  *     • SHGF latitude factor (getCorrectedSHGF — applied internally)
- *     • CLF table (glazingCalc.js — uses swapForHemisphere exported here)
+ *     • CLF table (glazingCalc.ts — uses swapForHemisphere exported here)
  */
 
 import {
@@ -34,61 +34,78 @@ import {
   interpolateLatitude,
 } from '../constants/ashraeTables';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type Season = 'summer' | 'monsoon' | 'winter';
+
+export interface Glass {
+  shgc?: string | number;
+  sc?: string | number;
+  // Other properties like area, uValue, orientation etc. exist on the full
+  // glass element, but these are the only ones resolveShgc cares about.
+}
+
 // ── Southern hemisphere orientation swap ──────────────────────────────────────
 // E and W are omitted — they are symmetric about the equator and do not swap.
-const SOUTHERN_SWAP = {
-  N: 'S', S: 'N',
-  NE: 'SE', SE: 'NE',
-  SW: 'NW', NW: 'SW',
+const SOUTHERN_SWAP: Record<string, string> = {
+  N: 'S',
+  S: 'N',
+  NE: 'SE',
+  SE: 'NE',
+  SW: 'NW',
+  NW: 'SW',
 };
 
 /**
- * swapForHemisphere(orientation, latitude)
+ * swapForHemisphere
  *
  * Returns the effective orientation for ASHRAE table lookups, accounting for
  * southern hemisphere mirroring. Exported so callers (envelopeCalc, glazingCalc)
  * can apply the same swap to their own table lookups.
  *
- * @param {string} orientation - wall/glass orientation ('N','NE','E',...)
- * @param {number} latitude    - site latitude (negative = southern hemisphere)
- * @returns {string} effective orientation for table lookup
+ * @param orientation - wall/glass orientation ('N','NE','E',...)
+ * @param latitude    - site latitude (negative = southern hemisphere)
+ * @returns effective orientation for table lookup
  */
-export const swapForHemisphere = (orientation, latitude) =>
-  latitude < 0
-    ? (SOUTHERN_SWAP[orientation] ?? orientation)
-    : orientation;
+export const swapForHemisphere = (orientation: string, latitude: number): string =>
+  latitude < 0 ? SOUTHERN_SWAP[orientation] ?? orientation : orientation;
 
 // ── Mean outdoor dry-bulb temperature ─────────────────────────────────────────
 /**
- * getMeanOutdoorTemp(dbOutdoor, season, dailyRange?)
+ * getMeanOutdoorTemp
  *
  * ASHRAE HOF 2021 Ch.18: tMean = tPeak − DR/2
  * tMean is the value required by correctCLTD() for the mean-temperature correction.
  *
- * @param {number} dbOutdoor  - peak outdoor dry-bulb (°F)
- * @param {string} season     - 'summer' | 'monsoon' | 'winter'
- * @param {number} dailyRange - diurnal temperature range (°F); 0 = use seasonal default
- * @returns {number} mean outdoor dry-bulb (°F)
+ * @param dbOutdoor  - peak outdoor dry-bulb (°F)
+ * @param season     - 'summer' | 'monsoon' | 'winter'
+ * @param dailyRange - diurnal temperature range (°F); 0 = use seasonal default
+ * @returns mean outdoor dry-bulb (°F)
  */
-export const getMeanOutdoorTemp = (dbOutdoor, season, dailyRange = 0) => {
-  const dr = dailyRange > 0
-    ? dailyRange
-    : (DIURNAL_RANGE_DEFAULTS[season] ?? 18);
+export const getMeanOutdoorTemp = (
+  dbOutdoor: number,
+  season: Season,
+  dailyRange: number = 0
+): number => {
+  const diurnalTable: any = DIURNAL_RANGE_DEFAULTS;
+  const dr = dailyRange > 0 ? dailyRange : diurnalTable[season] ?? 18;
   return dbOutdoor - dr / 2;
 };
 
 // ── Latitude-Month (LM) CLTD correction ───────────────────────────────────────
 /**
- * getLM(latitude, orientation)
+ * getLM
  *
  * Returns the latitude-month correction (°F) for CLTD.
  * Orientation is swapped for southern hemisphere before table lookup.
  *
- * @param {number} latitude    - site latitude (degrees; negative = south)
- * @param {string} orientation - wall orientation ('N','NE','E',...)
- * @returns {number} LM correction (°F)
+ * @param latitude    - site latitude (degrees; negative = south)
+ * @param orientation - wall orientation ('N','NE','E',...)
+ * @returns LM correction (°F)
  */
-export const getLM = (latitude, orientation) => {
+export const getLM = (latitude: number, orientation: string): number => {
   const absLat = Math.abs(latitude);
   const orient = swapForHemisphere(orientation, latitude);
   return interpolateLatitude(CLTD_LM, absLat, orient);
@@ -96,19 +113,23 @@ export const getLM = (latitude, orientation) => {
 
 // ── Latitude-corrected SHGF ───────────────────────────────────────────────────
 /**
- * getCorrectedSHGF(orientation, season, latitude)
+ * getCorrectedSHGF
  *
  * Returns SHGF (BTU/hr·ft²) corrected for site latitude.
  * Base table is at 32°N. Both the base SHGF and the latitude correction factor
  * use the hemisphere-swapped orientation to correctly represent southern
  * hemisphere solar geometry.
  *
- * @param {string} orientation - 'N','NE','E','SE','S','SW','W','NW','Horizontal'
- * @param {string} season      - 'summer' | 'monsoon' | 'winter'
- * @param {number} latitude    - site latitude (degrees; negative = south)
- * @returns {number} corrected SHGF (BTU/hr·ft²)
+ * @param orientation - 'N','NE','E','SE','S','SW','W','NW','Horizontal'
+ * @param season      - 'summer' | 'monsoon' | 'winter'
+ * @param latitude    - site latitude (degrees; negative = south)
+ * @returns corrected SHGF (BTU/hr·ft²)
  */
-export const getCorrectedSHGF = (orientation, season, latitude) => {
+export const getCorrectedSHGF = (
+  orientation: string,
+  season: Season,
+  latitude: number
+): number => {
   const absLat = Math.abs(latitude);
   const orient = swapForHemisphere(orientation, latitude);
 
@@ -116,26 +137,28 @@ export const getCorrectedSHGF = (orientation, season, latitude) => {
   // For southern hemisphere, a S-facing element receives the same low summer
   // sun as a N-facing element in the northern hemisphere — so we look up the
   // swapped key in both tables.
-  const baseSHGF = SHGF[orient]?.[season] ?? 100;
-  const factor   = interpolateLatitude(SHGF_LATITUDE_FACTOR, absLat, orient);
+  const shgfTable: any = SHGF;
+  const baseSHGF = shgfTable[orient]?.[season] ?? 100;
+  const factor = interpolateLatitude(SHGF_LATITUDE_FACTOR, absLat, orient);
   return baseSHGF * factor;
 };
 
 // ── SHGC resolver ─────────────────────────────────────────────────────────────
 /**
- * resolveShgc(glass)
+ * resolveShgc
  *
  * Extracts SHGC from a glass element.
  * Prefers glass.shgc (modern NFRC field).
  * Falls back to glass.sc × 0.87 (legacy shading coefficient conversion,
  * ASHRAE HOF 2021 Ch.15).
  *
- * @param {object} glass - glass element from envelopeSlice
- * @returns {number} SHGC (dimensionless, 0–1)
+ * @param glass - glass element from envelopeSlice
+ * @returns SHGC (dimensionless, 0–1)
  */
-export const resolveShgc = (glass) => {
-  const shgc = parseFloat(glass?.shgc);
+export const resolveShgc = (glass: Glass | undefined | null): number => {
+  const shgc = parseFloat(String(glass?.shgc));
   if (!isNaN(shgc) && shgc > 0) return shgc;
-  const sc = parseFloat(glass?.sc) || 1.0;
+  
+  const sc = parseFloat(String(glass?.sc)) || 1.0;
   return sc * 0.87;
 };
