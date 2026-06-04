@@ -1,5 +1,5 @@
 /**
- * psychro.js
+ * psychro.ts
  * Psychrometric utilities.
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 1
  *
@@ -79,6 +79,17 @@
 import ASHRAE from '../constants/ashrae';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface RequiredAdpResult {
+  type: 'found' | 'sensible_only' | 'no_solution';
+  requiredADP: number | null;
+  eshf: number;
+  note: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ASHRAE Hyland-Wexler saturation pressure constants
 // Source: ASHRAE Fundamentals 2021, Chapter 1, Equations 3 & 5
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,12 +101,12 @@ import ASHRAE from '../constants/ashrae';
  */
 const HW_ICE = {
   C1: -5.6745359e3,
-  C2:  6.3925247e0,
+  C2: 6.3925247e0,
   C3: -9.6778430e-3,
-  C4:  6.2215701e-7,
-  C5:  2.0747825e-9,
+  C4: 6.2215701e-7,
+  C5: 2.0747825e-9,
   C6: -9.4840240e-13,
-  C7:  4.1635019e0,
+  C7: 4.1635019e0,
 };
 
 /**
@@ -104,12 +115,12 @@ const HW_ICE = {
  * Valid: 273.15 K (0°C) to 473.15 K (200°C)
  */
 const HW_LIQ = {
-  C8:  -5.8002206e3,
-  C9:   1.3914993e0,
+  C8: -5.8002206e3,
+  C9: 1.3914993e0,
   C10: -4.8640239e-2,
-  C11:  4.1764768e-5,
+  C11: 4.1764768e-5,
   C12: -1.4452093e-8,
-  C13:  6.5459673e0,
+  C13: 6.5459673e0,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,7 +139,7 @@ const HW_LIQ = {
  * @param {number} dbC - temperature (°C), valid −100 to +200
  * @returns {number} saturation vapour pressure (hPa)
  */
-const saturationPressure = (dbC) => {
+const saturationPressure = (dbC: number): number => {
   const T = dbC + 273.15;
   let lnPws;
 
@@ -152,10 +163,10 @@ const saturationPressure = (dbC) => {
  * saturatedW(tC, Patm) → kg/kg
  * Used internally by the wet-bulb bisection (calculateWetBulb).
  */
-const saturatedW = (tC, Patm) => {
+const saturatedW = (tC: number, Patm: number): number => {
   const Es = saturationPressure(tC);
   if (Patm <= Es) return 1;
-  return 0.62198 * Es / (Patm - Es);
+  return (0.62198 * Es) / (Patm - Es);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,8 +182,8 @@ const saturatedW = (tC, Patm) => {
  * @param {number} elevFt - site elevation (ft, ≥ 0)
  * @returns {number} Cf — dimensionless, (0, 1]
  */
-export const altitudeCorrectionFactor = (elevFt = 0) => {
-  const elev = Math.max(0, parseFloat(elevFt) || 0);
+export const altitudeCorrectionFactor = (elevFt: number | string = 0): number => {
+  const elev = Math.max(0, parseFloat(String(elevFt)) || 0);
   if (elev === 0) return 1;
   return Math.pow(1 - 6.8754e-6 * elev, 5.2559);
 };
@@ -180,7 +191,7 @@ export const altitudeCorrectionFactor = (elevFt = 0) => {
 /**
  * sitePressure(elevFt) → hPa
  */
-export const sitePressure = (elevFt = 0) =>
+export const sitePressure = (elevFt: number | string = 0): number =>
   1013.25 * altitudeCorrectionFactor(elevFt);
 
 /**
@@ -188,7 +199,7 @@ export const sitePressure = (elevFt = 0) =>
  * Qs [BTU/hr] = sensibleFactor(elev) × CFM × ΔT°F
  * Sea-level basis: 1.08 (ASHRAE HOF 2021, Ch.28)
  */
-export const sensibleFactor = (elevFt = 0) =>
+export const sensibleFactor = (elevFt: number | string = 0): number =>
   ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
 
 /**
@@ -196,7 +207,7 @@ export const sensibleFactor = (elevFt = 0) =>
  * Ql [BTU/hr] = latentFactor(elev) × CFM × Δgr/lb
  * Sea-level basis: 0.68
  */
-export const latentFactor = (elevFt = 0) =>
+export const latentFactor = (elevFt: number | string = 0): number =>
   ASHRAE.LATENT_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
 
 /**
@@ -204,7 +215,7 @@ export const latentFactor = (elevFt = 0) =>
  * Ql [BTU/hr] = latentFactorLb(elev) × CFM × Δlb/lb
  * Sea-level basis: 4775 (hfg at 60°F dew-point reference)
  */
-export const latentFactorLb = (elevFt = 0) =>
+export const latentFactorLb = (elevFt: number | string = 0): number =>
   ASHRAE.LATENT_FACTOR_LB * altitudeCorrectionFactor(elevFt);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,19 +234,23 @@ export const latentFactorLb = (elevFt = 0) =>
  * @param {number} elevFt - site elevation (ft)
  * @returns {number} humidity ratio (gr/lb), clamped [0, 500]
  */
-export const calculateGrains = (dbF, rh, elevFt = 0) => {
-  const dbFNum = parseFloat(dbF);
-  const rhNum  = parseFloat(rh);
+export const calculateGrains = (
+  dbF: number | string,
+  rh: number | string,
+  elevFt: number | string = 0
+): number => {
+  const dbFNum = parseFloat(String(dbF));
+  const rhNum = parseFloat(String(rh));
   if (isNaN(dbFNum) || isNaN(rhNum)) return 0;
 
   const rhClamped = Math.min(100, Math.max(0, rhNum));
-  const dbC  = (dbFNum - 32) * 5 / 9;
-  const Es   = saturationPressure(dbC);
-  const E    = (rhClamped / 100) * Es;
+  const dbC = ((dbFNum - 32) * 5) / 9;
+  const Es = saturationPressure(dbC);
+  const E = (rhClamped / 100) * Es;
   const Patm = sitePressure(elevFt);
   if (Patm <= E) return 0;
 
-  const W_kg = 0.62198 * E / (Patm - E);
+  const W_kg = (0.62198 * E) / (Patm - E);
   const grains = W_kg * ASHRAE.GR_PER_LB;
 
   if (isNaN(grains) || grains < 0) return 0;
@@ -260,19 +275,23 @@ export const calculateGrains = (dbF, rh, elevFt = 0) => {
  * @param {number} elevFt - site elevation (ft)
  * @returns {number} relative humidity (%), clamped [0, 100]; 0 on invalid input
  */
-export const calculateRH = (dbF, grains, elevFt = 0) => {
-  const dbFNum = parseFloat(dbF);
-  const grNum  = parseFloat(grains);
+export const calculateRH = (
+  dbF: number | string,
+  grains: number | string,
+  elevFt: number | string = 0
+): number => {
+  const dbFNum = parseFloat(String(dbF));
+  const grNum = parseFloat(String(grains));
   if (isNaN(dbFNum) || isNaN(grNum) || grNum < 0) return 0;
 
-  const dbC  = (dbFNum - 32) * 5 / 9;
-  const Es   = saturationPressure(dbC);
+  const dbC = ((dbFNum - 32) * 5) / 9;
+  const Es = saturationPressure(dbC);
   if (Es <= 0) return 0;
 
   const Patm = sitePressure(elevFt);
-  const W    = grNum / ASHRAE.GR_PER_LB;
-  const E    = (W * Patm) / (0.62198 + W);
-  const rh   = (E / Es) * 100;
+  const W = grNum / ASHRAE.GR_PER_LB;
+  const E = (W * Patm) / (0.62198 + W);
+  const rh = (E / Es) * 100;
 
   return isNaN(rh) ? 0 : Math.min(100, Math.max(0, rh));
 };
@@ -306,9 +325,12 @@ export const calculateRH = (dbF, grains, elevFt = 0) => {
  * @param {number} rh  - relative humidity (%)
  * @returns {number|null} dew/frost point (°F) or null
  */
-export const calculateDewPoint = (dbF, rh) => {
-  const dbFNum = parseFloat(dbF);
-  const rhNum  = parseFloat(rh);
+export const calculateDewPoint = (
+  dbF: number | string,
+  rh: number | string
+): number | null => {
+  const dbFNum = parseFloat(String(dbF));
+  const rhNum = parseFloat(String(rh));
 
   if (isNaN(dbFNum) || isNaN(rhNum)) return 0;
   if (rhNum <= 0) return null;
@@ -316,8 +338,8 @@ export const calculateDewPoint = (dbF, rh) => {
   const rhClamped = Math.min(100, Math.max(0.001, rhNum));
   if (rhClamped >= 100) return Math.round(dbFNum * 10) / 10;
 
-  const dbC = (dbFNum - 32) * 5 / 9;
-  const Es  = saturationPressure(dbC);
+  const dbC = ((dbFNum - 32) * 5) / 9;
+  const Es = saturationPressure(dbC);
   const Epw = (rhClamped / 100) * Es;
 
   let lo = -100;
@@ -343,7 +365,7 @@ export const calculateDewPoint = (dbF, rh) => {
   }
 
   const dpC = (lo + hi) / 2;
-  const dpF = dpC * 9 / 5 + 32;
+  const dpF = dpC * (9 / 5) + 32;
   return isNaN(dpF) ? 0 : Math.round(dpF * 10) / 10;
 };
 
@@ -358,17 +380,20 @@ export const calculateDewPoint = (dbF, rh) => {
  * @param {number} elevFt - site elevation (ft)
  * @returns {number} humidity ratio (gr/lb); 0 on invalid input
  */
-export const grainsFromDewPoint = (dpF, elevFt = 0) => {
-  const dpFNum = parseFloat(dpF);
+export const grainsFromDewPoint = (
+  dpF: number | string,
+  elevFt: number | string = 0
+): number => {
+  const dpFNum = parseFloat(String(dpF));
   if (isNaN(dpFNum)) return 0;
 
-  const dpC  = (dpFNum - 32) * 5 / 9;
-  const Edp  = saturationPressure(dpC);
+  const dpC = ((dpFNum - 32) * 5) / 9;
+  const Edp = saturationPressure(dpC);
   const Patm = sitePressure(elevFt);
   if (Patm <= Edp) return 0;
 
-  const W_kg = 0.62198 * Edp / (Patm - Edp);
-  const gr   = W_kg * ASHRAE.GR_PER_LB;
+  const W_kg = (0.62198 * Edp) / (Patm - Edp);
+  const gr = W_kg * ASHRAE.GR_PER_LB;
   return isNaN(gr) || gr < 0 ? 0 : gr;
 };
 
@@ -384,9 +409,12 @@ export const grainsFromDewPoint = (dpF, elevFt = 0) => {
  * @param {number} grains - humidity ratio (gr/lb)
  * @returns {number} specific enthalpy (BTU/lb dry air)
  */
-export const calculateEnthalpy = (dbF, grains) => {
-  const t = parseFloat(dbF)     || 0;
-  const W = (parseFloat(grains) || 0) / ASHRAE.GR_PER_LB;
+export const calculateEnthalpy = (
+  dbF: number | string,
+  grains: number | string
+): number => {
+  const t = parseFloat(String(dbF)) || 0;
+  const W = (parseFloat(String(grains)) || 0) / ASHRAE.GR_PER_LB;
   const h = 0.240 * t + W * (ASHRAE.LATENT_HFG_BTU_LB + 0.444 * t);
   return isNaN(h) ? 0 : h;
 };
@@ -405,28 +433,32 @@ export const calculateEnthalpy = (dbF, grains) => {
  * @param {number} elevFt - site elevation (ft)
  * @returns {number} wet-bulb temperature (°F), rounded to 0.1°F
  */
-export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
-  const dbFNum = parseFloat(dbF);
-  const rhNum  = parseFloat(rh);
+export const calculateWetBulb = (
+  dbF: number | string,
+  rh: number | string,
+  elevFt: number | string = 0
+): number => {
+  const dbFNum = parseFloat(String(dbF));
+  const rhNum = parseFloat(String(rh));
   if (isNaN(dbFNum) || isNaN(rhNum)) return dbFNum || 0;
 
   const rhClamped = Math.min(100, Math.max(0, rhNum));
   if (rhClamped >= 100) return Math.round(dbFNum * 10) / 10;
 
-  const db   = (dbFNum - 32) * 5 / 9;
+  const db = ((dbFNum - 32) * 5) / 9;
   const Patm = sitePressure(elevFt);
 
   const Es = saturationPressure(db);
-  const E  = (rhClamped / 100) * Es;
+  const E = (rhClamped / 100) * Es;
   if (Patm <= E) return Math.round(dbFNum * 10) / 10;
-  const W = 0.62198 * E / (Patm - E);
+  const W = (0.62198 * E) / (Patm - E);
 
-  const f = (wb) => {
+  const f = (wb: number): number => {
     const Ws_wb = saturatedW(wb, Patm);
     return (
-      (2501 - 2.381 * wb) * Ws_wb
-      - 1.006 * (db - wb)
-      - W * (2501 + 1.805 * db - 4.186 * wb)
+      (2501 - 2.381 * wb) * Ws_wb -
+      1.006 * (db - wb) -
+      W * (2501 + 1.805 * db - 4.186 * wb)
     );
   };
 
@@ -445,7 +477,7 @@ export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
   }
 
   const wbC = (lo + hi) / 2;
-  const wbF = wbC * 9 / 5 + 32;
+  const wbF = wbC * (9 / 5) + 32;
   return isNaN(wbF) ? dbFNum : Math.round(wbF * 10) / 10;
 };
 
@@ -462,9 +494,13 @@ export const calculateWetBulb = (dbF, rh, elevFt = 0) => {
  * @param {number} elevFt - site elevation (ft)
  * @returns {number} specific volume (ft³/lb dry air)
  */
-export const calculateSpecificVolume = (dbF, grains, elevFt = 0) => {
-  const T         = (parseFloat(dbF)    || 0) + 459.67;
-  const W         = (parseFloat(grains) || 0) / ASHRAE.GR_PER_LB;
+export const calculateSpecificVolume = (
+  dbF: number | string,
+  grains: number | string,
+  elevFt: number | string = 0
+): number => {
+  const T = (parseFloat(String(dbF)) || 0) + 459.67;
+  const W = (parseFloat(String(grains)) || 0) / ASHRAE.GR_PER_LB;
   const Patm_psia = sitePressure(elevFt) * 0.014504;
   if (Patm_psia <= 0) return 0;
 
@@ -503,16 +539,16 @@ export const calculateSpecificVolume = (dbF, grains, elevFt = 0) => {
  *   Returns ASHRAE.DEFAULT_ADP on invalid inputs, zero load, or zero coilAir.
  */
 export const calculateAdpFromLoads = (
-  dbInF,
-  peakErsh,
-  supplyAir,
-  bf,
-  elevFt = 0,
-) => {
-  const dbNum = parseFloat(dbInF);
-  const ersh  = parseFloat(peakErsh);
-  const cfm   = parseFloat(supplyAir);
-  const bfNum = parseFloat(bf);
+  dbInF: number | string,
+  peakErsh: number | string,
+  supplyAir: number | string,
+  bf: number | string,
+  elevFt: number | string = 0
+): number => {
+  const dbNum = parseFloat(String(dbInF));
+  const ersh = parseFloat(String(peakErsh));
+  const cfm = parseFloat(String(supplyAir));
+  const bfNum = parseFloat(String(bf));
 
   if (isNaN(dbNum) || isNaN(ersh) || isNaN(cfm) || isNaN(bfNum)) {
     return ASHRAE.DEFAULT_ADP;
@@ -525,7 +561,7 @@ export const calculateAdpFromLoads = (
   const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
   if (Cs <= 0) return ASHRAE.DEFAULT_ADP;
 
-  const adpRaw     = dbNum - ersh / (Cs * coilAir);
+  const adpRaw = dbNum - ersh / (Cs * coilAir);
   const adpClamped = Math.max(35, Math.min(adpRaw, dbNum - 2));
   return Math.round(adpClamped * 10) / 10;
 };
@@ -611,75 +647,92 @@ export const calculateAdpFromLoads = (
  * }}
  */
 export const calculateRequiredADP = (
-  roomDB,
-  roomGr,
-  totalSensible,
-  totalLatent,
-  elevFt = 0,
-) => {
-  const dbNum   = parseFloat(roomDB);
-  const grNum   = parseFloat(roomGr);
-  const sensNum = parseFloat(totalSensible);
-  const latNum  = parseFloat(totalLatent);
+  roomDB: number | string,
+  roomGr: number | string,
+  totalSensible: number | string,
+  totalLatent: number | string,
+  elevFt: number | string = 0
+): RequiredAdpResult => {
+  const dbNum = parseFloat(String(roomDB));
+  const grNum = parseFloat(String(roomGr));
+  const sensNum = parseFloat(String(totalSensible));
+  const latNum = parseFloat(String(totalLatent));
 
   if (isNaN(dbNum) || isNaN(grNum) || isNaN(sensNum) || isNaN(latNum)) {
-    return { type: 'sensible_only', requiredADP: null, eshf: 1,
-             note: 'Invalid inputs — cannot compute Required ADP' };
+    return {
+      type: 'sensible_only',
+      requiredADP: null,
+      eshf: 1,
+      note: 'Invalid inputs — cannot compute Required ADP',
+    };
   }
 
   const totalLoad = sensNum + latNum;
   if (totalLoad <= 0) {
-    return { type: 'sensible_only', requiredADP: null, eshf: 1,
-             note: 'Zero total load — ADP not applicable' };
+    return {
+      type: 'sensible_only',
+      requiredADP: null,
+      eshf: 1,
+      note: 'Zero total load — ADP not applicable',
+    };
   }
 
   const eshf = sensNum / totalLoad;
 
   if (eshf >= 0.995) {
-    return { type: 'sensible_only', requiredADP: null, eshf,
-             note: 'ESHF ≥ 99.5% — negligible latent load, any CHW coil controls humidity' };
+    return {
+      type: 'sensible_only',
+      requiredADP: null,
+      eshf,
+      note: 'ESHF ≥ 99.5% — negligible latent load, any CHW coil controls humidity',
+    };
   }
 
   // Site-pressure-corrected saturation grains.
   // Uses saturationPressure (Hyland-Wexler) already in scope — internal to this module.
   const Patm = sitePressure(elevFt);
-  const satGr = (tF) => {
-    const tC = (tF - 32) * 5 / 9;
+  const satGr = (tF: number): number => {
+    const tC = ((tF - 32) * 5) / 9;
     const Es = saturationPressure(tC);
     if (Patm <= Es) return 500;
-    return Math.max(0, 0.62198 * Es / (Patm - Es) * ASHRAE.GR_PER_LB);
+    return Math.max(0, ((0.62198 * Es) / (Patm - Es)) * ASHRAE.GR_PER_LB);
   };
 
   // Guard: room so dry that coil at 32°F cannot dehumidify further.
   if (grNum <= satGr(32)) {
-    return { type: 'sensible_only', requiredADP: null, eshf,
-             note: 'Room dew point ≤ 32°F — coil sensible-only, any standard CHW plant works' };
+    return {
+      type: 'sensible_only',
+      requiredADP: null,
+      eshf,
+      note: 'Room dew point ≤ 32°F — coil sensible-only, any standard CHW plant works',
+    };
   }
 
   // Find room dew point — upper bound for bisection.
   // Above room dew point: satGr(adp) > roomGr → coil adds moisture → non-physical.
-  let dpLo = -100 * 9/5 + 32; // −148°F
+  let dpLo = -100 * (9 / 5) + 32; // −148°F
   let dpHi = dbNum;
   for (let i = 0; i < 80; i++) {
     const mid = (dpLo + dpHi) / 2;
-    if (satGr(mid) < grNum) dpLo = mid; else dpHi = mid;
+    if (satGr(mid) < grNum) dpLo = mid;
+    else dpHi = mid;
     if (dpHi - dpLo < 0.01) break;
   }
   const roomDewPointF = (dpLo + dpHi) / 2;
-  const upperBound    = roomDewPointF - 0.5;
+  const upperBound = roomDewPointF - 0.5;
 
   // ESHF bisection target function:
   // f(adp) = computedESHF(adp) − targetESHF
   // Bisect until f = 0 — that adp is the Required ADP.
   const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
-  const Cl = ASHRAE.LATENT_FACTOR_SEA_LEVEL   * altitudeCorrectionFactor(elevFt);
+  const Cl = ASHRAE.LATENT_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
 
-  const f = (adp) => {
-    const sens  = Cs * (dbNum - adp);
-    const lat   = Cl * (grNum - satGr(adp));
+  const f = (adp: number): number => {
+    const sens = Cs * (dbNum - adp);
+    const lat = Cl * (grNum - satGr(adp));
     const total = sens + lat;
     if (total <= 0) return 1.0;
-    return (sens / total) - eshf;
+    return sens / total - eshf;
   };
 
   const f_lo = f(32);
@@ -687,18 +740,27 @@ export const calculateRequiredADP = (
 
   if (f_lo * f_hi > 0) {
     if (f_lo >= 0) {
-      return { type: 'sensible_only', requiredADP: null, eshf,
-               note: 'Required ADP < 32°F — room is sensible-dominated, any standard coil works' };
+      return {
+        type: 'sensible_only',
+        requiredADP: null,
+        eshf,
+        note: 'Required ADP < 32°F — room is sensible-dominated, any standard coil works',
+      };
     } else {
-      return { type: 'no_solution', requiredADP: null, eshf,
-               note: 'Latent load exceeds coil capacity — standard cooling coil cannot control humidity. Supplemental dehumidification required (desiccant, separate dehumidifier, or pre-cooling + reheat).' };
+      return {
+        type: 'no_solution',
+        requiredADP: null,
+        eshf,
+        note: 'Latent load exceeds coil capacity — standard cooling coil cannot control humidity. Supplemental dehumidification required (desiccant, separate dehumidifier, or pre-cooling + reheat).',
+      };
     }
   }
 
   let lo = 32, hi = upperBound;
   for (let i = 0; i < 80; i++) {
     const mid = (lo + hi) / 2;
-    if (f(lo) * f(mid) <= 0) hi = mid; else lo = mid;
+    if (f(lo) * f(mid) <= 0) hi = mid;
+    else lo = mid;
     if (hi - lo < 0.01) break;
   }
 
