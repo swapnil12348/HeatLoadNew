@@ -16,6 +16,46 @@
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 18
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
+ * 
+ * 
+ * // ── CHANGELOG v2.8 ────────────────────────────────────────────────────────────
+//
+//   CRIT-RDS-01 FIX — erth mixed peakCFMSeason ERSH with peakCoolingSeason ERLH.
+//
+//     Old:
+//       const erth = (peakErsh || 0) + (peakErlhForCap || 0);
+//       // peakErsh     = seasonCalcs[peakCFMSeason].ersh
+//       // peakErlhForCap = seasonResults[`erlhOn_${peakCoolingSeason}`]
+//
+//     When peakCFMSeason ≠ peakCoolingSeason (summer governs ERSH but monsoon
+//     governs total load), erth was summerERSH + monsoonERLH — not a real room
+//     state. roomESHF, reheatBTU, and revisedThermalCFM all derived from it.
+//
+//     Fix: all reheat inputs sourced from peakCoolingSeason exclusively.
+//     New variables: reheatCalcs, reheatErsh, reheatErlh, erthRaw, erthSafe.
+//
+//   CRIT-RDS-02 FIX — roomESHF used safety-multiplied ERSH instead of rawSensible.
+//
+//     Excel SHR = R83 / R96 where R83 = rawSensible (pre-safety) and
+//     R96 = rawSensible + rawLatent (pre-safety). The old code placed ERSH
+//     (rawSensible × safetyMult × gmpSafetyMult) in the numerator while ERLH
+//     (no safety factor per policy) was in the denominator — asymmetric and wrong.
+//     For a 10% safety factor: SHR overstated by ~2–3 points, suppressing reheat
+//     flags for high-latent pharma and monsoon-climate rooms.
+//
+//     Fix: roomESHF = rawSensible / (rawSensible + rawLatent) — erthRaw basis.
+//     reheatBTU formula retains erthSafe (safety-applied) to match Excel row 121.
+//
+//   WARN-RDS-01 FIX — bf `|| 0.1` replaced with !isNaN() guard.
+//
+//     BF = 0 (valid for coil selection studies) silently became 0.10. bf feeds
+//     five expressions: supplyFanHeat, supplyDT, minESHF, coilAir/bypassAir,
+//     revisedThermalCFM — all simultaneously corrupted by the wrong BF.
+//
+//   WARN-RDS-02 FIX — fanHeat and returnFanHeat `|| 5` replaced with !isNaN() guards.
+//
+//     Fan heat = 0 (analysis runs, zero-fan-heat sensitivity studies) silently
+//     used 5% default, overstating grandTotal and coolingCapTR.
  *
  * ── CHANGELOG v2.7 ────────────────────────────────────────────────────────────
  *
@@ -378,17 +418,47 @@ const bf       = !isNaN(parsedBf) ? parsedBf : 0.1;
         const peakErlhForCap = seasonResults[`erlhOn_${peakCoolingSeason}`];
         const oaPeak = oaLoads[peakCoolingSeason];
 
-        const supplyFanHeatFraction =
-          (parseFloat(String(systemDesign.fanHeat)) || 5) / 100;
-        const returnFanHeatFraction =
-          (parseFloat(String(systemDesign.returnFanHeat)) || 5) / 100;
 
-        // Fan heat basis: Cs × supplyAir × coilDT × fanHeatPct.
+        const parsedFanHeat        = parseFloat(String(systemDesign.fanHeat));
+const supplyFanHeatFraction = (!isNaN(parsedFanHeat)       ? parsedFanHeat       : 5) / 100;
+const parsedReturnFanHeat  = parseFloat(String(systemDesign.returnFanHeat));
+const returnFanHeatFraction = (!isNaN(parsedReturnFanHeat) ? parsedReturnFanHeat : 5) / 100;
+
+
+ // Fan heat basis: Cs × supplyAir × coilDT × fanHeatPct.
         // Math.abs guard: when adpF > dbInF, (dbInF − adpF) is negative.
+        //
+        // ⚠ HIGH-RDS-01: This percentage-of-capacity method diverges from Excel.
+        // Excel JSON cells R81/R103 use motor-power constants:
+        //   draw-through → fanMotorKW × 3400 BTU/hr
+        //   blow-through → (fanMotorKW + ahuFanKW) × 3410 BTU/hr
+        //                  (AHU fan in RDS col AF is always added for blow-through)
+        //
+        // For a 5 kW fan: Excel ≈ 17,000 BTU/hr; current code ≈ 400–900 BTU/hr.
+        // This understates grandTotal and coolingCapTR for any room with a real fan.
+        //
+        // To fix when ahu.fanMotorKW and ahu.ahuFanKW are added to the AHU schema:
+        //
+        //   const isBlow   = (ahu?.fanType || 'blow') === 'blow';
+        //   const fanKW    = parseFloat(String(ahu?.fanMotorKW)) || 0;
+        //   const ahuFanKW = parseFloat(String(ahu?.ahuFanKW))   || 0;
+        //   const supplyFanHeatBTU = isBlow
+        //     ? Math.round((fanKW + ahuFanKW) * 3410)
+        //     : Math.round(fanKW * 3400);
+        //
+        // Until fanMotorKW is in the schema the percentage approximation is the
+        // best available proxy. Flag to project engineer for manual check on any
+        // room with a supply fan larger than ~0.5 kW.
         const supplyFanHeatBTU = Math.round(
           Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf)) * supplyFanHeatFraction
         );
         const returnFanHeatBTU = Math.round(supplyFanHeatBTU * returnFanHeatFraction);
+
+
+
+
+
+
 
         const grandTotal =
           peakErshForCap +
@@ -450,28 +520,57 @@ const bf       = !isNaN(parsedBf) ? parsedBf : 0.1;
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4c — Reheater requirement (ASHRAE HOF 2021 Ch.18 §17.3)
         // ════════════════════════════════════════════════════════════════════════
-        const grADP_sat = calculateGrains(adpF, 100, elevation);
-        const supplyDT = (1 - bf) * (dbInF - adpF); // dehumidified rise (DR)
 
-        // minESHF: lowest room SHR achievable without reheat
-        const minESHFNum = Cs * supplyDT;
-        const minESHFDenom =
-          minESHFNum + Cl * Math.max(0, peakCalcs.grIn - grADP_sat);
-        const minESHF =
+        const grADP_sat = calculateGrains(adpF, 100, elevation);
+        const supplyDT  = (1 - bf) * (dbInF - adpF); // dehumidified rise (DR)
+
+        // minESHF: lowest room SHR achievable without reheat (physics-based).
+        // grIn does not vary by season (fixed by room designTemp + designRH),
+        // so peakCalcs.grIn is identical across all seasons — no season-mixing concern.
+        const minESHFNum   = Cs * supplyDT;
+        const minESHFDenom = minESHFNum + Cl * Math.max(0, peakCalcs.grIn - grADP_sat);
+        const minESHF      =
           supplyDT > 0 && minESHFDenom > 0 ? minESHFNum / minESHFDenom : 1.0;
 
-        // Room ESHF: room sensible / room total (no OA, no fan heat — Excel method)
-        const erth = (peakErsh || 0) + (peakErlhForCap || 0);
-        const roomESHF = erth > 0 ? (peakErsh || 0) / erth : 1.0;
+        // ── Reheat basis ────────────────────────────────────────────────────
+        //
+        // CRIT-RDS-01: erth must not mix peakCFMSeason ERSH with peakCoolingSeason
+        //   ERLH. Both must come from the same season. peakCoolingSeason is correct —
+        //   it has the highest combined load and is the most demanding psychrometric
+        //   scenario. When peakCFMSeason ≠ peakCoolingSeason the old code produced a
+        //   physically invalid mixed state (e.g. summerERSH + monsoonERLH).
+        //
+        // CRIT-RDS-02: roomESHF numerator must be rawSensible (Excel R83), not the
+        //   safety-multiplied ERSH. Excel SHR = R83/R96 where both terms are pre-safety.
+        //   Using safety-multiplied ERSH in the numerator while ERLH carries no safety
+        //   factor overstates SHF by ~2–3 points and suppresses reheat flags for
+        //   high-latent rooms (pharma, monsoon-climate battery rooms).
+        //
+        //   Two values of erth are maintained:
+        //     erthRaw  — rawSensible + rawLatent (pre-safety) → roomESHF ratio only
+        //     erthSafe — ERSH + ERLH (ERSH safety-applied) → BTU sizing formula (Excel row 121)
+        const reheatCalcs = seasonCalcs[peakCoolingSeason];
+        const reheatErsh  = seasonResults[`ershOn_${peakCoolingSeason}`] || 0;
+        const reheatErlh  = seasonResults[`erlhOn_${peakCoolingSeason}`] || 0;
 
-        let reheatBTU = 0;
+        const erthRaw  = reheatCalcs.rawSensible + reheatCalcs.rawLatent; // R96 pre-safety
+        const erthSafe = reheatErsh + reheatErlh;                         // safety-applied
+
+        // roomESHF — pre-safety basis matches Excel R83/R96 (CRIT-RDS-02)
+        const roomESHF = erthRaw > 0 ? reheatCalcs.rawSensible / erthRaw : 1.0;
+
+        let reheatBTU     = 0;
         let reheatRequired = false;
 
         if (supplyDT > 0 && roomESHF < minESHF - 0.001 && minESHF < 1.0) {
           reheatRequired = true;
-          // RH_BTU = (minESHF × ERTH − ERSH) / (1 − minESHF)
-          reheatBTU = Math.max(0, (minESHF * erth - (peakErsh || 0)) / (1 - minESHF));
+          // RH_BTU = (minESHF × ERTH_safe − ERSH_safe) / (1 − minESHF)  [Excel row 121]
+          // erthSafe used here (not erthRaw) — the BTU sizing formula operates on
+          // safety-adjusted loads, matching the Excel's ERTH/ERSH inputs in row 121.
+          reheatBTU = Math.max(0, (minESHF * erthSafe - reheatErsh) / (1 - minESHF));
         }
+
+
 
         const reheatKW =
           reheatBTU > 0 ? parseFloat((reheatBTU / KW_TO_BTU_HR).toFixed(2)) : 0;
@@ -488,7 +587,7 @@ const bf       = !isNaN(parsedBf) ? parsedBf : 0.1;
         //   DA_rev = (ERSH + RH_BTU) / (Cs × DR)
         const revisedThermalCFM =
           supplyDT > 0 && reheatRequired
-            ? Math.ceil(((peakErsh || 0) + reheatBTU) / (Cs * supplyDT))
+            ? Math.ceil((reheatErsh + reheatBTU) / (Cs * supplyDT))
             : thermalCFM;
 
         // Final supply air: max of all constraints including reheater-adjusted CFM.
