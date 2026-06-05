@@ -6,6 +6,28 @@
  *            ASHRAE Handbook — Fundamentals (2021), Chapter 18
  *            ISO 14644-1:2015 (Cleanroom air change rates)
  *            GMP Annex 1:2022 (Pharmaceutical cleanroom ACH requirements)
+ * 
+ * // ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+//
+//   WARN-AQ-01 FIX — bypassFactor `|| 0.10` replaced with null-coalescing guard.
+//
+//     BF = 0 (100% coil contact — valid for coil selection studies and academic
+//     comparisons) silently became 0.10. Impact: thermalCFM, coilAir, bypassAir
+//     all computed with wrong BF. Fix: !isNaN() pattern, consistent with
+//     seasonalLoads v2.1 (designRH), v2.3 (safetyFactor), rdsSelector v2.8 (bf).
+//
+//   WARN-AQ-02 FIX — pplCount now explicitly parsed before passing to calculateVbz.
+//
+//     Redux state stores numeric inputs as strings. `count || 0` returned the
+//     raw string "5" (truthy) rather than the number 5. calculateVbz() received
+//     "5" and coerced it arithmetically — correct by accident. Explicit parseFloat
+//     removes the implicit cast and is consistent with all other numeric inputs.
+//
+//   INFO-AQ-01 — Mass balance comment in module header corrected.
+//
+//     Header stated "Return = Supply − freshAirCheck − totalExhaust" which breaks
+//     the AHU mass balance identity (return + freshAir = supply). Code was correct;
+//     comment was wrong. See updated MASS BALANCE section.
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
@@ -76,8 +98,14 @@
  *
  * ── MASS BALANCE ──────────────────────────────────────────────────────────────
  *
- *   Supply = Return + OA intake + Net exfiltration
- *   Return = Supply − freshAirCheck − totalExhaust  (floored at 0)
+*   Supply = Return + OA intake + Net exfiltration
+ *   Return = Supply − freshAirCheck  (floored at 0)
+ *
+ *   freshAirCheck already ≥ totalExhaust via exhaust compensation logic:
+ *     freshAirMakeup = max(vbz, totalExhaust)
+ *   When freshAirCheck > totalExhaust the excess is building pressurisation
+ *   (exfiltration). Subtracting totalExhaust again would break the AHU mass
+ *   balance: returnAir + freshAirCheck must equal supplyAir.
  */
 
 import ASHRAE                                           from '../../constants/ashrae';
@@ -128,7 +156,10 @@ export interface AirQuantitiesResult {
  * @param {AHU | null} ahu                   - AHU object assigned to this room
  * @param {SystemDesign} effectiveSystemDesign - state.project.systemDesign
  * @param {number} altCf                     - altitude correction factor (dimensionless, 0–1)
- * @param {number} peakErsh                  - peak (summer) ERSH in BTU/hr
+ *  * @param {number} peakErsh                  - peak ERSH across all three seasons (BTU/hr).
+ *                                             Caller must pass max(summer, monsoon, 0) —
+ *                                             never summer-only. Verified correct in
+ *                                             rdsSelector v2.4+ via SEASONS_LIST.reduce().
  * @param {number} floorAreaFt2              - room floor area in ft²
  * @param {number} volumeFt3                 - room volume in ft³
  */
@@ -143,7 +174,8 @@ export const calculateAirQuantities = (
   volumeFt3: number,
 ): AirQuantitiesResult => {
   const Cs  = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altCf;
-  const bf  = parseFloat(String(effectiveSystemDesign.bypassFactor)) || 0.10;
+  const parsedBf = parseFloat(String(effectiveSystemDesign.bypassFactor));
+const bf       = !isNaN(parsedBf) ? parsedBf : 0.10;
   const adp = parseFloat(String(effectiveSystemDesign.adp))          || 55;
 
   // ── Room design DB (°F) ───────────────────────────────────────────────────
@@ -192,7 +224,12 @@ export const calculateAirQuantities = (
   const totalExhaust   = exhaustGeneral + exhaustBibo + exhaustMachine;
 
   // ── 5. Fresh air — ASHRAE 62.1-2022 VRP + exhaust compensation ────────────
-  const pplCount = envelope?.internalLoads?.people?.count || 0;
+  
+// Redux stores numeric fields as strings. Without parseFloat, a value of "5"
+// is passed to calculateVbz() as a string and coerced by JS arithmetic — correct
+// by accident but fragile. Explicit parse is consistent with every other field.
+const rawPplCount = parseFloat(String(envelope?.internalLoads?.people?.count));
+const pplCount    = !isNaN(rawPplCount) ? rawPplCount : 0;
   const vbz      = calculateVbz(room.ventCategory, pplCount, floorAreaFt2);
 
   const ahuType = ahu?.type || 'Recirculating';
@@ -203,7 +240,12 @@ export const calculateAirQuantities = (
   const freshAir            = isDOAS ? supplyAir : freshAirMakeup;
 
   // ── 6. Fresh air variants ─────────────────────────────────────────────────
-  const minSupplyAcph     = Math.round(volumeFt3 * 2.5 / 60);
+  // NOTE: value is in CFM (volumeFt3 × 2.5 ACH / 60), not an ACH rate,
+//       despite the variable name. The name is preserved to avoid a breaking
+//       change across AirQuantitiesResult, rdsSelector, and consuming components.
+// TODO: rename to minFreshAirCFM in a future breaking-change refactor.
+// Source: [add spec reference or Excel cell citation]
+const minSupplyAcph = Math.round(volumeFt3 * 2.5 / 60)
   const faAshraeAcph      = vbz;
   const optimisedFreshAir = Math.max(freshAir, minSupplyAcph);
   const manualFA          = parseFloat(String(room.manualFreshAir)) || 0;

@@ -191,7 +191,10 @@ export const selectRdsData = createSelector(
         const floorAreaFt2 = m2ToFt2(room.floorArea);
         const volumeFt3 = m3ToFt3(room.volume);
 
-        const bf = parseFloat(String(systemDesign.bypassFactor)) || 0.1;
+        // BF = 0 silently became 0.1 with the old || pattern. bf feeds five expressions
+// in this file: supplyFanHeat, supplyDT, minESHF, coilAir, revisedThermalCFM.
+const parsedBf = parseFloat(String(systemDesign.bypassFactor));
+const bf       = !isNaN(parsedBf) ? parsedBf : 0.1;
 
         // raRH: room's winter humidity target for heating/humidification sizing.
         const parsedRaRh = parseFloat(String(room.designRH));
