@@ -338,7 +338,8 @@ export const calculateSeasonLoad = (
   //
   // gmpSafetyMult: 1.25× for pharma rooms per ISPE / GMP Annex 1.
   // Applied as a MULTIPLICATIVE factor on top of the combined safetyMult.
-  const safetyFactor = parseFloat(String(systemDesign?.safetyFactor)) || 10;
+  const parsedSf = parseFloat(String(systemDesign?.safetyFactor));
+  const safetyFactor = !isNaN(parsedSf) ? parsedSf : 10;
   const ductHeatGain = parseFloat(String(systemDesign?.ductHeatGain)) || 0;
   const safetyMult = 1 + (safetyFactor + ductHeatGain) / 100;
 
