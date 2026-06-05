@@ -6,6 +6,32 @@
  *            ASHRAE 62.1-2022 (Ventilation Rate Procedure)
  *            ISPE Baseline Guide Vol.5 — Pharmaceutical Cleanrooms
  *            GMP Annex 1:2022 §4.23 — HVAC safety margins
+// ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
+//
+//   CRIT-SL-03 FIX — safetyFactor `|| 10` replaced with null-coalescing guard.
+//
+//     Old:
+//       const safetyFactor = parseFloat(String(systemDesign?.safetyFactor)) || 10;
+//
+//     `|| 10` treats 0 as falsy: safetyFactor = 0 → 0 || 10 = 10.
+//     Any project explicitly modelling zero safety margin (feasibility studies,
+//     academic comparisons, value-engineering runs) was silently penalised with a
+//     10% margin, overstating ERSH and all downstream equipment sizing by 5–10%.
+//
+//     Fix: identical null guard used in v2.1 for designRH and consistent with
+//     the fix applied in rdsSelector v2.8 and airQuantities v2.2.
+//       const parsedSf = parseFloat(String(systemDesign?.safetyFactor));
+//       const safetyFactor = !isNaN(parsedSf) ? parsedSf : 10;
+//
+//   WARN-SL-02 FIX — ambRH `|| 0` replaced with parseDef + season-aware default.
+//
+//     Old:
+//       const ambRH = parseFloat(String(outdoor.rh)) || 0;
+//
+//     When climate slice has the season key but the rh field is absent
+//     (progressive form save), outdoor.rh is undefined → NaN → ambRH = 0%.
+//     grOut ≈ 0 at 0% RH → infilLat ≈ 0, eliminating the dominant monsoon
+//     latent load. Fix: parseDef with monsoon=75, winter=30, summer=40 defaults.
  *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
@@ -219,7 +245,13 @@ const parseDef = (val: any, fallback: number): number => {
  * @param climate        - full climate state (state.climate)
  * @param season         - 'summer' | 'monsoon' | 'winter'
  * @param systemDesign   - state.project.systemDesign
- * @param altCf          - altitude correction factor (dimensionless, 0–1)
+ * @param altCf          - altitude correction factor (dimensionless, 0–1).
+ *                         Passed through for signature compatibility.
+ *                         ⚠ VERIFY: confirm that calcInfiltrationGain() inside
+ *                         envelopeCalc.js applies altCf to its internal Cs (1.1)
+ *                         and Cl (0.68) constants. If it uses sea-level constants
+ *                         without correction, infiltration loads are overstated by
+ *                         ~1/altCf (≈20% at 5,000 ft). See WARN-SL-01.
  * @param elevation      - site elevation (ft) — used for Patm-corrected gr
  * @param floorAreaFt2   - room floor area in ft² (pre-converted from m²)
  * @param volumeFt3      - room volume in ft³ (pre-converted from m³)
