@@ -244,9 +244,17 @@ export const calculateSeasonLoad = (
   const inf = env.infiltration || {};
 
   // ── Outdoor conditions ──────────────────────────────────────────────────────
-  const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
-  const dbOut = parseFloat(String(outdoor.db)) || 95;
-  const ambRH = parseFloat(String(outdoor.rh)) || 0;
+ const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
+const dbOut   = parseDef(outdoor?.db, 95);
+// Season-appropriate RH defaults — only fire when rh field is absent from the
+// climate slice (e.g. progressive form save where DB was entered but RH was not).
+// 0% RH is never a valid default: it zeros out grOut and eliminates all latent
+// infiltration load, which is the dominant load component in monsoon.
+const ambRH   = parseDef(
+  outdoor?.rh,
+  season === 'monsoon' ? 75 : season === 'winter' ? 30 : 40
+);
+ 
 
   // Outdoor grains at site elevation (not sea level — Patm affects humidity ratio).
   const grOut = calculateGrains(dbOut, ambRH, elevation);
