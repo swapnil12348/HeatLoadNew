@@ -113,7 +113,9 @@
  *   ṁ_water(lb/hr)     = ṁ_air × Δgr / 7000
  *                       = CFM × 4.5 × altCf × Δgr / 7000
  *
- *   kW_steam = lb/hr × 0.634   [isothermal steam latent heat factor]
+ *   kW_steam = lb/hr × 0.634   [total electrical input — latent + sensible to
+ *                                boiling + ~50% element losses. NOT latent-only.
+ *                                Verify constant against Excel before release.]
  *
  *   Reference:
  *     ASHRAE HOF 2021 Ch.1 — ṁ_air = CFM × 60 × ρ
@@ -176,8 +178,18 @@ export interface HeatingHumidResult {
  */
 export const AIR_MASS_FACTOR = 60 * 0.075; // = 4.5
 
-// Isothermal steam humidifier power factor
-// Source: ASHRAE HVAC Systems & Equipment 2020, Ch.22
+// ── REPLACE WITH ──────────────────────────────────────────────────────────────
+// Total electrical input factor for electric isothermal steam humidifiers.
+// Accounts for latent heat of vaporization (~0.285 kW/lb/hr at 212°F)
+// + sensible heat to bring feed water to boiling (~0.044 kW/lb/hr from 59°F)
+// + ~50% overhead for element losses and standby (~0.305 kW/lb/hr).
+// Net: ~0.634 kW per lb/hr of steam produced.
+//
+// ⚠ VERIFY against Excel — confirm the workbook uses 0.634 (total electrical
+//   input) and not 0.285 (latent heat only) or another efficiency assumption.
+//   Using 0.634 when the Excel uses 0.285 overstates humidifier kW by ~2×.
+//
+// Source: ASHRAE HVAC Systems & Equipment 2020, Ch.22 §4 (electric steam)
 const STEAM_KW_PER_LB_HR = 0.634;
 
 // Standard hydronic ΔT for flow rate sizing
@@ -272,8 +284,9 @@ export const calculateHeatingHumid = (
   const winterGrOut    = calculateGrains(winterDbOut, winterRhOut, elevation);
 
   // Indoor target humidity ratio
-  const humidGrTarget = calculateGrains(dbInF, humidificationTarget, elevation);
+  
 
+  const humidGrTarget = calculateGrains(dbInF, humidificationTarget, elevation);
   // Mixed-air grains entering the humidifier.
   // For a 100% OA system (recirculationFraction = 0, the default):
   //   gr_mixed = gr_outdoor  ← identical to v1.x behaviour
@@ -281,10 +294,12 @@ export const calculateHeatingHumid = (
   //   gr_mixed = gr_OA × (1 − rcFrac) + gr_return × rcFrac
   // Return air is at steady-state room conditions — the humidification target
   // IS the winter room RH setpoint (steady-state assumption).
-  const rcFrac     = Math.min(1, Math.max(0, recirculationFraction || 0));
-  const grReturn   = calculateGrains(dbInF, humidificationTarget, elevation);
-  const mixedAirGr = winterGrOut * (1 - rcFrac) + grReturn * rcFrac;
-
+  const rcFrac = Math.min(1, Math.max(0, recirculationFraction || 0));
+  // grReturn === humidGrTarget by definition: in steady state the room is at
+  // its humidification target, so return air carries the same gr/lb as the
+  // indoor target. No separate calculateGrains() call needed.
+  const mixedAirGr = winterGrOut * (1 - rcFrac) + humidGrTarget * rcFrac;
+ 
   // Δgr: how many gr/lb the humidifier must add to the mixed-air stream
   const humidDeltaGr        = Math.max(0, humidGrTarget - mixedAirGr);
   const needsHumidification = humidDeltaGr > 0;
