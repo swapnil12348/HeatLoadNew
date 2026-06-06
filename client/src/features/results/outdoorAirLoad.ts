@@ -146,9 +146,19 @@ export const calculateOutdoorAirLoad = (
   const Cl = latentFactor(elevationNum);
 
   // ── Outdoor conditions ────────────────────────────────────────────────────
-  const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
-  const dbOut = parseFloat(String(outdoor.db)) || 95;
-  const rhOut = parseFloat(String(outdoor.rh)) || 40;
+ // Season-appropriate defaults — only fire when the field is absent from the
+  // climate slice (e.g. partial form save). Using 40% for monsoon understates
+  // grOut, oaEnthalpyDelta, oaTotal, and can suppress monsoon as peakCoolingSeason.
+  const SEASON_DB_DEFAULTS: Record<Season, number> = { summer: 95, monsoon: 92, winter: 45 };
+  const SEASON_RH_DEFAULTS: Record<Season, number> = { summer: 40, monsoon: 75, winter: 30 };
+
+  const outdoor  = climate?.outside?.[season] ?? {};
+  const dbOut = isNaN(parseFloat(String(outdoor.db)))
+    ? SEASON_DB_DEFAULTS[season]
+    : parseFloat(String(outdoor.db));
+  const rhOut = isNaN(parseFloat(String(outdoor.rh)))
+    ? SEASON_RH_DEFAULTS[season]
+    : parseFloat(String(outdoor.rh));
 
   const grOut = calculateGrains(dbOut, rhOut, elevationNum);
   const hOut = calculateEnthalpy(dbOut, grOut);
