@@ -123,7 +123,9 @@ const VELOCITY_MAIN_FT_S = 4.0; // main distribution — ASHRAE 4 ft/s minimum
 const HYDRONIC_CONSTANT = 500; // 60 × 8.33 × 1  [BTU/hr per GPM per °F]
 const CHW_DELTA_T_F = 10; // °F — standard chilled water differential
 const HW_DELTA_T_F = 20; // °F — standard hot water differential
-const GPM_TO_FT3_S = 449; // 1/0.002228 = 449 [GPM → ft³/s divisor]
+// 1 GPM = 1 gal/min = (1/7.481 ft³) / (60 s) = 0.002228 ft³/s
+// Dividing by 449 converts GPM to ft³/s: Q_ft3s = Q_gpm / 449
+const GPM_TO_FT3_S = 449; // [GPM → ft³/s divisor]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -236,8 +238,11 @@ export const calculatePipeSizing = (
  * Aggregates all room pipe sizing results into project-level
  * main pipe sizing. Used by ResultsPage for plant room sizing.
  *
- * Uses r.coilLoadBTU (not r.grandTotal) — supply fan heat does not pass
- * through the chilled water coil. See file header for full rationale.
+ // ── REPLACE WITH ──────────────────────────────────────────────────────────────
+ * CHW: uses r.coilLoadBTU (not r.grandTotal) — supply fan heat is downstream
+ *   of the coil in draw-through and does not pass through the chilled water coil.
+ * HW:  uses r.heatingCapBTU + r.preheatCapBTU — both loads are served by the
+ *   same hot water circuit. Excluding preheat understates main HW plant sizing.
  * Uses VELOCITY_MAIN_FT_S (4 ft/s) for project-level distribution mains
  * per ASHRAE Ch.22 — appropriate for critical facilities with noise/erosion limits.
  *
