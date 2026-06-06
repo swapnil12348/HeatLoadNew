@@ -673,7 +673,8 @@ const returnFanHeatFraction = (!isNaN(parsedReturnFanHeat) ? parsedReturnFanHeat
           bf,
           freshAirCheck,
           finalSupplyAir,
-          elevation
+          elevation,
+          peakCoolingSeason
         );
 
         // ════════════════════════════════════════════════════════════════════════

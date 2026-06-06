@@ -162,9 +162,16 @@ export const calculatePsychroStatePoints = (
   elevation: number = 0
 ): PsychroStateResult => {
   // ── 1. Ambient / outdoor ───────────────────────────────────────────────────
-  const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
-  const ambDB = parseFloat(String(outdoor.db)) || 95;
-  const ambRH = parseFloat(String(outdoor.rh)) || 40;
+ // Season-appropriate defaults — only fire when the field is absent.
+  // Using 95°F/40%RH for monsoon or winter produces wrong ambient and
+  // mixed-air state points on the psychrometric chart.
+  const SEASON_DB_DEF: Record<Season, number> = { summer: 95, monsoon: 92, winter: 45 };
+  const SEASON_RH_DEF: Record<Season, number> = { summer: 40, monsoon: 75, winter: 30 };
+  const outdoor  = climate?.outside?.[season] ?? {};
+  const ambDB = isNaN(parseFloat(String(outdoor.db)))
+    ? SEASON_DB_DEF[season] : parseFloat(String(outdoor.db));
+  const ambRH = isNaN(parseFloat(String(outdoor.rh)))
+    ? SEASON_RH_DEF[season] : parseFloat(String(outdoor.rh));
   const ambGr = calculateGrains(ambDB, ambRH, elevation);
   const amb = computeStatePoint(ambDB, ambGr, elevation);
 
@@ -267,7 +274,8 @@ export const calculateAllSeasonStatePoints = (
   bf: number,
   freshAirCFM: number,
   supplyAir: number,
-  elevation: number = 0
+  elevation: number = 0,
+  coilDesignSeason: Season = 'summer'
 ): AllSeasonsStateResult => {
   const SEASONS: Season[] = ['summer', 'monsoon', 'winter'];
   const fields: Record<string, string> = {};
@@ -314,7 +322,7 @@ export const calculateAllSeasonStatePoints = (
     fields[`sa_gr_${season}`] = pts.sa.gr;
     fields[`sa_enth_${season}`] = pts.sa.enth;
 
-    if (season === 'summer') {
+    if (season === coilDesignSeason) {
       fields['coil_shr'] = pts.sensibleHeatRatio;
       fields['coil_contactFactor'] = pts.contactFactor;
     }
