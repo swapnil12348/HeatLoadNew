@@ -96,6 +96,8 @@ export interface RoomPipeSizingResult {
 export interface PipeSizingRdsRow {
   coilLoadBTU?: number | string;
   heatingCapBTU?: number | string;
+  preheatCapBTU?: number | string; // OA preheat load on HW circuit — must be
+                                    // included in main HW sizing for cold climates
 }
 
 export interface ProjectPipeSizingResult {
@@ -263,11 +265,16 @@ export const calculateProjectPipeSizing = (
     (sum, r) => sum + (parseFloat(String(r.coilLoadBTU)) || 0),
     0
   );
+ // HW total = room heating + OA preheat (both served by the same HW circuit).
+  // Excluding preheat understates main HW pipe sizing for 100% OA cold-climate
+  // projects where preheat load can exceed room heating load by 2–3×.
   const totalHeatingBTU = rdsRows.reduce(
-    (sum, r) => sum + (parseFloat(String(r.heatingCapBTU)) || 0),
+    (sum, r) =>
+      sum +
+      (parseFloat(String(r.heatingCapBTU))  || 0) +
+      (parseFloat(String(r.preheatCapBTU))  || 0),
     0
   );
-
   const totalCHWFlowGPM =
     totalCoolingBTU > 0 ? totalCoolingBTU / (HYDRONIC_CONSTANT * CHW_DELTA_T_F) : 0;
 

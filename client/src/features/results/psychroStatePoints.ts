@@ -231,8 +231,12 @@ export const calculatePsychroStatePoints = (
     };
 
     // Supply air: ADP-bypass blend (ASHRAE HOF Ch.18)
-    const saDB = clDB * (1 - bf) + dbInF * bf;
-    const saGr = clGr * (1 - bf) + raGr * bf;
+// Bypass fraction at coil inlet = mixed air conditions (ASHRAE HOF Ch.18).
+    // For a recirculating AHU the difference vs RA is small (bf × ΔTMA-RA).
+    // For a 100% OA / DOAS system: MA = OA and the bypass grains error is
+    // bf × (raGr − ambGr), which can be 4+ gr/lb at monsoon conditions.
+    const saDB = clDB * (1 - bf) + maDB * bf;
+    const saGr = clGr * (1 - bf) + maGr * bf;
     sa = computeStatePoint(saDB, saGr, elevation);
 
     // Coil SHR — moist-air Cp = 0.240 + 0.444×W captures ~1.8% correction
@@ -263,8 +267,11 @@ export const calculatePsychroStatePoints = (
  * calculateAllSeasonStatePoints
  *
  * Runs calculatePsychroStatePoints() for all three seasons.
- * coil_shr and coil_contactFactor are derived from SUMMER ONLY —
- * these are cooling coil design parameters, not winter heating performance.
+ *  * coil_shr and coil_contactFactor are derived from the coilDesignSeason
+ * (defaults to 'summer'). Callers should pass peakCoolingSeason so the
+ * displayed SHR matches the actual coil design condition — for humid-climate
+ * rooms this may be monsoon, not summer.
+
  */
 export const calculateAllSeasonStatePoints = (
   climate: ClimateState | undefined | null,
