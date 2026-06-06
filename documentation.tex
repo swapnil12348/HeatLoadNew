@@ -1,0 +1,1026 @@
+%% ============================================================================
+%% HeatLoad HVAC Calculation Tool — Project Documentation
+%% Generated: 2026-06-06
+%% ============================================================================
+
+\documentclass[12pt, a4paper, oneside]{report}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{textcomp}
+\usepackage{microtype}
+\usepackage{parskip}
+
+% ── Color Definitions ────────────────────────────────────────────────────────
+\definecolor{codeblue}{RGB}{0,102,204}
+\definecolor{codegray}{RGB}{128,128,128}
+\definecolor{codegreen}{RGB}{0,128,0}
+\definecolor{codered}{RGB}{204,51,0}
+\definecolor{backcolour}{RGB}{248,248,248}
+\definecolor{accentblue}{RGB}{41,98,255}
+\definecolor{warnorange}{RGB}{230,126,34}
+\definecolor{sectionblue}{RGB}{26,54,126}
+
+% ── Hyperref Setup ────────────────────────────────────────────────────────────
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=codeblue,
+  citecolor=codegreen,
+  pdftitle={HeatLoad HVAC Calculation Tool — Documentation},
+  pdfauthor={Engineering Team},
+  pdfsubject={ASHRAE Heat Load Calculation — React Application},
+}
+
+% ── Listings Setup ────────────────────────────────────────────────────────────
+\lstdefinestyle{mystyle}{
+  backgroundcolor=\color{backcolour},
+  commentstyle=\color{codegreen}\itshape,
+  keywordstyle=\color{codeblue}\bfseries,
+  numberstyle=\tiny\color{codegray},
+  stringstyle=\color{codered},
+  basicstyle=\ttfamily\footnotesize,
+  breakatwhitespace=false,
+  breaklines=true,
+  captionpos=b,
+  keepspaces=true,
+  numbers=left,
+  numbersep=8pt,
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  tabsize=2,
+  frame=single,
+  rulecolor=\color{codegray!30},
+  xleftmargin=1.5em,
+  framexleftmargin=1em,
+}
+\lstset{style=mystyle}
+
+% ── Header/Footer ────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{codegray}{HeatLoad HVAC Tool}}
+\fancyhead[R]{\small\textcolor{codegray}{\leftmark}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ── Title Format ──────────────────────────────────────────────────────────────
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{sectionblue}}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{sectionblue}}{\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{sectionblue!80}}{\thesubsection}{1em}{}
+
+% ── Custom Commands ───────────────────────────────────────────────────────────
+\newcommand{\file}[1]{\texttt{\textcolor{codeblue}{#1}}}
+\newcommand{\code}[1]{\texttt{\textcolor{codered}{#1}}}
+\newcommand{\ashrae}{\textsc{ASHRAE}}
+\newcommand{\warn}[1]{\textcolor{warnorange}{\textbf{Warning:}} #1}
+\newcommand{\note}[1]{\textcolor{accentblue}{\textbf{Note:}} #1}
+
+% ══════════════════════════════════════════════════════════════════════════════
+%                              DOCUMENT BEGIN
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ── Title Page ────────────────────────────────────────────────────────────────
+\begin{titlepage}
+  \centering
+  \vspace*{2cm}
+  {\Huge\bfseries\textcolor{sectionblue}{HeatLoad HVAC Calculation Tool}\par}
+  \vspace{0.5cm}
+  {\Large\textcolor{codegray}{Comprehensive Project Documentation}\par}
+  \vspace{1.5cm}
+  {\large\textcolor{codegray}{Version 2.8 — June 2026}\par}
+  \vspace{2cm}
+
+  \rule{\textwidth}{0.4pt}
+  \vspace{0.5cm}
+
+  {\large
+  \begin{tabular}{rl}
+    \textbf{Framework:}   & React 19 + Redux Toolkit + Vite 7 \\
+    \textbf{Language:}     & TypeScript / JavaScript (JSX/TSX) \\
+    \textbf{Styling:}      & Tailwind CSS v4 \\
+    \textbf{Deployment:}   & Vercel (SPA) \\
+    \textbf{Standards:}    & ASHRAE HOF 2021, ASHRAE 62.1-2022, ISO 14644-1:2015 \\
+    \textbf{Industries:}   & Semiconductor, Pharmaceutical, Battery, Solar \\
+  \end{tabular}
+  }
+
+  \vspace{2cm}
+  \rule{\textwidth}{0.4pt}
+  \vfill
+  {\small Generated automatically from source code analysis.}
+\end{titlepage}
+
+% ── Table of Contents ─────────────────────────────────────────────────────────
+\tableofcontents
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Project Overview}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{Introduction}
+
+The \textbf{HeatLoad HVAC Calculation Tool} is a client-side, single-page application (SPA) designed for HVAC engineers working in critical-environment industries---semiconductor fabrication, pharmaceutical manufacturing, battery manufacturing (Li-ion and lead-acid), and solar/PV production. The application automates the full \ashrae{} Handbook of Fundamentals (2021) Chapter~18 heat load calculation methodology, from building envelope analysis through psychrometric state-point resolution.
+
+The tool replaces traditional Excel-based Room Data Sheet (RDS) calculators with a reactive, browser-based interface that provides instant recalculation as engineers modify room parameters, climate data, or system design assumptions.
+
+\section{Key Engineering Capabilities}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Multi-Season Load Calculation} --- Summer, monsoon, and winter seasons with peak-season auto-selection for both CFM (supply air) and TR (cooling capacity).
+  \item \textbf{CLTD/CLF Envelope Method} --- Walls, roofs, glazing, skylights, partitions, and floors with ASHRAE construction presets.
+  \item \textbf{Psychrometric Engine} --- Hyland-Wexler saturation pressure (ASHRAE HOF 2021 Ch.1, Eq.~3 \& 5) replacing the less-accurate Magnus approximation.
+  \item \textbf{ASHRAE 62.1-2022 Ventilation} --- Full Ventilation Rate Procedure (VRP) with industry-specific categories including lead-acid battery rooms (OSHA 29~CFR~1926.403(i)).
+  \item \textbf{ISO 14644-1:2015 Classification} --- ISO~1 through ISO~9, CNC, and Unclassified with IEST-RP-CC012.2 ACPH ranges.
+  \item \textbf{GMP Annex 1:2022 Compliance} --- Grade~A through D mapping with mandated ACPH floors and 1.25$\times$ process safety factors.
+  \item \textbf{Altitude-Corrected Psychrometrics} --- All factors ($C_s$, $C_l$, humidity ratio) corrected via the barometric formula to actual site elevation.
+  \item \textbf{Reheater Sizing} --- Physics-based minimum ESHF calculation and ASHRAE Ch.18~\S17.3 reheat load determination.
+  \item \textbf{Required ADP Analysis} --- ESHF line / saturation curve intersection with three-outcome classification (\code{found}, \code{sensible\_only}, \code{no\_solution}).
+  \item \textbf{CHW/HW Pipe Sizing} --- Automated pipe diameter selection with velocity-based branch and manifold sizing.
+  \item \textbf{Humidification Sizing} --- Winter moisture deficit calculation with desiccant system awareness for battery dry rooms.
+\end{itemize}
+
+\section{Technology Stack}
+
+\begin{table}[H]
+\centering
+\caption{Technology Stack Summary}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Technology} & \textbf{Purpose} \\
+\midrule
+React 19.2            & UI component framework \\
+Redux Toolkit 2.11    & Centralised state management with Immer-powered immutable updates \\
+React Router DOM 7.13 & Client-side routing (SPA) \\
+Vite 7.3              & Build tooling, HMR dev server \\
+Tailwind CSS 4.2      & Utility-first CSS framework \\
+TypeScript 6.0        & Static type checking \\
+Vitest 4.1            & Unit testing framework \\
+ExcelJS 4.4           & Excel export (\texttt{.xlsx}) generation \\
+Lucide React          & Icon library \\
+React Hot Toast       & Notification toasts \\
+Vercel                & Deployment platform with SPA rewrite rules \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Architecture}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{High-Level Architecture}
+
+The application follows a \textbf{unidirectional data flow} pattern:
+
+\begin{enumerate}
+  \item \textbf{User interaction} dispatches Redux actions.
+  \item \textbf{Redux reducers} (slices) produce new immutable state.
+  \item \textbf{Memoised selectors} (\code{createSelector}) derive computed RDS data.
+  \item \textbf{React components} re-render with the new data.
+\end{enumerate}
+
+All calculation logic is \textbf{pure}---implemented as selector modules in \file{features/results/}. These modules are never registered as Redux reducers; they derive from the five state slices and produce the full RDS row object on every state change.
+
+\section{State Shape}
+
+The Redux store is composed of five independent slices:
+
+\begin{lstlisting}[language={}, caption={Root Reducer Composition}]
+rootReducer = {
+  project:  projectReducer,   // Project metadata, ambient, system design
+  ahu:      ahuReducer,        // Air Handling Unit definitions
+  room:     roomReducer,       // Room list and active selection
+  climate:  climateReducer,    // Outdoor design conditions (3 seasons)
+  envelope: envelopeReducer,   // Per-room building envelope + internal loads
+}
+\end{lstlisting}
+
+\section{Data Flow Diagram}
+
+\begin{verbatim}
+  UI Input
+     |
+     v
+  Redux Dispatch (action)
+     |
+     v
+  Slice Reducer (state update)
+     |
+     v
+  selectRdsData (createSelector, memoised)
+     |
+     +-- calculateSeasonLoad()    [seasonalLoads.ts]
+     +-- calculateAirQuantities() [airQuantities.ts]
+     +-- calculateAllSeasonOALoads() [outdoorAirLoad.ts]
+     +-- calculateRequiredADP()   [psychro.ts]
+     +-- calculateHeatingHumid()  [heatingHumid.ts]
+     +-- calculatePipeSizing()    [pipeSizing.ts]
+     +-- calculateAllSeasonStatePoints() [psychroStatePoints.ts]
+     |
+     v
+  RDS Row Object (one per room)
+     |
+     v
+  React Component Tree (re-render)
+\end{verbatim}
+
+\section{Directory Structure}
+
+\begin{lstlisting}[language={}, caption={Source Directory Layout}]
+client/src/
+  app/
+    store.ts           -- Redux store configuration
+    rootReducer.ts     -- Slice composition
+  components/
+    Layout/            -- Header, TabNav, RoomSidebar
+    UI/                -- InputField, InputGroup, NumberControl, StatCard
+  constants/
+    ashrae.ts          -- ASHRAE constants & conversion factors
+    ashraeTables.ts    -- CLTD/CLF lookup tables, U-value presets
+    isoCleanroom.ts    -- ISO 14644 classification data
+    ventilation.ts     -- ASHRAE 62.1-2022 VRP implementation
+  features/
+    project/projectSlice.ts   -- Project, ambient, system design state
+    ahu/ahuSlice.ts           -- AHU definitions
+    room/roomSlice.ts         -- Room list & geometry
+    room/roomActions.js       -- Cross-slice room thunks
+    room/AhuAssignment.jsx    -- AHU-to-room assignment UI
+    climate/climateSlice.ts   -- Seasonal outdoor conditions
+    envelope/envelopeSlice.ts -- Building elements + internal loads
+    envelope/BuildingShell.tsx -- Envelope editor component
+    results/
+      rdsSelector.ts          -- Master RDS orchestrator
+      seasonalLoads.ts        -- Per-season load calculation
+      airQuantities.ts        -- All CFM quantities
+      outdoorAirLoad.ts       -- OA coil loads
+      heatingHumid.ts         -- Heating + humidification
+      pipeSizing.ts           -- CHW/HW pipe diameter selection
+      psychroStatePoints.ts   -- AHU air stream state points
+  hooks/
+    useActiveRoom.js          -- Active room selection hook
+    useNumberControl.ts       -- Numeric input stepper hook
+    useProjectTotals.js       -- Project-wide aggregation hook
+    useRdsRow.js              -- Single RDS row data hook
+    useRoomSidebar.ts         -- Sidebar navigation hook
+  pages/
+    Home.jsx                  -- Landing page
+    ProjectDetails.jsx        -- Project metadata entry
+    AHUConfig.jsx             -- AHU equipment configuration
+    RoomConfig.jsx            -- Room geometry & classification
+    ClimateConfig.jsx         -- Outdoor design conditions
+    EnvelopeConfig.jsx        -- Building envelope editor
+    RDSPage.jsx               -- Room Data Sheet spreadsheet view
+    ResultsPage.jsx           -- Project results & export
+    rds/                      -- RDS sub-components
+  utils/
+    psychro.ts                -- Psychrometric calculations
+    units.ts                  -- Unit conversions
+    types.ts                  -- TypeScript interfaces
+    envelopeCalc.ts           -- CLTD/CLF envelope calculations
+    envelopeAggregator.ts     -- Envelope gain summation
+    envelopeHelpers.ts        -- Envelope utility functions
+    glazingCalc.ts            -- Glass & skylight solar gains
+    isoValidation.ts          -- ISO/GMP compliance validation
+    psychroValidation.ts      -- Psychrometric consistency checks
+\end{lstlisting}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Entry Points \& Application Shell}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{client/src/main.jsx} --- Application Bootstrap}
+
+The application entry point. Renders the React root with:
+\begin{itemize}
+  \item \code{StrictMode} --- Enables development-time double-rendering for side-effect detection.
+  \item \code{Provider store=\{store\}} --- Makes the Redux store available to all descendant components via \code{useSelector} / \code{useDispatch}.
+  \item \code{App} --- The root application component (routing).
+\end{itemize}
+
+\section{\file{client/src/App.jsx} --- Routing \& Layout}
+
+Defines the application's route structure using React Router v7:
+
+\begin{table}[H]
+\centering
+\caption{Application Routes}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Path} & \textbf{Component} & \textbf{Description} \\
+\midrule
+\texttt{/}         & \code{Home}            & Public landing page (no header/nav) \\
+\texttt{/project}  & \code{ProjectDetails}  & Project metadata and system design \\
+\texttt{/rds}      & \code{RDSPage}         & Room Data Sheet spreadsheet \\
+\texttt{/ahu}      & \code{AHUConfig}       & AHU equipment configuration \\
+\texttt{/room}     & \code{RoomConfig}      & Room geometry and classification \\
+\texttt{/climate}  & \code{ClimateConfig}   & Outdoor design conditions \\
+\texttt{/envelope} & \code{EnvelopeConfig}  & Building envelope editor \\
+\texttt{/results}  & \code{ResultsPage}     & Results summary and export \\
+\texttt{*}         & Redirect to \texttt{/} & Catch-all \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The \code{AppLayout} wrapper provides the fixed-viewport layout: \code{Header} + \code{TabNav} at natural height, \code{<main>} fills remaining viewport via \code{flex-1 overflow-auto min-h-0}.
+
+\section{\file{client/src/app/store.ts} --- Redux Store}
+
+Configures the Redux store with:
+\begin{itemize}
+  \item Root reducer composed from five slices.
+  \item Dev tools enabled in non-production mode.
+  \item Serializable check with \code{climate} slice ignored (transient \code{NaN} during numeric input).
+  \item Automatic type inference for \code{RootState} and \code{AppDispatch}.
+  \item Global \code{window.\_\_store} binding in development for console debugging.
+\end{itemize}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Redux State Slices}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{features/project/projectSlice.ts} --- Project State}
+
+\subsection{State Shape}
+
+\begin{lstlisting}[language={}, caption={Project State Shape}]
+state.project = {
+  info: {
+    projectName, projectLocation, customerName,
+    consultantName, industry, keyAccountManager
+  },
+  ambient: {
+    elevation,        // ft (0 = sea level)
+    latitude,         // degrees (-90..90); default 28 (Delhi)
+    dailyRange,       // F daily DB swing
+    dryBulbTemp,      // C (reference only, NOT used in calcs)
+    wetBulbTemp,      // C (reference only)
+    relativeHumidity  // % (reference only)
+  },
+  systemDesign: {
+    safetyFactor,           // % (default 10)
+    ductHeatGain,           // % (default 5)
+    bypassFactor,           // dimensionless (default 0.10)
+    adp,                    // F (default 55)
+    adpMode,                // 'manual' | 'calculated'
+    fanHeat,                // % (default 5)
+    returnFanHeat,          // % (default 5)
+    humidificationTarget    // %RH (default 45)
+  }
+}
+\end{lstlisting}
+
+\subsection{Reducers}
+
+\begin{itemize}
+  \item \code{updateProjectInfo(\{field, value\})} --- Updates project metadata string fields with \code{trim()}.
+  \item \code{updateAmbient(\{field, value\})} --- Parses, clamps to \code{AMBIENT\_BOUNDS}, and stores numeric ambient values.
+  \item \code{updateSystemDesign(\{field, value\})} --- String fields (e.g.\ \code{adpMode}) bypass \code{parseFloat}; numeric fields are clamped to \code{SYSTEM\_DESIGN\_BOUNDS}.
+  \item \code{resetProject()} --- Returns entire slice to \code{initialState}.
+\end{itemize}
+
+\subsection{Selectors}
+
+14 exported selectors provide targeted access: \code{selectProjectInfo}, \code{selectAmbient}, \code{selectSystemDesign}, \code{selectElevation}, \code{selectLatitude}, \code{selectDailyRange}, \code{selectSafetyFactor}, \code{selectDuctHeatGain}, \code{selectBypassFactor}, \code{selectAdp}, \code{selectFanHeat}, \code{selectReturnFanHeat}, \code{selectHumidTarget}, \code{selectIndustry}.
+
+\subsection{Key Design Decisions}
+
+\begin{itemize}
+  \item \textbf{ADP Scope:} Project ADP is the default; per-AHU overrides live in \code{ahuSlice}. Priority chain: AHU calculated $>$ AHU manual $>$ project default $>$ 55\textdegree F fallback.
+  \item \textbf{Duct Heat Gain:} Applied \emph{additively} with safety factor per Excel row~80 method: $\text{mult} = 1 + (\text{safety} + \text{duct}) / 100$.
+  \item \textbf{Ambient fields} (\code{dryBulbTemp}, \code{wetBulbTemp}, \code{relativeHumidity}) are brief reference values in \textdegree C --- they are \emph{not} used in load calculations. Seasonal design conditions live in \code{climateSlice}.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────────
+\section{\file{features/ahu/ahuSlice.ts} --- AHU State}
+
+Manages the list of Air Handling Units. Each AHU has identity fields (\code{id}, \code{name}, \code{tag}), a \code{type} (Recirculating, DOAS, MAU, FCU), capacity and airflow fields, and psychrometric override fields (\code{adp}, \code{adpMode}, \code{bypassFactor}).
+
+\subsection{AHU Types}
+\begin{description}
+  \item[\code{Recirculating}] Standard recirculating AHU with partial outdoor air.
+  \item[\code{DOAS}] Dedicated Outdoor Air System---100\% OA always.
+  \item[\code{MAU}] Make-up Air Unit---100\% OA, typically for laboratories.
+  \item[\code{FCU}] Fan Coil Unit---recirculating, no OA path.
+\end{description}
+
+The logic layer distinguishes only DOAS vs non-DOAS (\code{isDOAS = ahuType === 'DOAS'}).
+
+\subsection{Reducers}
+\code{addAHU}, \code{updateAHU}, \code{deleteAHU}. \warn{\code{deleteAHU} must never be called directly from UI code---use \code{deleteAhuWithCleanup} thunk from \file{roomActions.js}.}
+
+% ──────────────────────────────────────────────────────────────────────────────
+\section{\file{features/room/roomSlice.ts} --- Room State}
+
+\subsection{State Shape}
+\begin{lstlisting}[language={}, caption={Room State Shape}]
+state.room = {
+  activeRoomId: string | null,
+  list: Room[]  // see Room interface in types.ts
+}
+\end{lstlisting}
+
+Each \code{Room} contains: identity fields, geometry in SI (m\textsuperscript{2}, m\textsuperscript{3}), design targets (\code{designTemp} in \textdegree C, \code{designRH} in \%, \code{pressure} in Pa), ISO classification, ventilation category, ACPH constraints, exhaust air breakdown (general, BIBO, machine in CFM), and AHU assignment.
+
+\subsection{Key Behaviours}
+\begin{itemize}
+  \item \code{designDB} (\textdegree F) is derived from \code{designTemp} (\textdegree C) and kept in sync by \code{updateRoom}.
+  \item \code{classInOp} changes auto-update \code{minAcph} and \code{designAcph} from \code{ACPH\_RANGES}.
+  \item Geometry fields (\code{length}, \code{width}, \code{height}) auto-derive \code{floorArea} and \code{volume}.
+  \item \code{designRH = 0} is valid (battery dry rooms)---the \code{!= null} guard preserves zero.
+  \item \code{deleteRoom} never removes the last room.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────────
+\section{\file{features/climate/climateSlice.ts} --- Climate State}
+
+Stores outdoor design conditions for three seasons. All temperatures in \textdegree F.
+
+\begin{lstlisting}[language={}, caption={Climate State Shape}]
+state.climate.outside = {
+  summer:  { db: 109.9, rh: 19, time, month, gr, dp, wb },
+  monsoon: { db: 95,    rh: 70, ... },
+  winter:  { db: 45,    rh: 60, ... }
+}
+\end{lstlisting}
+
+Fields \code{gr}, \code{dp}, \code{wb} are display-only derived fields computed at sea level (elevation = 0). The calculation layer recomputes these with actual site elevation.
+
+Summer default: 109.9\textdegree F (43.3\textdegree C)---ASHRAE HOF 2021 Ch.14 Table~1, 0.4\% design dry-bulb for Delhi (28\textdegree N), correct tier for 24/7 critical facilities.
+
+% ──────────────────────────────────────────────────────────────────────────────
+\section{\file{features/envelope/envelopeSlice.ts} --- Envelope State}
+
+Per-room envelope data stored in \code{state.envelope.byRoomId[roomId]}.
+
+\subsection{Structure}
+\begin{lstlisting}[language={}, caption={Room Envelope Structure}]
+RoomEnvelope = {
+  elements: {
+    walls: [], roofs: [], glass: [],
+    skylights: [], partitions: [], floors: []
+  },
+  internalLoads: {
+    people:    { count, sensiblePerPerson, latentPerPerson },
+    lights:    { wattsPerSqFt, useSchedule, ballastFactor },
+    equipment: { kw, sensiblePct, latentPct, diversityFactor }
+  },
+  infiltration: {
+    method: 'ach', achValue: 0, cfmValue: 0, doors: []
+  }
+}
+\end{lstlisting}
+
+\code{achValue} defaults to 0 (positively pressurised ISO/GMP rooms have zero infiltration by definition).
+
+\subsection{Reducers}
+\code{initializeRoom} (ISO-aware, guards against re-initialisation), \code{addEnvelopeElement}, \code{updateEnvelopeElement}, \code{removeEnvelopeElement}, \code{updateInternalLoad} (merge-update), \code{updateInfiltration}, \code{removeRoomEnvelope}.
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Cross-Slice Thunks}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{features/room/roomActions.js}}
+
+Three thunks for atomic cross-slice operations:
+
+\begin{description}
+  \item[\code{addNewRoom()}] Creates a room in \code{roomSlice} and initialises its envelope in \code{envelopeSlice} atomically. Uses \code{DEFAULT\_NEW\_ROOM\_CLASS = 'ISO 8'} as the single source of truth for both classification and ACPH defaults.
+
+  \item[\code{deleteRoomWithCleanup(roomId)}] Removes room from \code{roomSlice} and its envelope from \code{envelopeSlice}.
+
+  \item[\code{deleteAhuWithCleanup(ahuId)}] Clears all room assignments (\code{setRoomAhu(\{ahuId: null\})}) \emph{before} removing the AHU from \code{ahuSlice}. Order matters: clear first, then remove.
+\end{description}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Constants \& Reference Data}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{constants/ashrae.ts} --- ASHRAE Constants}
+
+Central repository of \ashrae{} Handbook constants. Exported as a frozen \code{as const} object. Key groups:
+
+\begin{table}[H]
+\centering
+\caption{Key ASHRAE Constants}
+\begin{tabularx}{\textwidth}{lrX}
+\toprule
+\textbf{Constant} & \textbf{Value} & \textbf{Source / Notes} \\
+\midrule
+\code{SENSIBLE\_FACTOR\_SEA\_LEVEL} & 1.08 & $Q_s = 1.08 \times \text{CFM} \times \Delta T$ \\
+\code{LATENT\_FACTOR\_SEA\_LEVEL}   & 0.68 & $Q_l = 0.68 \times \text{CFM} \times \Delta\text{gr/lb}$ \\
+\code{LATENT\_FACTOR\_LB}           & 4775 & $= 0.075 \times 60 \times 1061$ \\
+\code{LATENT\_HFG\_BTU\_LB}         & 1061 & $h_{fg}$ at 32\textdegree F reference \\
+\code{BTU\_PER\_TON}                & 12000 & 1 TR = 12,000 BTU/hr \\
+\code{M2\_TO\_FT2}                  & 10.7639 & NIST exact \\
+\code{PROCESS\_SAFETY\_FACTOR}      & 1.25 & GMP Annex 1:2022 \S4.23 \\
+\code{PROCESS\_DIVERSITY\_FACTOR}   & 0.75 & Fallback only \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\warn{Never use \code{SENSIBLE\_FACTOR\_SEA\_LEVEL} or \code{LATENT\_FACTOR\_SEA\_LEVEL} directly in calculations. Use \code{sensibleFactor(elev)} / \code{latentFactor(elev)} from \file{psychro.ts}.}
+
+\section{\file{constants/isoCleanroom.ts} --- ISO 14644 Classification}
+
+Contains:
+\begin{itemize}
+  \item \code{ISO\_PARTICLE\_LIMITS} --- ISO 14644-1:2015 particle concentration limits for ISO~1--9.
+  \item \code{ACPH\_RANGES} --- IEST-RP-CC012.2 air change rates (min, design, max, OA fraction, flow type).
+  \item \code{ISO\_CLASS\_DATA} --- Full classification data including GMP grade mapping, typical use, pressure, temperature, and humidity ranges.
+  \item \code{GMP\_GRADE\_MAPPING} --- GMP Annex 1:2022 Grade~A--D with ISO at-rest/in-operation requirements and mandated ACPH.
+\end{itemize}
+
+\section{\file{constants/ventilation.ts} --- ASHRAE 62.1-2022 VRP}
+
+Implements the Ventilation Rate Procedure with 12 industry-specific categories:
+
+\begin{table}[H]
+\centering
+\caption{Ventilation Categories (Selected)}
+\begin{tabularx}{\textwidth}{llrrX}
+\toprule
+\textbf{Key} & \textbf{Label} & $R_p$ & $R_a$ & \textbf{Min ACH} \\
+\midrule
+\code{general}           & General / Office           & 5    & 0.06 & 0 \\
+\code{pharma}            & Pharma Cleanroom           & 5    & 0.18 & 20 \\
+\code{semicon}           & Semiconductor Fab          & 5    & 0.18 & 6 \\
+\code{battery}           & Battery --- Li-ion         & 5    & 0.18 & 10 \\
+\code{battery-leadacid}  & Battery --- Lead-Acid      & 5    & 1.00 & 12 \\
+\code{gowning}           & Gowning Room               & 5    & 0.10 & 10 \\
+\code{canteen}           & Canteen / Cafeteria        & 7.5  & 0.18 & 0 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Key exports: \code{calculateVbz()} (zone OA: $V_{bz} = R_p \times P_z + R_a \times A_z$) and \code{calculateMinAchCfm()} (regulatory ACH floor).
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Psychrometric Engine}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{utils/psychro.ts} --- Core Psychrometric Functions}
+
+The psychrometric engine uses \textbf{ASHRAE Hyland-Wexler} saturation pressure equations (HOF 2021 Ch.1, Eq.~3 for ice, Eq.~5 for liquid water), replacing the less accurate Magnus approximation used in earlier versions.
+
+\subsection{Saturation Pressure}
+
+\begin{equation}
+  \ln(P_{ws}) = \frac{C_1}{T} + C_2 + C_3 T + C_4 T^2 + C_5 T^3 + C_6 T^4 + C_7 \ln(T) \quad \text{(ice, } T < 273.15\text{ K)}
+\end{equation}
+
+\begin{equation}
+  \ln(P_{ws}) = \frac{C_8}{T} + C_9 + C_{10} T + C_{11} T^2 + C_{12} T^3 + C_{13} \ln(T) \quad \text{(liquid, } T \geq 273.15\text{ K)}
+\end{equation}
+
+\subsection{Public API}
+
+\begin{longtable}{p{6cm}p{8cm}}
+\toprule
+\textbf{Function} & \textbf{Description} \\
+\midrule
+\endhead
+\code{altitudeCorrectionFactor(elevFt)} & $C_f = (1 - 6.8754 \times 10^{-6} \times \text{elev})^{5.2559}$ \\
+\code{sitePressure(elevFt)} & $P_{\text{atm}} = 1013.25 \times C_f$ (hPa) \\
+\code{sensibleFactor(elevFt)} & $C_s = 1.08 \times C_f$ \\
+\code{latentFactor(elevFt)} & $C_l = 0.68 \times C_f$ \\
+\code{calculateGrains(dbF, rh, elevFt)} & $W = 0.62198 \times E / (P_{\text{atm}} - E)$ (gr/lb) \\
+\code{calculateRH(dbF, grains, elevFt)} & Reverse of \code{calculateGrains} \\
+\code{calculateDewPoint(dbF, rh)} & Bisection on H-W curve; returns null for $\text{RH} \leq 0$ \\
+\code{grainsFromDewPoint(dpF, elevFt)} & $W$ from dew/frost point temperature \\
+\code{calculateEnthalpy(dbF, grains)} & $h = 0.240t + W(h_{fg_0} + 0.444t)$ \\
+\code{calculateWetBulb(dbF, rh, elevFt)} & Bisection on ASHRAE Eq.~35 ($\pm 0.01$\textdegree C) \\
+\code{calculateSpecificVolume(dbF, gr, elevFt)} & $v = 0.370486 \times T_R / P_{\text{psia}} \times (1 + 1.608W)$ \\
+\code{calculateAdpFromLoads(...)} & Back-calculates ADP from room sensible load \\
+\code{calculateRequiredADP(...)} & ESHF line / saturation curve intersection \\
+\bottomrule
+\end{longtable}
+
+\subsection{Required ADP --- ESHF Analysis}
+
+Three possible outcomes:
+\begin{description}
+  \item[\code{found}] Bisection succeeded. \code{requiredADP} is the coil surface temperature needed. Compare with plant ADP.
+  \item[\code{sensible\_only}] Required ADP $< 32$\textdegree F or ESHF $\geq 99.5\%$. Any standard CHW coil works.
+  \item[\code{no\_solution}] ESHF line does not intersect saturation curve. Supplemental dehumidification required.
+\end{description}
+
+\section{\file{utils/units.ts} --- Unit Conversion Library}
+
+Pure, zero-dependency conversion library. Organised by family: area, volume, temperature, energy/power, humidity, airflow, pressure, mass flow, and length.
+
+Key design decisions:
+\begin{itemize}
+  \item Temperature conversions use \code{numOrNull} guard (returns \code{null} for invalid input) because 0\textdegree F is a valid temperature.
+  \item Positive-value conversions (area, airflow) use \code{num()} guard (returns 0 for invalid input).
+  \item Includes \code{PSYCHRO\_SANITY\_CHECKS} reference values for regression testing.
+\end{itemize}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Calculation Modules}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{features/results/seasonalLoads.ts} --- Seasonal Load Calculation}
+
+Computes per-room, per-season sensible and latent loads (BTU/hr).
+
+\subsection{Load Components}
+
+\textbf{Sensible loads:}
+\begin{enumerate}
+  \item \textbf{Envelope} --- CLTD/CLF method via \code{envelopeAggregator.ts}
+  \item \textbf{People} --- $\text{sensible/person} \times \text{count}$ (HOF Ch.18 Table~1)
+  \item \textbf{Lighting} --- $\text{W/ft}^2 \times \text{area} \times 3.412 \times \text{schedule} \times \text{ballast}$
+  \item \textbf{Equipment} --- $\text{kW} \times 3412.14 \times \text{sensible\%} \times \text{diversity}$
+  \item \textbf{Infiltration} --- $C_s \times \text{CFM} \times \Delta T$
+\end{enumerate}
+
+\textbf{Latent loads:}
+\begin{enumerate}
+  \item People latent heat
+  \item Equipment latent fraction
+  \item Infiltration --- $C_l \times \text{CFM} \times \Delta\text{gr/lb}$
+\end{enumerate}
+
+\subsection{Safety Factor Policy}
+
+\begin{equation}
+  \text{ERSH} = \text{rawSensible} \times \underbrace{\left(1 + \frac{\text{safety} + \text{ductGain}}{100}\right)}_{\text{safetyMult}} \times \underbrace{1.25}_{\text{GMP rooms only}}
+\end{equation}
+
+\begin{equation}
+  \text{ERLH} = \text{rawLatent} \quad \text{(no safety factor on latent)}
+\end{equation}
+
+% ──────────────────────────────────────────────────────────────────────────────
+\section{\file{features/results/airQuantities.ts} --- Airflow Calculations}
+
+\subsection{Supply Air Hierarchy}
+
+\begin{equation}
+  \text{supplyAir} = \max(\text{thermalCFM}, \text{designACPH\_CFM}, \text{regulatoryACPH\_CFM}, \text{minACPH\_CFM})
+\end{equation}
+
+Where:
+\begin{align}
+  \text{thermalCFM} &= \frac{\text{ERSH}}{C_s \times (1 - BF) \times (T_{\text{room}} - T_{\text{ADP}})} \\
+  \text{designACPH\_CFM} &= V_{\text{ft}^3} \times \text{designACPH} / 60 \\
+  \text{regulatoryACPH\_CFM} &= \code{calculateMinAchCfm}(\text{ventCategory}, V_{\text{ft}^3})
+\end{align}
+
+\subsection{Fresh Air (ASHRAE 62.1 VRP)}
+
+\begin{equation}
+  V_{bz} = R_p \times P_z + R_a \times A_z
+\end{equation}
+
+Exhaust compensation: $\text{freshAir} = \max(V_{bz}, \text{totalExhaust})$.
+
+For DOAS units: $\text{freshAir} = \text{supplyAir}$ (100\% OA).
+
+\subsection{Mass Balance}
+
+\begin{equation}
+  \text{returnAir} = \max(0, \text{supplyAir} - \text{freshAirCheck})
+\end{equation}
+
+% ──────────────────────────────────────────────────────────────────────────────
+\section{\file{features/results/rdsSelector.ts} --- RDS Orchestrator}
+
+The master memoised selector (\code{createSelector}) that assembles the complete RDS row for every room. Pure orchestrator---delegates all calculations:
+
+\begin{enumerate}
+  \item \textbf{Step 1:} Seasonal loads (3 seasons $\times$ each room)
+  \item \textbf{Step 2:} Air quantities (supply, fresh, exhaust, return)
+  \item \textbf{Step 3:} Outdoor air coil loads (enthalpy method)
+  \item \textbf{Step 4:} Peak cooling season selection + grand total
+  \item \textbf{Step 4b:} Required ADP from ESHF line analysis
+  \item \textbf{Step 4c:} Reheater requirement (ASHRAE Ch.18 \S17.3)
+  \item \textbf{Step 5:} Heating + humidification sizing
+  \item \textbf{Step 6:} CHW/HW pipe sizing
+  \item \textbf{Step 7:} Psychrometric state points
+  \item \textbf{Step 8:} Derived seasonal fields (pickup, terminal heating)
+\end{enumerate}
+
+\subsection{Reheater Logic}
+
+When $\text{roomESHF} < \text{minESHF}$, a reheater is required:
+
+\begin{equation}
+  \text{minESHF} = \frac{C_s \times DR}{C_s \times DR + C_l \times \max(0, W_{\text{room}} - W_{\text{sat}}(T_{\text{ADP}}))}
+\end{equation}
+
+\begin{equation}
+  \text{reheatBTU} = \frac{\text{minESHF} \times \text{ERTH}_{\text{safe}} - \text{ERSH}_{\text{safe}}}{1 - \text{minESHF}}
+\end{equation}
+
+\subsection{ADP Resolution Priority}
+
+\begin{enumerate}
+  \item AHU mode = \code{calculated} $\rightarrow$ \code{calculateAdpFromLoads()}
+  \item \code{ahu.adp > 0} $\rightarrow$ per-AHU manual override
+  \item \code{systemDesign.adp} $\rightarrow$ project default
+  \item 55\textdegree F hardcoded fallback
+\end{enumerate}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Envelope Calculation Modules}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{utils/envelopeCalc.ts}}
+
+CLTD/CLF-based heat gain calculations for opaque building elements:
+\begin{itemize}
+  \item \code{calcWallGain(element, climate, tRoom, season)} --- Wall conduction with CLTD, latitude/month correction, and daily range correction.
+  \item \code{calcRoofGain(element, climate, tRoom, season)} --- Roof conduction via flat-roof CLTD tables.
+  \item \code{calcPartitionGain(element, tRoom, season)} --- Steady-state conduction $Q = U \times A \times \Delta T$ with season-dependent adjacent temperatures.
+  \item \code{calcInfiltrationGain(inf, room, volFt3, ...)} --- Sensible and latent infiltration loads.
+\end{itemize}
+
+\section{\file{utils/glazingCalc.ts}}
+
+Solar heat gain through glass and skylights:
+\begin{itemize}
+  \item Conduction: $Q_c = U \times A \times \text{CLTD}_{\text{glass}}$
+  \item Solar: $Q_s = A \times \text{SHGF} \times \text{SHGC} \times \text{CLF}$
+  \item Total: $Q = Q_c + Q_s$
+\end{itemize}
+
+SHGC preferred over SC ($\text{SHGC} = 0.87 \times \text{SC}$).
+
+\section{\file{utils/envelopeAggregator.ts}}
+
+Sums gains across all element categories for one room in one season. Calls individual \code{calcXxxGain()} functions from \file{envelopeCalc.ts} and \file{glazingCalc.ts}.
+
+\section{\file{features/envelope/BuildingShell.tsx}}
+
+Interactive tabbed UI for editing building envelope elements. Six categories (walls, roofs, glass, skylights, partitions, floors) with per-element ASHRAE preset selection, U-value input, area input, and per-season BTU/hr gain badges.
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Utility Modules}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{utils/types.ts} --- TypeScript Interfaces}
+
+Defines all shared interfaces:
+
+\begin{table}[H]
+\centering
+\caption{Key TypeScript Interfaces}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Interface} & \textbf{Purpose} \\
+\midrule
+\code{Room}              & Room identity, geometry, design targets, classification \\
+\code{RoomState}         & \code{\{activeRoomId, list: Room[]\}} \\
+\code{AHU}               & AHU equipment specification \\
+\code{AhuState}          & \code{\{list: AHU[]\}} \\
+\code{ProjectInfo}       & Project metadata \\
+\code{AmbientParams}     & Site reference conditions \\
+\code{SystemDesign}      & HVAC system sizing parameters \\
+\code{ProjectState}      & \code{\{info, ambient, systemDesign\}} \\
+\code{EnvelopeElement}   & Building element with U-value, area, orientation \\
+\code{InternalPeople}    & Occupant heat gain parameters \\
+\code{InternalLights}    & Lighting heat gain parameters \\
+\code{InternalEquipment} & Equipment heat gain parameters \\
+\code{RoomInfiltration}  & Infiltration method and values \\
+\code{RoomEnvelope}      & Elements + internal loads + infiltration \\
+\code{EnvelopeState}     & \code{\{byRoomId: Record<string, RoomEnvelope>\}} \\
+\code{SeasonCondition}   & Outdoor condition for one season \\
+\code{ClimateState}      & Three-season outdoor conditions \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\code{RootState} is re-exported from \code{store.ts} via \code{ReturnType<typeof store.getState>} for automatic type inference.
+
+\section{\file{utils/isoValidation.ts}}
+
+ISO 14644 and GMP compliance validation. Checks room classification consistency, ACPH sufficiency, pressure cascade compliance, and GMP grade mapping validity.
+
+\section{\file{utils/psychroValidation.ts}}
+
+Psychrometric consistency checks. Validates that room humidity targets are achievable given the selected ADP and bypass factor.
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{UI Components}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{Layout Components}
+
+\begin{description}
+  \item[\file{components/Layout/Header.tsx}] Application header bar with project branding.
+  \item[\file{components/Layout/HeaderBadge.tsx}] ASHRAE standard compliance badge.
+  \item[\file{components/Layout/TabNav.tsx}] Horizontal tab navigation (Project, RDS, AHU, Room, Climate, Envelope, Results).
+  \item[\file{components/Layout/RoomSidebar.tsx}] Vertical room list sidebar for multi-room navigation.
+  \item[\file{components/Layout/RoomSidebarItem.tsx}] Individual room entry in sidebar.
+\end{description}
+
+\section{UI Primitives}
+
+\begin{description}
+  \item[\file{components/UI/InputField.tsx}] Labelled text/number input with validation state.
+  \item[\file{components/UI/InputGroup.tsx}] Grouped inputs with shared label.
+  \item[\file{components/UI/NumberControl.tsx}] Numeric stepper with increment/decrement buttons.
+  \item[\file{components/UI/StatCard.tsx}] Display card for computed statistics.
+\end{description}
+
+\section{\file{features/room/AhuAssignment.jsx}}
+
+Radio-button single-select AHU assignment component. Replaces the previous multi-select checkbox UI that was architecturally inconsistent---all downstream consumers read only \code{assignedAhuIds[0]}.
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Custom Hooks}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{description}
+  \item[\file{hooks/useActiveRoom.js}] Returns the currently selected room object and dispatch helpers for room field updates.
+
+  \item[\file{hooks/useNumberControl.ts}] Manages numeric input state with increment/decrement, min/max bounds, and step size.
+
+  \item[\file{hooks/useProjectTotals.js}] Aggregates RDS data across all rooms into project-level totals (total TR, total CFM, per-AHU summaries).
+
+  \item[\file{hooks/useRdsRow.js}] Returns the full computed RDS row object for a single room, including dispatch helpers for inline editing.
+
+  \item[\file{hooks/useRoomSidebar.ts}] Manages room sidebar state (active room, add/delete room, room ordering).
+\end{description}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Pages}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{\file{pages/Home.jsx} --- Landing Page}
+Public-facing landing page without the application header/nav. Entry point for new projects.
+
+\section{\file{pages/ProjectDetails.jsx} --- Project Configuration}
+Three sections: project metadata (name, location, customer), site ambient conditions (elevation, latitude, daily range), and system design parameters (safety factor, BF, ADP, fan heat).
+
+\section{\file{pages/AHUConfig.jsx} --- AHU Equipment}
+Add, edit, and delete AHUs. Fields: type (Recirculating/DOAS/MAU/FCU), capacity, airflow, psychrometric overrides, filter class, location, notes.
+
+\section{\file{pages/RoomConfig.jsx} --- Room Setup}
+Left column: room identity, geometry, design targets, ISO classification, ventilation category, ACPH settings, exhaust air breakdown. Right column: AHU assignment.
+
+\section{\file{pages/ClimateConfig.jsx} --- Outdoor Conditions}
+Three-season (summer, monsoon, winter) outdoor design conditions. Each season: DB, RH, time of peak, month. Derived fields (gr, dp, wb) shown as read-only.
+
+\section{\file{pages/EnvelopeConfig.jsx} --- Building Envelope}
+Hosts the \code{BuildingShell} component. Six categories of envelope elements with ASHRAE construction presets and per-season BTU/hr gain display.
+
+\section{\file{pages/RDSPage.jsx} --- Room Data Sheet}
+Spreadsheet-style view of all computed RDS data. Groups rooms by AHU. Sections: setup, loads, psychrometric state points, results.
+
+\section{\file{pages/ResultsPage.jsx} --- Project Results}
+Project-level aggregation: total cooling capacity (TR), total heating capacity (kW), per-AHU summaries, check figure (ft\textsuperscript{2}/TR), and Excel export.
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Deployment}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{Build \& Deploy}
+
+\begin{lstlisting}[language=bash, caption={Build Commands}]
+cd client
+npm install
+npm run build    # Production bundle
+npm run dev      # Development server with HMR
+npm run test     # Vitest test suite
+\end{lstlisting}
+
+\section{Vercel Configuration}
+
+SPA rewrite rule in \file{vercel.json}:
+\begin{lstlisting}[language={}, caption={Vercel Rewrite Rule}]
+{
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
+\end{lstlisting}
+
+All client-side routes are handled by React Router; the server always serves \code{index.html}.
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Engineering Standards Reference}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{longtable}{p{5cm}p{9cm}}
+\toprule
+\textbf{Standard} & \textbf{Usage in Application} \\
+\midrule
+\endhead
+ASHRAE HOF 2021, Ch.1     & Psychrometric equations (Hyland-Wexler) \\
+ASHRAE HOF 2021, Ch.18    & CLTD/CLF load calculation methodology \\
+ASHRAE 62.1-2022          & Ventilation Rate Procedure (VRP) \\
+ASHRAE 90.1-2022          & Energy standard (lighting power density) \\
+ISO 14644-1:2015          & Cleanroom classification (particle limits) \\
+ISO 14644-4:2022          & Cleanroom design \& construction \\
+GMP Annex 1:2022          & Pharmaceutical HVAC requirements \\
+IEST-RP-CC012.2           & Cleanroom air change rates \\
+NFPA 855                  & Battery energy storage systems \\
+IFC \S1206                & Fire code --- battery rooms \\
+OSHA 29 CFR 1926.403(i)   & Lead-acid battery charging ventilation \\
+IEEE 1184-2006            & Battery installation sizing \\
+SEMI S2-0200              & Semiconductor facility safety \\
+ISPE Baseline Guide Vol.5 & Pharmaceutical cleanroom HVAC \\
+\bottomrule
+\end{longtable}
+
+
+% ══════════════════════════════════════════════════════════════════════════════
+\chapter{Appendix: Key Equations}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section{Sensible Load}
+\begin{equation}
+  Q_s = C_s \times \text{CFM} \times \Delta T \quad [\text{BTU/hr}]
+\end{equation}
+where $C_s = 1.08 \times C_f$ and $C_f = (1 - 6.8754 \times 10^{-6} \times \text{elev}_{\text{ft}})^{5.2559}$.
+
+\section{Latent Load}
+\begin{equation}
+  Q_l = C_l \times \text{CFM} \times \Delta W \quad [\text{BTU/hr}]
+\end{equation}
+where $C_l = 0.68 \times C_f$ and $\Delta W$ is in gr/lb.
+
+\section{Humidity Ratio}
+\begin{equation}
+  W = \frac{0.62198 \times E}{P_{\text{atm}} - E} \quad [\text{kg/kg}]
+\end{equation}
+where $E = (\text{RH}/100) \times P_{ws}(T)$ and $P_{ws}$ is from Hyland-Wexler.
+
+\section{Enthalpy}
+\begin{equation}
+  h = 0.240 \cdot t + W \cdot (1061 + 0.444 \cdot t) \quad [\text{BTU/lb dry air}]
+\end{equation}
+
+\section{Ventilation Zone Breathing Rate}
+\begin{equation}
+  V_{bz} = R_p \times P_z + R_a \times A_z \quad [\text{CFM}]
+\end{equation}
+
+\section{Thermal Supply Air}
+\begin{equation}
+  \text{CFM}_{\text{thermal}} = \frac{\text{ERSH}}{C_s \times (1 - BF) \times (T_{\text{room}} - T_{\text{ADP}})}
+\end{equation}
+
+\section{Effective Room Sensible Heat Factor}
+\begin{equation}
+  \text{ESHF} = \frac{Q_s^{\text{total}}}{Q_s^{\text{total}} + Q_l^{\text{total}}}
+\end{equation}
+
+\section{Reheater Capacity}
+\begin{equation}
+  Q_{\text{reheat}} = \frac{\text{minESHF} \times \text{ERTH} - \text{ERSH}}{1 - \text{minESHF}} \quad [\text{BTU/hr}]
+\end{equation}
+
+\section{Cooling Capacity}
+\begin{equation}
+  \text{TR} = \frac{\text{ERSH} + \text{ERLH} + Q_{\text{OA}} + Q_{\text{fan}} + Q_{\text{reheat}}}{12000}
+\end{equation}
+
+% ══════════════════════════════════════════════════════════════════════════════
+
+\vfill
+\begin{center}
+\rule{0.5\textwidth}{0.4pt}\\[0.5em]
+{\small\textcolor{codegray}{End of Documentation --- HeatLoad HVAC Calculation Tool v2.8}}
+\end{center}
+
+\end{document}
