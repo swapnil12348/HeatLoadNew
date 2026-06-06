@@ -266,6 +266,10 @@ export const calculateHeatingHumid = (
   const preheatCap     = (preheatCapBTU / KW_TO_BTU_HR).toFixed(2);
 
   // ── 3. Hydronic flow rates ────────────────────────────────────────────────
+  // Room-heating HW circuit only — does not include preheat coil flow.
+  // preheatCapBTU is on a separate HW circuit; see pipeSizing.ts for the
+  // authoritative combined sizing (receives heatingCapBTU + preheatCapBTU
+  // separately and sizes each branch independently).
   const hwFlowRate = heatingCapBTU > 0
     ? (heatingCapBTU / (HYDRONIC_CONSTANT * HW_DELTA_T_F)).toFixed(1)
     : '0.0';
