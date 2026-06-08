@@ -85,6 +85,8 @@ export const MOTOR_HEAT_FRACTIONS = {
   MOTOR_IN_AIR_STREAM:        1.00,
 } as const; // This tells TS: "These numbers will never change, make them readonly"
 
+export const AIR_MASS_FACTOR = 4.5; 
+
 const ASHRAE = {
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -98,8 +100,7 @@ const ASHRAE = {
   GR_PER_LB:         7000,     // 1 lb = 7000 grains (exact)
 
 
-  // In ashrae.ts — add alongside BTU_PER_TON etc.
-AIR_MASS_FACTOR: 4.5,  // lb/(min·ft³) × BTU factor — ASHRAE HOF Ch.18
+
 
   /**
    * @deprecated Use KW_TO_BTU_HR from utils/units.js for new code.
