@@ -136,14 +136,23 @@ const ahuSlice = createSlice({
      * { id, field, value }
      * Supports any field in the AHU object including 'type' and 'adpMode'.
      */
-    updateAHU: (state, action: PayloadAction<{ id: string; field: string; value: any }>) => {
-      const { id, field, value } = action.payload;
-      const ahu = state.list.find(a => a.id === id);
-      if (ahu) {
-        // Casting ahu to any to support dynamic dot notation or string indexing
-        (ahu as any)[field] = value;
-      }
-    },
+    updateAHU: (state, action) => {
+  const { id, field, value } = action.payload;
+  const ahu = state.list.find(a => a.id === id);
+  if (!ahu) return;
+
+  if (field === 'adp' && value !== null) {
+    const n = parseFloat(String(value));
+    (ahu as any)[field] = (!isNaN(n) && n >= 35 && n <= 70) ? n : null;
+    return;
+  }
+  if (field === 'bypassFactor' && value !== null) {
+    const n = parseFloat(String(value));
+    (ahu as any)[field] = (!isNaN(n) && n >= 0 && n < 0.5) ? n : 0;
+    return;
+  }
+  (ahu as any)[field] = value;
+},
 
     /**
      * deleteAHU
