@@ -286,6 +286,7 @@ const HIGH_HUMID_DELTA_GR = 40;
  *
  * @returns { source, data } where source is a diagnostic string for logging.
  */
+// AFTER
 const resolveWinterOutdoor = (
   climate: ClimateState | null | undefined
 ): { source: string; data: Record<string, any> } => {
@@ -295,19 +296,20 @@ const resolveWinterOutdoor = (
 
   const c = climate as any;
 
-  // Path 1 — canonical: climate.winter = { db, rh, wb, ... }
-  if (c.winter && typeof c.winter === 'object') {
-    return { source: 'climate.winter', data: c.winter };
+  // Path 1 — correct current shape: climate.outside.winter = { db, rh, ... }
+  // This matches climateSlice.ts which stores seasons under climate.outside.{season}.
+  if (c.outside?.winter && typeof c.outside.winter === 'object') {
+    return { source: 'climate.outside.winter', data: c.outside.winter };
   }
 
-  // Path 2 — legacy: climate.outside.winter = { db, rh, ... }
-  if (c.outside?.winter && typeof c.outside.winter === 'object') {
-    return { source: 'climate.outside.winter (legacy — update climateSlice)', data: c.outside.winter };
+  // Path 2 — alternative flat shape: climate.winter = { db, rh, ... }
+  // Retained as a forward-compatibility fallback if climateSlice is ever restructured.
+  if (c.winter && typeof c.winter === 'object') {
+    return { source: 'climate.winter (flat alt)', data: c.winter };
   }
 
   return { source: 'not_found', data: {} };
 };
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Main export
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,12 +429,6 @@ export const calculateHeatingHumid = (
         'Falling back to 45°F / 30%RH. ' +
         'ACTION: check climateSlice.ts — seasons should be stored as top-level keys: ' +
         '{ winter: { db, rh, wb }, summer: {...}, monsoon: {...} }.'
-      );
-    } else if (climateSource.includes('legacy')) {
-      _warn(
-        `INPUT-02: winter data resolved via legacy path "${climateSource}". ` +
-        'rdsSelector.ts expects climate.winter at the top level (INPUT-01 errors confirm this). ' +
-        'Migrate climateSlice so seasons are top-level keys: { winter: {...}, summer: {...}, monsoon: {...} }.'
       );
     } else {
       _log(`INPUT-02: winter data resolved from "${climateSource}"`);
