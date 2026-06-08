@@ -16,6 +16,16 @@
  * Reference: ASHRAE Handbook — Fundamentals (2021), Chapter 18
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
+ * 
+ * * ── CHANGELOG v2.12 ──────────────────────────────────────────────────────────
+ *
+ *   CRIT-RDS-04 FIX — Dry-coil guard added before reheat formula (STEP 4c).
+ *     When grADP_sat > grIn, Math.max(0, grIn − grADP_sat) = 0 collapses minESHF
+ *     to 1.0, making (1 − minESHF) = 0 and reheatBTU = Infinity. Reheat is
+ *     sensible-only and cannot add latent capacity; the correct remedy is a lower
+ *     ADP. The new top branch short-circuits to reheatBTU = 0 and fires a warning.
+ *     The CRIT-RDS-03 fix (adpGap > 3 case) is unaffected — that path has
+ *     grADP_sat < grIn, skips the new guard, and computes finite reheatBTU normally.
  *
  * ── CHANGELOG v2.11 ──────────────────────────────────────────────────────────
  *
@@ -686,16 +696,32 @@ export const selectRdsData = createSelector(
         // silently disabling reheat even when roomESHF is far below 1.0.
         // roomESHF < minESHF − 0.001 is sufficient to detect the reheat condition;
         // the minESHF < 1.0 guard is not needed and causes incorrect suppression.
-        if (supplyDT > 0 && roomESHF < minESHF - 0.001) {
-          reheatRequired = true;
-          reheatBTU = Math.max(0, (minESHF * erthSafe - reheatErsh) / (1 - minESHF));
-          _warn(
-            `STEP7-01: REHEAT REQUIRED — roomESHF=${roomESHF.toFixed(3)} < minESHF=${minESHF.toFixed(3)}. ` +
-            `reheatBTU=${Math.round(reheatBTU)}, reheatKW=${(reheatBTU / KW_TO_BTU_HR).toFixed(2)}`
-          );
-        } else {
-          _log(`STEP7-01: No reheat required (roomESHF=${roomESHF.toFixed(3)} ≥ minESHF=${minESHF.toFixed(3)})`);
-        }
+        // AFTER (v2.12):
+// Dry-coil guard: when grADP_sat > grIn the coil surface is above the room's
+// dew point — no condensation, no latent removal. Math.max(0, grIn − grADP_sat) = 0
+// collapses minESHF to 1.0, so (1 − minESHF) = 0 and the reheat formula blows up
+// to Infinity. Reheat is sensible-only; it cannot add latent capacity.
+// Note: adpSufficient = 'insufficient' can also fire when adpGap > 3 (warm but
+// condensing coil) — that case has minESHF < 1.0 and correctly reaches the
+// else-if branch. The guard here targets only the grADP_sat > grIn pre-check.
+if (grADP_sat > peakCalcs.grIn) {
+  reheatRequired = false;
+  reheatBTU = 0;
+  _warn(
+    `STEP7-01: Reheat skipped — dry coil ` +
+    `(grADP_sat=${grADP_sat.toFixed(1)} > grIn=${peakCalcs.grIn?.toFixed(1)} gr/lb). ` +
+    `ADP=${adpF.toFixed(1)}°F is above dew point; lower ADP to enable latent removal.`
+  );
+} else if (supplyDT > 0 && roomESHF < minESHF - 0.001) {
+  reheatRequired = true;
+  reheatBTU = Math.max(0, (minESHF * erthSafe - reheatErsh) / (1 - minESHF));
+  _warn(
+    `STEP7-01: REHEAT REQUIRED — roomESHF=${roomESHF.toFixed(3)} < minESHF=${minESHF.toFixed(3)}. ` +
+    `reheatBTU=${Math.round(reheatBTU)}, reheatKW=${(reheatBTU / KW_TO_BTU_HR).toFixed(2)}`
+  );
+} else {
+  _log(`STEP7-01: No reheat required (roomESHF=${roomESHF.toFixed(3)} ≥ minESHF=${minESHF.toFixed(3)})`);
+}
 
         const reheatKW = reheatBTU > 0 ? parseFloat((reheatBTU / KW_TO_BTU_HR).toFixed(2)) : 0;
 
