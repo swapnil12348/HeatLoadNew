@@ -46,15 +46,6 @@
  *       STEP5    — humidification load (humidLbsPerHr, humidKw, humidLoadBTU)
  *       FINAL    — NaN sweep across all critical outputs + summary log
  *
- *   BUG-HH-11 FIX — Climate state shape resilience.
- *     v2.1 accessed climate.outside.winter; rdsSelector.ts accesses
- *     climate.winter directly (and also fires INPUT-01 errors when
- *     climate.summer / .monsoon / .winter are missing at the top level).
- *     The winter lookup now tries climate.winter first (canonical shape,
- *     matching rdsSelector.ts) and falls back to climate.outside.winter
- *     (legacy path from v2.0) with a console.warn.
- *     This prevents a silent NaN cascade from the wrong access path while
- *     the climateSlice structure is being audited (see Bug 1 in the console).
  *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *

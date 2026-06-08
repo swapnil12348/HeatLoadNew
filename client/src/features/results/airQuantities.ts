@@ -112,6 +112,23 @@ import ASHRAE                                           from '../../constants/as
 import { cToF }                                        from '../../utils/units';
 import { calculateVbz, calculateMinAchCfm }            from '../../constants/ventilation';
 import { Room, RoomEnvelope, AHU, SystemDesign }       from '../../utils/types';
+import { sensibleFactor }   from '../../utils/psychro'; 
+
+
+
+const LOG_AQ = true;
+
+const _log  = (...a: any[]) => { if (LOG_AQ) console.log ('[airQuantities]',   ...a); };
+const _warn = (...a: any[]) => { if (LOG_AQ) console.warn('[airQuantities] ⚠', ...a); };
+const _err  = (...a: any[]) =>               console.error('[airQuantities] ✗', ...a);
+
+const _badNum = (val: any, field: string): boolean => {
+  if (typeof val !== 'number' || !isFinite(val)) {
+    _err(`NaN/invalid  field="${field}"  got=${JSON.stringify(val)}`);
+    return true;
+  }
+  return false;
+};
 
 // ── Types & Interfaces ───────────────────────────────────────────────────────
 
@@ -164,141 +181,212 @@ export interface AirQuantitiesResult {
  * @param {number} volumeFt3                 - room volume in ft³
  */
 export const calculateAirQuantities = (
-  room: Room,
-  envelope: RoomEnvelope | null | undefined,
-  ahu: AHU | null | undefined,
-  effectiveSystemDesign: SystemDesign,
-  altCf: number,
-  peakErsh: number,
-  floorAreaFt2: number,
-  volumeFt3: number,
+  room:                   Room,
+  envelope:               RoomEnvelope | null | undefined,
+  ahu:                    AHU          | null | undefined,
+  effectiveSystemDesign:  SystemDesign,
+  altCf:                  number,
+  elevationFt:            number,        // ← ADD: needed for sensibleFactor()
+  peakErsh:               number,
+  floorAreaFt2:           number,
+  volumeFt3:              number,
 ): AirQuantitiesResult => {
-  const Cs  = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altCf;
-  const parsedBf = parseFloat(String(effectiveSystemDesign.bypassFactor));
-const bf       = !isNaN(parsedBf) ? parsedBf : 0.10;
-  const adp = parseFloat(String(effectiveSystemDesign.adp))          || 55;
 
-  // ── Room design DB (°F) ───────────────────────────────────────────────────
-  const dbInFRaw = cToF(room.designTemp);
-  const dbInF    = dbInFRaw === null ? 72 : dbInFRaw;
+  if (LOG_AQ) console.group('[airQuantities] ── calculateAirQuantities ──');
 
-  // ── 1. Thermal CFM ────────────────────────────────────────────────────────
-  const supplyDT   = (1 - bf) * (dbInF - adp);
-  const thermalCFM = (supplyDT > 0 && peakErsh > 0)
-    ? Math.ceil(peakErsh / (Cs * supplyDT))
-    : 0;
+  try {
 
-  // ── 2. ACPH-based CFM constraints ─────────────────────────────────────────
-  const minAcphCFM    = Math.round(volumeFt3 * (parseFloat(String(room.minAcph))    || 0) / 60);
-  const designAcphCFM = Math.round(volumeFt3 * (parseFloat(String(room.designAcph)) || 0) / 60);
+    // ── INPUT-01 — parameter validation ────────────────────────────────────
+    _log(
+      `INPUT-01: roomId=${room?.id} | ventCategory=${room?.ventCategory} | ` +
+      `peakErsh=${Math.round(peakErsh)} BTU/hr | area=${floorAreaFt2.toFixed(1)} ft² | ` +
+      `volume=${volumeFt3.toFixed(1)} ft³ | altCf=${altCf.toFixed(4)} | elev=${elevationFt}ft`
+    );
 
-  // Regulatory ACH floor from ventilation.ts — independent of user-entered minAcph.
-  // battery-liion: 10 ACPH (NFPA 855 §15), battery-leadacid: 12 ACPH (OSHA 29 CFR
-  // 1926.403(i)), pharma: 20 ACPH (GMP Annex 1:2022 §4.29), semicon: 6 ACPH (SEMI S2).
-  const regulatoryAcphCFM = Math.round(
-    calculateMinAchCfm(room.ventCategory, volumeFt3)
-  );
+    if (_badNum(peakErsh,     'peakErsh'))    { /* logged */ }
+    if (_badNum(floorAreaFt2, 'floorAreaFt2')){ /* logged */ }
+    if (_badNum(volumeFt3,    'volumeFt3'))    { /* logged */ }
+    if (_badNum(altCf,        'altCf'))        { /* logged */ }
 
-  // ── 3. Governing supply air ───────────────────────────────────────────────
-  const supplyAir = Math.max(thermalCFM, minAcphCFM, designAcphCFM, regulatoryAcphCFM);
+    if (volumeFt3 <= 0) _err(`INPUT-01: volumeFt3=${volumeFt3} — all ACPH-based CFM will be 0`);
+    if (altCf > 1 || altCf <= 0) _warn(`INPUT-01: altCf=${altCf} outside (0,1] — check elevation input`);
 
-  // Priority when values are equal: designAcph > regulatoryAcph > thermal > minAcph.
-  // Regulatory constraints (OSHA, NFPA 855) are hard floors that rank above thermal.
-  // designAcph (ISO/GMP class) ranks highest as the most project-specific driver.
-  let supplyAirGoverned: 'thermal' | 'designAcph' | 'regulatoryAcph' | 'minAcph';
-  
-  if (supplyAir === designAcphCFM && designAcphCFM > 0) {
-    supplyAirGoverned = 'designAcph';
-  } else if (supplyAir === regulatoryAcphCFM && regulatoryAcphCFM > 0) {
-    supplyAirGoverned = 'regulatoryAcph';
-  } else if (supplyAir === thermalCFM && thermalCFM > 0) {
-    supplyAirGoverned = 'thermal';
-  } else {
-    supplyAirGoverned = 'minAcph';
+    // ── INPUT-02 — design constants ─────────────────────────────────────────
+    // FIX BUG-AQ-CS: use sensibleFactor(elevationFt) per ashrae.ts BUG-SL-01 prohibition
+    const Cs  = sensibleFactor(elevationFt);
+    const parsedBf = parseFloat(String(effectiveSystemDesign.bypassFactor));
+    const bf       = !isNaN(parsedBf) ? parsedBf : 0.10;
+    const adp      = parseFloat(String(effectiveSystemDesign.adp)) || 55;
+
+    const dbInFRaw = cToF(room.designTemp);
+    const dbInF    = dbInFRaw === null ? 72 : dbInFRaw;
+
+    _log(
+      `INPUT-02: Cs=${Cs.toFixed(4)} | bf=${bf} | adp=${adp}°F | ` +
+      `dbInF=${dbInF}°F | ahuType=${ahu?.type ?? 'Recirculating'}`
+    );
+
+    if (_badNum(Cs, 'Cs')) { /* logged */ }
+    if (bf === 0.10 && !parseFloat(String(effectiveSystemDesign.bypassFactor))) {
+      _warn('INPUT-02: bypassFactor missing — defaulted to 0.10');
+    }
+    if (adp === 55 && !parseFloat(String(effectiveSystemDesign.adp))) {
+      _warn('INPUT-02: adp missing — defaulted to 55°F');
+    }
+
+    // ── STEP 1 — Thermal CFM ────────────────────────────────────────────────
+    const supplyDT   = (1 - bf) * (dbInF - adp);
+    const thermalCFM = (supplyDT > 0 && peakErsh > 0)
+      ? Math.ceil(peakErsh / (Cs * supplyDT))
+      : 0;
+
+    _log(
+      `STEP1: supplyDT=${supplyDT.toFixed(2)}°F | peakErsh=${Math.round(peakErsh)} BTU/hr | ` +
+      `thermalCFM=${thermalCFM} CFM`
+    );
+
+    if (supplyDT <= 0) _warn(`STEP1: supplyDT=${supplyDT.toFixed(2)}°F ≤ 0 — check adp=${adp}°F vs dbInF=${dbInF}°F`);
+    if (thermalCFM > 100_000) _warn(`STEP1: thermalCFM=${thermalCFM} is very high — verify peakErsh and ADP`);
+
+    // ── STEP 2 — ACPH constraints ───────────────────────────────────────────
+    const minAcphCFM    = Math.round(volumeFt3 * (parseFloat(String(room.minAcph))    || 0) / 60);
+    const designAcphCFM = Math.round(volumeFt3 * (parseFloat(String(room.designAcph)) || 0) / 60);
+    const regulatoryAcphCFM = Math.round(calculateMinAchCfm(room.ventCategory, volumeFt3));
+
+    _log(
+      `STEP2: minAcphCFM=${minAcphCFM} | designAcphCFM=${designAcphCFM} | ` +
+      `regulatoryAcphCFM=${regulatoryAcphCFM} [ventCategory=${room.ventCategory}]`
+    );
+
+    if (regulatoryAcphCFM > designAcphCFM && designAcphCFM > 0) {
+      _warn(
+        `STEP2: regulatoryAcphCFM=${regulatoryAcphCFM} > designAcphCFM=${designAcphCFM} — ` +
+        `regulatory floor (OSHA/NFPA/SEMI) overrides design ACH for ventCategory=${room.ventCategory}`
+      );
+    }
+
+    // ── STEP 3 — Governing supply air ───────────────────────────────────────
+    const supplyAir = Math.max(thermalCFM, minAcphCFM, designAcphCFM, regulatoryAcphCFM);
+
+    let supplyAirGoverned: 'thermal' | 'designAcph' | 'regulatoryAcph' | 'minAcph';
+    if      (supplyAir === designAcphCFM    && designAcphCFM    > 0) supplyAirGoverned = 'designAcph';
+    else if (supplyAir === regulatoryAcphCFM && regulatoryAcphCFM > 0) supplyAirGoverned = 'regulatoryAcph';
+    else if (supplyAir === thermalCFM       && thermalCFM       > 0) supplyAirGoverned = 'thermal';
+    else                                                               supplyAirGoverned = 'minAcph';
+
+    _log(`STEP3: supplyAir=${supplyAir} CFM [governed by: ${supplyAirGoverned}]`);
+
+    if (supplyAir === 0) _err('STEP3: supplyAir=0 — all constraints resolved to zero. Check room volume and ACPH inputs.');
+
+    // ── STEP 4 — Exhaust ────────────────────────────────────────────────────
+    const exhaustGeneral = parseFloat(String(room.exhaustAir?.general)) || 0;
+    const exhaustBibo    = parseFloat(String(room.exhaustAir?.bibo))    || 0;
+    const exhaustMachine = parseFloat(String(room.exhaustAir?.machine)) || 0;
+    const totalExhaust   = exhaustGeneral + exhaustBibo + exhaustMachine;
+
+    _log(`STEP4: exhaust — general=${exhaustGeneral}, bibo=${exhaustBibo}, machine=${exhaustMachine}, total=${totalExhaust}`);
+
+    if (totalExhaust > supplyAir) {
+      _warn(
+        `STEP4: totalExhaust=${totalExhaust} > supplyAir=${supplyAir} — ` +
+        `exhaust exceeds supply. Negative-pressure room or data entry error?`
+      );
+    }
+
+    // ── STEP 5 — Fresh air ──────────────────────────────────────────────────
+    const rawPplCount = parseFloat(String(envelope?.internalLoads?.people?.count));
+    const pplCount    = !isNaN(rawPplCount) ? rawPplCount : 0;
+    const vbz         = calculateVbz(room.ventCategory, pplCount, floorAreaFt2);
+    const ahuType     = ahu?.type || 'Recirculating';
+    const isDOAS      = ahuType === 'DOAS';
+
+    const exhaustCompensation = Math.max(0, totalExhaust - vbz);
+    const freshAirMakeup      = Math.max(vbz, totalExhaust);
+    const freshAir            = isDOAS ? supplyAir : freshAirMakeup;
+
+    // ⚠️ minSupplyAcph stores CFM (volume × 2.5 / 60), NOT an ACH rate.
+    // Name retained to avoid breaking changes — see TODO in header.
+    // Basis: 2.5 ACH — SOURCE UNVERIFIED. Must confirm against project spec.
+    const minSupplyAcph     = Math.round(volumeFt3 * 2.5 / 60);
+    // faAshraeAcph stores Vbz in CFM — not an ACH rate despite the name.
+    const faAshraeAcph      = vbz;
+    const optimisedFreshAir = Math.max(freshAir, minSupplyAcph);
+    const manualFA          = parseFloat(String(room.manualFreshAir)) || 0;
+    const freshAirCheck     = manualFA > 0 ? manualFA : optimisedFreshAir;
+    const maxPurgeAir       = Math.round(volumeFt3 * 20 / 60);
+
+    _log(
+      `STEP5: pplCount=${pplCount} | vbz=${vbz.toFixed(1)} CFM | ` +
+      `freshAir(62.1)=${freshAir.toFixed(1)} | minSupplyAcph(CFM)=${minSupplyAcph} | ` +
+      `optimisedFreshAir=${optimisedFreshAir} | manualFA=${manualFA} | ` +
+      `freshAirCheck=${freshAirCheck} [${manualFA > 0 ? 'manual override' : 'auto'}]`
+    );
+
+    if (freshAirCheck < vbz) {
+      _err(
+        `STEP5: freshAirCheck=${freshAirCheck} CFM < vbz=${vbz.toFixed(1)} CFM — ` +
+        `OA is below ASHRAE 62.1 minimum. Check manualFreshAir override.`
+      );
+    }
+    if (freshAirCheck < totalExhaust) {
+      _warn(`STEP5: freshAirCheck=${freshAirCheck} < totalExhaust=${totalExhaust} — building will go negative pressure`);
+    }
+    if (manualFA > 0) {
+      _warn(`STEP5: manualFreshAir override active (${manualFA} CFM) — 62.1 Vbz compliance not auto-enforced`);
+    }
+
+    // ── STEP 6 — AHU air balance ────────────────────────────────────────────
+    const coilAir   = Math.round(supplyAir * (1 - bf));
+    const bypassAir = Math.round(supplyAir * bf);
+    const returnAir = Math.max(0, supplyAir - freshAirCheck);
+
+    _log(
+      `STEP6: coilAir=${coilAir} | bypassAir=${bypassAir} | returnAir=${returnAir} | ` +
+      `check: coil+bypass=${coilAir + bypassAir} (should = supplyAir=${supplyAir})`
+    );
+
+    if (coilAir + bypassAir !== supplyAir) {
+      _warn(`STEP6: coilAir(${coilAir}) + bypassAir(${bypassAir}) ≠ supplyAir(${supplyAir}) — rounding gap`);
+    }
+    if (returnAir + freshAirCheck !== supplyAir) {
+      _warn(
+        `STEP6: mass balance gap — returnAir(${returnAir}) + freshAirCheck(${freshAirCheck}) ` +
+        `= ${returnAir + freshAirCheck} ≠ supplyAir(${supplyAir})`
+      );
+    }
+
+    const dehumidifiedAir = coilAir;
+    const freshAirAces    = freshAirCheck;
+    const bleedAir        = Math.max(0, freshAirCheck - totalExhaust);
+
+    // ── FINAL — NaN sweep ───────────────────────────────────────────────────
+    const criticalOutputs = { supplyAir, thermalCFM, vbz, freshAirCheck, coilAir, bypassAir, returnAir };
+    let hasNaN = false;
+    for (const [k, v] of Object.entries(criticalOutputs)) {
+      if (_badNum(v, k)) hasNaN = true;
+    }
+
+    if (!hasNaN) {
+      _log(
+        `✅ OK — supply=${supplyAir} CFM [${supplyAirGoverned}] | ` +
+        `OA=${freshAirCheck} CFM | coil=${coilAir} | return=${returnAir} | exhaust=${totalExhaust}`
+      );
+    } else {
+      _err('FINAL: NaN in critical outputs — airflow data unreliable for this room');
+    }
+
+    return {
+      supplyAir, supplyAirGoverned, thermalCFM,
+      supplyAirMinAcph: minAcphCFM, regulatoryAcphCFM,
+      vbz, freshAir, optimisedFreshAir, freshAirCheck,
+      minSupplyAcph, faAshraeAcph, maxPurgeAir, exhaustCompensation,
+      totalExhaust, exhaustGeneral, exhaustBibo, exhaustMachine,
+      coilAir, bypassAir, returnAir,
+      dehumidifiedAir, freshAirAces, bleedAir,
+      isDOAS, pplCount,
+    };
+
+  } finally {
+    if (LOG_AQ) console.groupEnd();
   }
-
-  // ── 4. Exhaust breakdown ──────────────────────────────────────────────────
-  const exhaustGeneral = parseFloat(String(room.exhaustAir?.general)) || 0;
-  const exhaustBibo    = parseFloat(String(room.exhaustAir?.bibo))    || 0;
-  const exhaustMachine = parseFloat(String(room.exhaustAir?.machine)) || 0;
-  const totalExhaust   = exhaustGeneral + exhaustBibo + exhaustMachine;
-
-  // ── 5. Fresh air — ASHRAE 62.1-2022 VRP + exhaust compensation ────────────
-  
-// Redux stores numeric fields as strings. Without parseFloat, a value of "5"
-// is passed to calculateVbz() as a string and coerced by JS arithmetic — correct
-// by accident but fragile. Explicit parse is consistent with every other field.
-const rawPplCount = parseFloat(String(envelope?.internalLoads?.people?.count));
-const pplCount    = !isNaN(rawPplCount) ? rawPplCount : 0;
-  const vbz      = calculateVbz(room.ventCategory, pplCount, floorAreaFt2);
-
-  const ahuType = ahu?.type || 'Recirculating';
-  const isDOAS  = ahuType === 'DOAS';
-
-  const exhaustCompensation = Math.max(0, totalExhaust - vbz);
-  const freshAirMakeup      = Math.max(vbz, totalExhaust);
-  const freshAir            = isDOAS ? supplyAir : freshAirMakeup;
-
-  // ── 6. Fresh air variants ─────────────────────────────────────────────────
-  // NOTE: value is in CFM (volumeFt3 × 2.5 ACH / 60), not an ACH rate,
-//       despite the variable name. The name is preserved to avoid a breaking
-//       change across AirQuantitiesResult, rdsSelector, and consuming components.
-// TODO: rename to minFreshAirCFM in a future breaking-change refactor.
-// Source: [add spec reference or Excel cell citation]
-const minSupplyAcph = Math.round(volumeFt3 * 2.5 / 60)
-  const faAshraeAcph      = vbz;
-  const optimisedFreshAir = Math.max(freshAir, minSupplyAcph);
-  const manualFA          = parseFloat(String(room.manualFreshAir)) || 0;
-  const freshAirCheck     = manualFA > 0 ? manualFA : optimisedFreshAir;
-
-  const maxPurgeAir = Math.round(volumeFt3 * 20 / 60);
-
-  // ── 7. AHU air balance ────────────────────────────────────────────────────
-  const coilAir   = Math.round(supplyAir * (1 - bf));
-  const bypassAir = Math.round(supplyAir * bf);
-  const returnAir = Math.max(0, supplyAir - freshAirCheck);
-
-  // ── 8. ACES nomenclature aliases ─────────────────────────────────────────
-  const dehumidifiedAir = coilAir;
-  const freshAirAces    = freshAirCheck;
-  const bleedAir        = Math.max(0, freshAirCheck - totalExhaust);
-
-  return {
-    // Supply air
-    supplyAir,
-    supplyAirGoverned,
-    thermalCFM,
-    supplyAirMinAcph:  minAcphCFM,
-    regulatoryAcphCFM,
-
-    // Fresh air
-    vbz,
-    freshAir,
-    optimisedFreshAir,
-    freshAirCheck,
-    minSupplyAcph,
-    faAshraeAcph,
-    maxPurgeAir,
-    exhaustCompensation,
-
-    // Exhaust
-    totalExhaust,
-    exhaustGeneral,
-    exhaustBibo,
-    exhaustMachine,
-
-    // AHU balance
-    coilAir,
-    bypassAir,
-    returnAir,
-
-    // ACES aliases
-    dehumidifiedAir,
-    freshAirAces,
-    bleedAir,
-
-    // Metadata
-    isDOAS,
-    pplCount,
-  };
 };
