@@ -50,7 +50,7 @@ export interface AHU {
   outerAirCFM: number;
   bypassFactor: number;
   adpMode: 'manual' | 'calculated';
-  adp: number;
+  adp: number | null;
   filterClass: string;
   location: string;
   notes: string;

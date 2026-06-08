@@ -96,7 +96,7 @@ const makeAhu = (id: string, index: number = 0, overrides: Partial<AHU> = {}): A
   // effectiveSystemDesign.bypassFactor (project-level) only.
   bypassFactor: 0,           // 0 = use project default (not yet wired per-AHU)
   adpMode:      'manual',    // 'manual' | 'calculated' — wired to rdsSelector ADP-01
-  adp:          0,           // °F — 0 = use project default; wired to rdsSelector ADP-01
+  adp:          null as number | null,           // °F — 0 = use project default; wired to rdsSelector ADP-01
 
   // ── Filter / location ─────────────────────────────────────────────────────
   filterClass: '',
