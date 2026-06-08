@@ -63,7 +63,7 @@ import {
 } from '../../utils/psychro';
 
 // @ts-ignore - Ignore missing types until heatingHumid.js is converted
-import { AIR_MASS_FACTOR } from './heatingHumid';
+import { AIR_MASS_FACTOR } from '../../constants/ashrae';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types

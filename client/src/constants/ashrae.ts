@@ -97,6 +97,10 @@ const ASHRAE = {
   BTU_PER_TON:      12000,     // 1 TR = 12,000 BTU/hr (exact)
   GR_PER_LB:         7000,     // 1 lb = 7000 grains (exact)
 
+
+  // In ashrae.ts — add alongside BTU_PER_TON etc.
+AIR_MASS_FACTOR: 4.5,  // lb/(min·ft³) × BTU factor — ASHRAE HOF Ch.18
+
   /**
    * @deprecated Use KW_TO_BTU_HR from utils/units.js for new code.
    * Name "KW_TO_BTU" implies energy (BTU) not power (BTU/hr). Value is correct.
