@@ -17,6 +17,26 @@
  *            ASHRAE 62.1-2022
  *            ISO 14644-1:2015
  *
+ * ── CHANGELOG v2.11 ──────────────────────────────────────────────────────────
+ *
+ *   CRIT-RDS-03 FIX — minESHF < 1.0 guard removed from reheat condition (~L480).
+ *     When grADP_sat > grIn, Math.max(0, grIn − grADP_sat) = 0 collapses
+ *     minESHF to exactly 1.0. The old third clause `minESHF < 1.0` was therefore
+ *     always false in that case, silently disabling reheat for any room with
+ *     significant latent load served by a warm ADP. roomESHF < minESHF − 0.001
+ *     is sufficient to detect the condition; the guard is removed.
+ *
+ *   HIGH-RDS-02 FIX — calculatePipeSizing now receives revisedGrandTotal (~L510).
+ *     Was: revisedCoilLoadBTU (excluded supply fan heat; up to 20.6% undersize).
+ *     Now: revisedGrandTotal  (matches heatingHumid coil load basis exactly).
+ *     Both heatingHumid and pipeSizing must size from the same coil load.
+ *
+ *   WARN-RDS-03 FIX — adpSufficient pre-check added before adpSufficient (~L430).
+ *     When grADP_sat > peakCalcs.grIn the coil cannot dehumidify; calculateRequired-
+ *     ADP returned a type that mapped to 'not_applicable', masking an infeasible
+ *     design. adpSufficient is now forced to 'insufficient' when the pre-check
+ *     fires. grADP_sat declaration moved from STEP 4c to STEP 4b (declared once).
+ *
  * ── CHANGELOG v2.10 ───────────────────────────────────────────────────────────
  *
  *   Diagnostic console logging added throughout.
@@ -571,6 +591,10 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4b — Required ADP / ESHF (STEP6-01)
         // ════════════════════════════════════════════════════════════════════════
+        // grADP_sat: saturation humidity at ADP [gr/lb]. Declared here (not STEP 4c)
+        // so it's available for the dehumidification pre-check below.
+        // Also consumed in STEP 4c (minESHF denominator) — declared once, used in both.
+        const grADP_sat = calculateGrains(adpF, 100, elevation);
         const eshfTotalSensible = (peakErshForCap || 0) + (oaPeak.oaSensible || 0);
         const eshfTotalLatent   = (peakErlhForCap || 0) + (oaPeak.oaLatent   || 0);
 
@@ -588,7 +612,22 @@ export const selectRdsData = createSelector(
             ? parseFloat((adpF - requiredADP).toFixed(1))
             : null;
 
+        // WARN-RDS-03 FIX (v2.11): pre-check before eshfType evaluation.
+        // When grADP_sat (saturation humidity at ADP) exceeds room grains (grIn),
+        // the coil delivers supply air wetter than the room — dehumidification is
+        // impossible at this ADP regardless of eshfType. Without this guard,
+        // calculateRequiredADP returns a type that maps to 'not_applicable',
+        // silently masking an infeasible coil design.
+        if (grADP_sat > peakCalcs.grIn) {
+          _warn(
+            `STEP6-01 PRE-CHECK: grADP_sat=${grADP_sat.toFixed(1)} > grIn=${peakCalcs.grIn?.toFixed(1)} gr/lb ` +
+            `— ADP=${adpF.toFixed(1)}°F cannot dehumidify (supply air wetter than room). ` +
+            `adpSufficient forced to 'insufficient'.`
+          );
+        }
+
         const adpSufficient =
+          grADP_sat > peakCalcs.grIn   ? 'insufficient'  :  // ADP too warm — supply air wetter than room (pre-check)
           eshfType === 'no_solution'   ? 'no_solution'    :
           eshfType === 'sensible_only' ? 'not_applicable' :
           adpGap === null              ? 'not_applicable' :
@@ -612,7 +651,7 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // STEP 4c — Reheater requirement (STEP7-01)
         // ════════════════════════════════════════════════════════════════════════
-        const grADP_sat = calculateGrains(adpF, 100, elevation);
+        // grADP_sat declared in STEP 4b — available here.
         const supplyDT  = (1 - bf) * (dbInF - adpF);
 
         if (supplyDT <= 0) {
@@ -641,7 +680,13 @@ export const selectRdsData = createSelector(
         let reheatBTU      = 0;
         let reheatRequired = false;
 
-        if (supplyDT > 0 && roomESHF < minESHF - 0.001 && minESHF < 1.0) {
+        // CRIT-RDS-03 FIX (v2.11): removed `&& minESHF < 1.0`.
+        // When grADP_sat > grIn, Math.max(0, grIn − grADP_sat) = 0 collapses
+        // minESHF to exactly 1.0, making the old third clause always false and
+        // silently disabling reheat even when roomESHF is far below 1.0.
+        // roomESHF < minESHF − 0.001 is sufficient to detect the reheat condition;
+        // the minESHF < 1.0 guard is not needed and causes incorrect suppression.
+        if (supplyDT > 0 && roomESHF < minESHF - 0.001) {
           reheatRequired = true;
           reheatBTU = Math.max(0, (minESHF * erthSafe - reheatErsh) / (1 - minESHF));
           _warn(
@@ -750,7 +795,11 @@ export const selectRdsData = createSelector(
         // ════════════════════════════════════════════════════════════════════════
         // STEP 6 — Pipe sizing
         // ════════════════════════════════════════════════════════════════════════
-        const pipes = calculatePipeSizing(revisedCoilLoadBTU, heatingCapBTU, preheatCapBTU);
+        // HIGH-RDS-02 FIX (v2.11): was revisedCoilLoadBTU, which excluded
+        // supplyFanHeatBTU. For a draw-through AHU the coil overcomes all heat
+        // in the airstream — supply fan included. revisedGrandTotal matches
+        // the coil load basis already used by heatingHumid (CHW flow parity).
+        const pipes = calculatePipeSizing(revisedGrandTotal, heatingCapBTU, preheatCapBTU);
 
         _log(`Pipes: CHW branch=${pipes.chw.branchDiamMm}mm, manifold=${pipes.chw.manifoldDiamMm}mm, flow=${pipes.chw.flowGPM?.toFixed(1)}GPM | HW branch=${pipes.hw.branchDiamMm}mm, flow=${pipes.hw.flowGPM?.toFixed(1)}GPM`);
 

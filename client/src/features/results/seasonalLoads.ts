@@ -225,6 +225,21 @@ export interface SeasonalLoadResult {
   gmpSafetyMult: number;
 }
 
+// ── Diagnostic logging ──────────────────────────────────────────────────────
+const LOG_SL = true;
+
+const _log  = (...a: any[]) => { if (LOG_SL) console.log ('[seasonalLoads]',   ...a); };
+const _warn = (...a: any[]) => { if (LOG_SL) console.warn('[seasonalLoads] ⚠', ...a); };
+const _err  = (...a: any[]) =>               console.error('[seasonalLoads] ✗', ...a);
+
+const _badNum = (val: any, field: string): boolean => {
+  if (typeof val !== 'number' || !isFinite(val)) {
+    _err(`NaN/invalid  field="${field}"  got=${JSON.stringify(val)}`);
+    return true;
+  }
+  return false;
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const parseDef = (val: any, fallback: number): number => {
@@ -258,6 +273,8 @@ const parseDef = (val: any, fallback: number): number => {
  * @param latitude       - project latitude (decimal degrees)
  * @param dailyRange     - full daily DB swing (°F). 0 = use CLTD defaults.
  */
+
+
 export const calculateSeasonLoad = (
   room: RoomState,
   envelope: EnvelopeState | null | undefined,
