@@ -380,7 +380,7 @@ export const selectRdsData = createSelector(
         if (ahuAdpMode === 'calculated') {
           const prelimSystemDesign = { ...systemDesign, adp: projectAdp };
           const prelimAirQty = calculateAirQuantities(
-            room, envelope, ahu, prelimSystemDesign, altCf,
+            room, envelope, ahu, prelimSystemDesign, altCf, elevation,  
             peakErsh, floorAreaFt2, volumeFt3
           );
           const adpBasisCFM = prelimAirQty.thermalCFM > 0
@@ -413,7 +413,7 @@ export const selectRdsData = createSelector(
         // STEP 2 — Air quantities (STEP3-01)
         // ════════════════════════════════════════════════════════════════════════
         const airQty = calculateAirQuantities(
-          room, envelope, ahu, effectiveSystemDesign, altCf,
+          room, envelope, ahu, effectiveSystemDesign, altCf, elevation,  
           peakErsh, floorAreaFt2, volumeFt3
         );
 
