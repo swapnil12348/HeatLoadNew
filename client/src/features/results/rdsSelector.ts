@@ -144,6 +144,12 @@ const _badNum = (val: any, field: string, roomId: string): boolean => {
   return false;
 };
 
+/** Safe numeric formatter: coerces strings → numbers before .toFixed(), returns 'n/a' on failure. */
+const _fmt = (v: any, d: number): string => {
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return isFinite(n) ? n.toFixed(d) : 'n/a';
+};
+
 /**
  * Checks that val is a finite number AND not a string.
  * Catches the P1 regression where .toFixed() returns strings.
@@ -759,7 +765,7 @@ export const selectRdsData = createSelector(
         if (!psychroFields || Object.keys(psychroFields).length === 0) {
           _err('Psychro: calculateAllSeasonStatePoints returned empty — psychro cells will be blank');
         } else {
-          _log(`Psychro: ${Object.keys(psychroFields).length} state-point fields computed, coil_shr=${psychroFields['coil_shr']?.toFixed(3) ?? 'n/a'}, coil_contactFactor=${psychroFields['coil_contactFactor']?.toFixed(3) ?? 'n/a'}`);
+          _log(`Psychro: ${Object.keys(psychroFields).length} state-point fields computed, coil_shr=${_fmt(psychroFields['coil_shr'], 3)}, coil_contactFactor=${_fmt(psychroFields['coil_contactFactor'], 3)}`);
         }
 
         // ════════════════════════════════════════════════════════════════════════
