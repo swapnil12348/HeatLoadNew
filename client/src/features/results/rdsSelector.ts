@@ -219,7 +219,7 @@ export const selectRdsData = createSelector(
       _err('INPUT-01: climate is null/undefined — all OA loads will be 0 or NaN');
     } else {
       const missingSeasons = (['summer', 'monsoon', 'winter'] as Season[]).filter(
-        s => !climate[s]
+        s => !climate?.outside?.[s]
       );
       if (missingSeasons.length > 0) {
         _err(`INPUT-01: climate missing seasons: ${missingSeasons.join(', ')} — check climateSlice`);

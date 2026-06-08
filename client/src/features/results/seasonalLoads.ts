@@ -395,7 +395,7 @@ const ambRH   = parseDef(
     erlh,
 
     // Psychrometric state
-    grains: grIn,
+    grains: grOut,
     dbInF,
     grIn,
     grOut,

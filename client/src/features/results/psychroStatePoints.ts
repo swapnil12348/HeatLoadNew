@@ -98,7 +98,7 @@ export interface PsychroStateResult {
 }
 
 export interface AllSeasonsStateResult {
-  [key: string]: string; // Dynamically generated keys like `amb_db_summer`
+  [key: string]: string | number; // Dynamically generated keys like `amb_db_summer`
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -330,9 +330,9 @@ export const calculateAllSeasonStatePoints = (
     fields[`sa_enth_${season}`] = pts.sa.enth;
 
     if (season === coilDesignSeason) {
-      fields['coil_shr'] = pts.sensibleHeatRatio;
-      fields['coil_contactFactor'] = pts.contactFactor;
-    }
+  fields['coil_shr']          = parseFloat(pts.sensibleHeatRatio);  // number — P1-PSP-01
+  fields['coil_contactFactor'] = parseFloat(pts.contactFactor);      // number — P1-PSP-01
+}
   });
 
   return fields;
