@@ -35,8 +35,8 @@ export default function TabNav() {
   // Apply our new interface to the tabs array
   const tabs: TabItem[] = [
     { id: 'project',  label: 'Project Info',       path: '/project'  },
-    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'climate',  label: 'Climate',            path: '/climate'  },
+    { id: 'rds',      label: 'RDS Input (Master)', path: '/rds'      },
     { id: 'room',     label: 'Room Geometry',      path: '/room'     },
     { id: 'envelope', label: 'Envelope & Loads',   path: '/envelope' },
     { id: 'ahu',      label: 'AHU Config',         path: '/ahu'      },
