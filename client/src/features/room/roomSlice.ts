@@ -6,6 +6,57 @@
  *   state.room.list          →  Room[]
  *   state.room.activeRoomId  →  string | null
  *
+ * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
+ *
+ *   FIX-R1 — makeRoom(): designDB desync when override supplies designDB only.
+ *
+ *     Guard `if (overrides.designTemp !== undefined && overrides.designDB === undefined)`
+ *     left one case unhandled: a caller passing { designDB: X } with no designTemp
+ *     produced designTemp=22°C (71.6°F) alongside designDB=X — mismatched inputs
+ *     to psychroValidation.validateRoomHumidity().
+ *
+ *     Fix: remove the conditional entirely. designDB is always re-derived from
+ *     merged.designTemp after overrides are merged. It cannot be independently set.
+ *
+ *   FIX-R2 — updateRoom(): direct volume edit had no height back-calculation.
+ *
+ *     No `if (field === 'volume')` branch existed. Setting volume directly left
+ *     room.height stale (height ≠ volume / floorArea). rdsSelector reads
+ *     room.volume directly so calculation was unaffected, but the UI would
+ *     display an inconsistent height value.
+ *
+ *     Fix: added `if (field === 'volume')` branch that back-calculates height
+ *     as volume / floorArea (floorArea > 0 guard applied).
+ *
+ *   FIX-R3 — updateRoom(): direct floorArea edit did not back-calculate width.
+ *
+ *     The `if (field === 'floorArea')` branch updated volume but left length
+ *     and width stale (length × width ≠ floorArea). rdsSelector reads
+ *     room.floorArea directly so calculation was unaffected, but the UI
+ *     displayed inconsistent dimensions.
+ *
+ *     Fix: when floorArea is set directly, length is kept fixed and width is
+ *     back-calculated as floorArea / length (length > 0 guard applied).
+ *
+ *   FIX-R5 — generateRoomId exported for shared use with roomActions.js.
+ *
+ *     The function was duplicated in both files. Now exported from this file;
+ *     roomActions.js imports it instead of maintaining its own copy.
+ *     TODO: move to src/utils/generateId.ts when convenient.
+ *
+ *   FIX-R6 — toggleRoomAhu removed from named exports.
+ *
+ *     Deprecated reducer was still on the public export surface, risking
+ *     accidental use by new contributors. Removed from exports. The reducer
+ *     body is retained in the slice for backward compatibility with any
+ *     in-flight dispatch not yet migrated to setRoomAhu.
+ *
+ *   NOTE-R4 — New rooms from addNewRoom() start with assignedAhuIds=[].
+ *     rdsSelector logs a warning and uses AHU defaults silently. The UI should
+ *     surface this as a validation state (badge or icon on rooms where
+ *     assignedAhuIds.length === 0). Fix belongs in RoomSidebarItem / RDSRow
+ *     — not in this file.
+ *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
  *   INTEGRATION-03 FIX — extraReducers for deleteAHU.
@@ -82,6 +133,14 @@
  *     const raRH = parseFloat(room.designRH) || 50;   ← 0 → 50 (wrong)
  *
  *   Keep designRH default as 50 (a number). Never set it to null or undefined.
+ *
+ * ── designDB IS ALWAYS DERIVED ───────────────────────────────────────────────
+ *
+ *   designDB (°F) is always computed from designTemp (°C) and can never be
+ *   set independently. makeRoom() re-derives it unconditionally after merging
+ *   overrides. updateRoom() re-derives it whenever field === 'designTemp'.
+ *   Do not dispatch updateRoom({ field: 'designDB', value: X }) — it will be
+ *   overwritten on the next designTemp change.
  */
 
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
@@ -94,7 +153,9 @@ import { Room, RoomState, RootState } from '../../utils/types';
 import { deleteAHU } from '../ahu/ahuSlice';
 
 // ── ID generator ──────────────────────────────────────────────────────────────
-const generateRoomId = (): string =>
+// FIX-R5: exported so roomActions.js can import it instead of duplicating.
+// TODO: move to src/utils/generateId.ts when convenient.
+export const generateRoomId = (): string =>
   `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
 // ── Nested field setter ───────────────────────────────────────────────────────
@@ -120,7 +181,9 @@ const cToF_inline = (c: number | string): number | null => {
 /**
  * makeRoom(id, index, overrides)
  * Single source of truth for the default room shape.
- * designDB (°F) is derived from designTemp (°C) for psychroValidation.
+ *
+ * designDB (°F) is ALWAYS derived from merged.designTemp (°C) after overrides
+ * are applied — it cannot be independently set via overrides. (FIX-R1)
  */
 const makeRoom = (id: string, index: number = 0, overrides: Partial<Room> = {}): Room => {
   const base: Room = {
@@ -140,7 +203,7 @@ const makeRoom = (id: string, index: number = 0, overrides: Partial<Room> = {}):
 
     // ── Environmental design targets ──────────────────────────────────────────
     designTemp: 22,    // °C — source of truth; calc modules convert via cToF()
-    designDB:   71.6,  // °F — derived: 22 × 9/5 + 32 = 71.6; for psychroValidation
+    designDB:   71.6,  // °F — always derived from designTemp; see FIX-R1
     designRH:   50,    // % (0 is valid for dry rooms — keep as number, never null)
     pressure:   15,    // Pa
 
@@ -173,11 +236,11 @@ const makeRoom = (id: string, index: number = 0, overrides: Partial<Room> = {}):
 
   const merged = { ...base, ...overrides } as Room;
 
-  // If the override included designTemp but not designDB, re-derive designDB.
-  if (overrides.designTemp !== undefined && overrides.designDB === undefined) {
-    const derivedDB = cToF_inline(overrides.designTemp);
-    if (derivedDB !== null) merged.designDB = derivedDB;
-  }
+  // FIX-R1: designDB is always derived from designTemp — unconditionally.
+  // The previous conditional guard left a case unhandled where overrides
+  // supplied designDB without designTemp, causing a mismatch.
+  const derivedDB = cToF_inline(merged.designTemp);
+  if (derivedDB !== null) merged.designDB = derivedDB;
 
   return merged;
 };
@@ -235,6 +298,16 @@ const roomSlice = createSlice({
     /**
      * updateRoom
      * { id, field, value }  —  field supports dot-notation paths.
+     *
+     * Geometry invariants maintained (post-v2.3):
+     *   length or width  → floorArea = l × w,  volume = floorArea × h
+     *   height           → volume = floorArea × h
+     *   floorArea        → volume = fa × h,     width = fa / l  (l > 0)  [FIX-R3]
+     *   volume           → height = vol / floorArea  (floorArea > 0)      [FIX-R2]
+     *
+     * Note: dispatching field='designDB' directly is not supported — designDB
+     * is always derived from designTemp and will be overwritten on the next
+     * designTemp change. Set designTemp instead.
      */
     updateRoom: (state, action: PayloadAction<{ id: string; field: string; value: any }>) => {
       const { id, field, value } = action.payload;
@@ -257,7 +330,8 @@ const roomSlice = createSlice({
         }
       }
 
-      // Keep derived geometry consistent
+      // ── Geometry sync ───────────────────────────────────────────────────────
+      // Read current values after setNestedValue has applied the change.
       const l = parseFloat(String(room.length))    || 0;
       const w = parseFloat(String(room.width))     || 0;
       const h = parseFloat(String(room.height))    || 0;
@@ -266,11 +340,23 @@ const roomSlice = createSlice({
         room.floorArea = parseFloat((l * w).toFixed(1));
         room.volume    = parseFloat((room.floorArea * h).toFixed(1));
       }
+
       if (field === 'height') {
         room.volume = parseFloat((room.floorArea * h).toFixed(1));
       }
+
       if (field === 'floorArea') {
-        room.volume = parseFloat((parseFloat(String(value)) * h).toFixed(1));
+        const fa = parseFloat(String(value)) || 0;
+        room.volume = parseFloat((fa * h).toFixed(1));
+        // FIX-R3: keep length fixed; back-calculate width to stay consistent
+        // with the new floor area (length is treated as the primary dimension).
+        if (l > 0) room.width = parseFloat((fa / l).toFixed(2));
+      }
+
+      // FIX-R2: back-calculate height when volume is set directly.
+      if (field === 'volume') {
+        const vol = parseFloat(String(value)) || 0;
+        if (room.floorArea > 0) room.height = parseFloat((vol / room.floorArea).toFixed(2));
       }
     },
 
@@ -287,6 +373,9 @@ const roomSlice = createSlice({
     /**
      * toggleRoomAhu
      * ⚠️  DEPRECATED — DO NOT USE IN UI CODE.
+     *     FIX-R6: removed from named exports (v2.3). Use setRoomAhu instead.
+     *     Reducer body retained for backward compatibility with any dispatch
+     *     not yet migrated; it will be removed in a future cleanup pass.
      */
     toggleRoomAhu: (state, action: PayloadAction<{ roomId: string; ahuId: string }>) => {
       const { roomId, ahuId } = action.payload;
@@ -348,7 +437,7 @@ export const {
   addRoom,
   updateRoom,
   setRoomAhu,
-  toggleRoomAhu,
+  // toggleRoomAhu intentionally omitted — FIX-R6 (v2.3). Use setRoomAhu.
   deleteRoom,
 } = roomSlice.actions;
 
