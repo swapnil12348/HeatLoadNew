@@ -6,6 +6,21 @@
  *   state.room.list          →  Room[]
  *   state.room.activeRoomId  →  string | null
  *
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ *
+ *   INTEGRATION-03 FIX — extraReducers for deleteAHU.
+ *
+ *     deleteAhuWithCleanup() in roomActions.js previously dispatched
+ *     setRoomAhu({ ahuId: null }) N times (once per room that held the AHU)
+ *     then dispatched deleteAHU — N+1 separate store mutations, each one
+ *     triggering a full rdsSelector recompute.
+ *
+ *     Fix: extraReducers case added for deleteAHU (from ahuSlice).
+ *     All room.assignedAhuIds are cleaned in the same Redux mutation as the
+ *     AHU deletion. deleteAhuWithCleanup() is now a single dispatch.
+ *
+ *     ahuSlice does NOT import from roomSlice — no circular dependency.
+ *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   FIX-ROOM-DB-01 — designDB field added to room shape.
@@ -72,6 +87,11 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { ACPH_RANGES, IsoClass } from '../../constants/isoCleanroom';
 import { Room, RoomState, RootState } from '../../utils/types';
+
+// ── Cross-slice action imports ────────────────────────────────────────────────
+// Used in extraReducers to clean up AHU assignments when an AHU is deleted.
+// ahuSlice does NOT import from roomSlice — no circular dependency.
+import { deleteAHU } from '../ahu/ahuSlice';
 
 // ── ID generator ──────────────────────────────────────────────────────────────
 const generateRoomId = (): string =>
@@ -200,7 +220,7 @@ const roomSlice = createSlice({
       const payload  = action.payload;
       const isLegacy = typeof payload === 'string';
       const id       = isLegacy ? payload : (payload.id ?? generateRoomId());
-      
+
       let overrides: Partial<Room> = {};
       if (!isLegacy && typeof payload === 'object') {
         overrides = { ...payload };
@@ -283,6 +303,12 @@ const roomSlice = createSlice({
     /**
      * deleteRoom
      * Never removes the last room.
+     *
+     * NOTE: Always call deleteRoomWithCleanup() from roomActions.js rather
+     * than dispatching this directly. The thunk mirrors this length guard
+     * so it short-circuits before dispatch — preventing the edge case where
+     * the guard returns early here but envelopeSlice.extraReducers still fires
+     * and deletes the envelope for a room that wasn't actually removed.
      */
     deleteRoom: (state, action: PayloadAction<string>) => {
       if (state.list.length <= 1) return;
@@ -292,6 +318,28 @@ const roomSlice = createSlice({
         state.activeRoomId = state.list[0].id;
       }
     },
+  },
+
+  // ── Cross-slice reactivity ──────────────────────────────────────────────────
+  extraReducers: (builder) => {
+    /**
+     * React to ahuSlice/deleteAHU:
+     * Clear the deleted AHU's ID from every room's assignedAhuIds in the same
+     * Redux mutation as the AHU deletion.
+     *
+     * Previously: deleteAhuWithCleanup() dispatched setRoomAhu({ ahuId: null })
+     * N times (once per affected room) then deleteAHU — N+1 store mutations.
+     * Each mutation triggered a full rdsSelector recompute.
+     *
+     * Now: single dispatch, single store mutation, zero intermediate states
+     * where rooms hold a reference to a deleted AHU.
+     */
+    builder.addCase(deleteAHU, (state, action) => {
+      const ahuId = action.payload;
+      state.list.forEach(room => {
+        room.assignedAhuIds = room.assignedAhuIds.filter(id => id !== ahuId);
+      });
+    });
   },
 });
 

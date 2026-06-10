@@ -6,6 +6,37 @@
  * State shape:
  *   state.envelope.byRoomId  →  { [roomId]: RoomEnvelope }
  *
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ *
+ *   INTEGRATION-01 FIX — extraReducers for addRoom / deleteRoom.
+ *
+ *     roomActions.addNewRoom() previously dispatched addRoomAction() then
+ *     initializeRoom() as two separate calls. Between those dispatches the
+ *     store was inconsistent: room existed in roomSlice, envelope did not yet
+ *     exist here. rdsSelector fired in that window and computed envelopeGains = 0.
+ *
+ *     Fix: extraReducers cases added for addRoom and deleteRoom (from roomSlice).
+ *     Both run in the same Redux mutation as the room action — the two slices
+ *     are always consistent after any single dispatch.
+ *
+ *     initializeRoom and removeRoomEnvelope reducers are RETAINED for edge cases
+ *     (direct testing, snapshot restore, manual override). They are no longer
+ *     dispatched by roomActions in normal flow.
+ *
+ *   INTEGRATION-02 FIX — selectEnvelopeByRoomId stable fallback.
+ *
+ *     Previous: state.envelope.byRoomId[roomId] ?? createRoomEnvelope()
+ *     createRoomEnvelope() returns a new object reference on every call.
+ *     For a missing roomId, every useSelector call got a different reference →
+ *     unnecessary re-renders on any component subscribed to this selector.
+ *
+ *     Fix: module-level EMPTY_ENVELOPE constant. Stable reference; the fallback
+ *     path now never creates a new object.
+ *
+ * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
+ *
+ *   BUG-SLICE-02 FIX — initializeRoom dispatched with { id, room } payload.
+ *
  * ── FIELD NOTES — LOGIC LAYER CONTRACT ───────────────────────────────────────
  *
  *   The following fields are READ DIRECTLY by the calculation modules.
@@ -64,6 +95,11 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { RoomEnvelope, EnvelopeState, RootState, EnvelopeElement, InternalPeople, InternalLights, InternalEquipment, RoomInfiltration } from '../../utils/types';
 
+// ── Cross-slice action imports ────────────────────────────────────────────────
+// Used in extraReducers to keep envelopeSlice in sync with roomSlice atomically.
+// roomSlice does NOT import from envelopeSlice — no circular dependency.
+import { addRoom, deleteRoom } from '../room/roomSlice';
+
 // ── Default envelope factory ──────────────────────────────────────────────────
 const createRoomEnvelope = (): RoomEnvelope => ({
   elements: {
@@ -104,11 +140,17 @@ const createRoomEnvelope = (): RoomEnvelope => ({
 
 // ── ISO classification guard ──────────────────────────────────────────────────
 // Returns true for any room with an ISO cleanroom classification.
-// Used by initializeRoom to enforce achValue = 0 for classified rooms.
+// Used by initializeRoom and extraReducers to enforce achValue = 0 for classified rooms.
 const isIsoClassified = (room: any): boolean => {
   const cls = room?.classInOp ?? '';
   return cls !== '' && cls !== 'Unclassified';
 };
+
+// ── Stable fallback reference ─────────────────────────────────────────────────
+// Module-level constant so selectEnvelopeByRoomId never creates a new object
+// when a roomId is missing. New object every call = new reference every call
+// = unnecessary re-renders for subscribed components.
+const EMPTY_ENVELOPE: RoomEnvelope = createRoomEnvelope();
 
 // ── Initial state ─────────────────────────────────────────────────────────────
 const initialState: EnvelopeState = {
@@ -125,7 +167,12 @@ const envelopeSlice = createSlice({
   reducers: {
     /**
      * initializeRoom
-     * Called when a new room is added (from roomActions.js addNewRoom thunk).
+     * ── NOTE (v2.2): no longer dispatched by roomActions.addNewRoom(). ──
+     * The extraReducers case for addRoom now handles initialization atomically.
+     * This reducer is retained for manual initialization, snapshot restore,
+     * and direct testing. Do not remove.
+     *
+     * Called when a new room is added (legacy path or manual override).
      * Supports two payload shapes:
      *   string:       initializeRoom('room_xyz')      — legacy
      *   { id, room }: initializeRoom({ id, room })    — preferred (ISO-aware)
@@ -223,13 +270,61 @@ const envelopeSlice = createSlice({
 
     /**
      * removeRoomEnvelope
-     * Called by deleteRoomWithCleanup thunk in roomActions.js when a room is deleted.
+     * ── NOTE (v2.2): no longer dispatched by roomActions.deleteRoomWithCleanup(). ──
+     * The extraReducers case for deleteRoom now handles removal atomically.
+     * This reducer is retained for direct testing and manual cleanup. Do not remove.
+     *
+     * Original note: called by deleteRoomWithCleanup thunk when a room is deleted.
      * Do not call from UI directly — always go through the thunk so both
      * roomSlice and envelopeSlice stay in sync.
      */
     removeRoomEnvelope: (state, action: PayloadAction<string>) => {
       delete state.byRoomId[action.payload];
     },
+  },
+
+  // ── Cross-slice reactivity ──────────────────────────────────────────────────
+  extraReducers: (builder) => {
+    /**
+     * React to roomSlice/addRoom:
+     * Initialize the envelope in the same dispatch as the room creation.
+     * After this, the store has no window where a room exists without an envelope.
+     *
+     * Handles both payload shapes from roomSlice.addRoom:
+     *   string payload  — legacy: id only, classInOp unknown → default envelope
+     *   object payload  — preferred: { id, classInOp, ... } → ISO-aware envelope
+     */
+    builder.addCase(addRoom, (state, action) => {
+      const payload   = action.payload as any;
+      const id        = typeof payload === 'string' ? payload : payload.id;
+      const classInOp = typeof payload === 'string' ? undefined : payload.classInOp;
+
+      if (!id) return;
+      if (state.byRoomId[id]) return; // guard: never overwrite existing envelope
+
+      const envelope = createRoomEnvelope();
+      if (isIsoClassified({ classInOp })) {
+        envelope.infiltration.achValue = 0; // explicit, even though factory default is 0
+      }
+      state.byRoomId[id] = envelope;
+    });
+
+    /**
+     * React to roomSlice/deleteRoom:
+     * Remove the envelope in the same dispatch as the room deletion.
+     * After this, no orphaned envelope entries remain in byRoomId.
+     *
+     * NOTE: deleteRoom's reducer guards against deleting the last room
+     * (returns early if list.length <= 1). deleteRoomWithCleanup() in
+     * roomActions.js mirrors this guard before dispatching, so in normal
+     * usage this case never fires for the last room. If deleteRoom is
+     * dispatched directly and its reducer returns early, this case will
+     * still fire — leaving the envelope deleted but the room intact.
+     * Always use deleteRoomWithCleanup(), never dispatch deleteRoom directly.
+     */
+    builder.addCase(deleteRoom, (state, action) => {
+      delete state.byRoomId[action.payload];
+    });
   },
 });
 
@@ -247,13 +342,20 @@ export default envelopeSlice.reducer;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
+/**
+ * selectEnvelopeByRoomId
+ * Falls back to EMPTY_ENVELOPE (stable module-level reference) when the roomId
+ * is missing. Never calls createRoomEnvelope() at selector time — that would
+ * return a new object reference on every invocation for a missing room, causing
+ * unnecessary re-renders in any subscribed component.
+ */
 export const selectEnvelopeByRoomId = (state: RootState, roomId: string): RoomEnvelope =>
-  state.envelope.byRoomId[roomId] ?? createRoomEnvelope();
+  state.envelope.byRoomId[roomId] ?? EMPTY_ENVELOPE;
 
 export const selectActiveEnvelope = (state: RootState): RoomEnvelope => {
   const id = state.room.activeRoomId;
-  if (!id) return createRoomEnvelope();
-  return state.envelope.byRoomId[id] ?? createRoomEnvelope();
+  if (!id) return EMPTY_ENVELOPE;
+  return state.envelope.byRoomId[id] ?? EMPTY_ENVELOPE;
 };
 
 export const selectAllEnvelopes = (state: RootState) => state.envelope.byRoomId;

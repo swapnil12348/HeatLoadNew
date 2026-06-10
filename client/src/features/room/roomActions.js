@@ -3,34 +3,60 @@
  * roomActions.js
  * Thunks for cross-slice room operations.
  *
+ * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
+ *
+ *   INTEGRATION-01 FIX — addNewRoom(): sequential dispatch eliminated.
+ *
+ *     Previously dispatched addRoomAction() then initializeRoom() as two
+ *     separate calls. Between those two dispatches the store was in a
+ *     structurally inconsistent state: the room existed in roomSlice but its
+ *     envelope did not yet exist in envelopeSlice. rdsSelector ran against
+ *     that gap, logged "no envelope found", and computed envelopeGains = 0
+ *     for one spurious render cycle.
+ *
+ *     Fix: envelopeSlice now has an extraReducers case for addRoom — the
+ *     envelope is initialized in the same Redux mutation as the room, atomically.
+ *     The initializeRoom dispatch in addNewRoom() is removed; it is redundant.
+ *
+ *   INTEGRATION-02 FIX — deleteRoomWithCleanup(): sequential dispatch eliminated.
+ *
+ *     Previously dispatched deleteRoom() then removeRoomEnvelope() separately.
+ *     envelopeSlice.extraReducers now reacts to deleteRoom atomically.
+ *     The removeRoomEnvelope dispatch is removed.
+ *
+ *     The length-guard (cannot delete last room) is duplicated in this thunk
+ *     so we short-circuit before any dispatch — avoiding the edge case where
+ *     deleteRoom's reducer returns early but envelopeSlice still fires.
+ *
+ *   INTEGRATION-03 FIX — deleteAhuWithCleanup(): N+1 dispatch loop eliminated.
+ *
+ *     Previously dispatched setRoomAhu({ ahuId: null }) once per assigned room,
+ *     then deleteAHU — N+1 dispatches causing N+1 selector recomputes.
+ *     roomSlice.extraReducers now reacts to deleteAHU and clears all assignments
+ *     atomically. deleteAhuWithCleanup is now a single dispatch.
+ *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   BUG-SLICE-01 FIX — addNewRoom(): ISO class and ACPH now self-consistent.
  *
  *     Previous code called getAcphDefaults('ISO 7') but left the room with
  *     makeRoom()'s default classInOp: 'ISO 8'. Every new room was an ISO 8
- *     room running at ISO 7 ACPH values — decoupled. isoValidation read
- *     classInOp: 'ISO 8' so the room never validated correctly as ISO 7.
- *
- *     Fix: DEFAULT_NEW_ROOM_CLASS is the single source of truth for both
- *     classification fields AND ACPH defaults. Changing it aligns both atomically.
+ *     room running at ISO 7 ACPH values. Fixed: DEFAULT_NEW_ROOM_CLASS is the
+ *     single source of truth for both fields.
  *
  *   BUG-SLICE-02 FIX — initializeRoom dispatched with { id, room } payload.
  *
  *     Previous: dispatch(initializeRoom(newId)) — legacy string form.
- *     envelopeSlice on the legacy path sets room = null, so isIsoClassified(null)
- *     always returned false — the ISO pressurization guard (achValue = 0)
- *     never fired for any thunk-created room, risking phantom infiltration loads
- *     on future factory-default changes.
- *
- *     Fix: dispatch initializeRoom({ id, room: { classInOp } }) so the
- *     isIsoClassified() guard receives a real room object and fires correctly.
+ *     envelopeSlice on that path set room = null so isIsoClassified(null)
+ *     always returned false, meaning the ISO pressurization guard (achValue = 0)
+ *     never fired for thunk-created rooms.
+ *     Fixed: initializeRoom now receives { id, room: { classInOp } }.
+ *     (This dispatch has been removed in v2.2 — extraReducers replaces it.)
  */
 
-import { addRoom as addRoomAction, deleteRoom, setRoomAhu } from './roomSlice';
-import { initializeRoom, removeRoomEnvelope }               from '../envelope/envelopeSlice';
-import { deleteAHU }                                        from '../ahu/ahuSlice';
-import { getAcphDefaults }                                  from '../../constants/isoCleanroom';
+import { addRoom as addRoomAction, deleteRoom } from './roomSlice';
+import { deleteAHU }                            from '../ahu/ahuSlice';
+import { getAcphDefaults }                      from '../../constants/isoCleanroom';
 
 // ── ID generator ──────────────────────────────────────────────────────────────
 const generateRoomId = () =>
@@ -46,8 +72,11 @@ const DEFAULT_NEW_ROOM_CLASS = 'ISO 8';
 
 /**
  * addNewRoom()
- * Thunk: creates a new room AND initializes its envelope atomically.
- * classInOp, atRestClass, and ACPH defaults all derived from DEFAULT_NEW_ROOM_CLASS.
+ * Thunk: creates a new room with a single atomic dispatch.
+ *
+ * envelopeSlice.extraReducers reacts to addRoom and initializes the envelope
+ * in the same Redux mutation — the store is NEVER in a room-without-envelope
+ * state between dispatches.
  */
 export const addNewRoom = () => (dispatch) => {
   const newId = generateRoomId();
@@ -60,48 +89,44 @@ export const addNewRoom = () => (dispatch) => {
     minAcph,
     designAcph,
   }));
-
-  // Pass { id, room } payload so envelopeSlice.isIsoClassified() guard
-  // receives a real room object and can enforce achValue = 0 for ISO rooms.
-  dispatch(initializeRoom({
-    id:   newId,
-    room: { classInOp: DEFAULT_NEW_ROOM_CLASS },
-  }));
+  // initializeRoom dispatch REMOVED (v2.2).
+  // envelopeSlice.extraReducers handles envelope initialization atomically.
 };
 
 /**
  * deleteRoomWithCleanup(roomId)
- * Thunk: removes room from roomSlice AND its envelope from envelopeSlice.
- * Plain deleteRoom() only removes from roomSlice.list —
- * envelopeSlice.byRoomId[id] would leak memory on every delete.
+ * Thunk: removes a room with a single atomic dispatch.
+ *
+ * envelopeSlice.extraReducers reacts to deleteRoom and removes the envelope
+ * in the same Redux mutation — no envelope leak is possible.
+ *
+ * The length guard here mirrors deleteRoom's reducer guard so we short-circuit
+ * before dispatch: if we dispatched and the reducer returned early (no room
+ * deleted), envelopeSlice would still fire and delete the envelope — leaving
+ * a room without an envelope. Guard here prevents that edge case.
+ *
+ * Always use this thunk instead of calling deleteRoom() directly.
  */
-export const deleteRoomWithCleanup = (roomId) => (dispatch) => {
+export const deleteRoomWithCleanup = (roomId) => (dispatch, getState) => {
+  if (getState().room.list.length <= 1) return; // mirrors deleteRoom reducer guard
   dispatch(deleteRoom(roomId));
-  dispatch(removeRoomEnvelope(roomId));
+  // removeRoomEnvelope dispatch REMOVED (v2.2).
+  // envelopeSlice.extraReducers handles envelope removal atomically.
 };
 
 /**
  * deleteAhuWithCleanup(ahuId)
- * Thunk: removes AHU from ahuSlice AND clears its assignment from all rooms.
+ * Thunk: removes an AHU with a single atomic dispatch.
  *
- * Plain deleteAHU() leaves stale ahuId in room.assignedAhuIds. After deletion,
- * rdsSelector returns ahuId: '' and typeOfUnit: '-' for every affected room
- * with no warning — silently reverting all those rooms to Recirculating type.
+ * roomSlice.extraReducers reacts to deleteAHU and clears the ahuId from
+ * every room's assignedAhuIds in the same Redux mutation.
  *
- * This thunk clears all room assignments BEFORE removing the AHU.
- * Order matters: clear first, then remove, so no intermediate state has
- * rooms pointing to a non-existent AHU.
+ * Always use this thunk instead of calling deleteAHU() directly.
  *
  * @param {string} ahuId — ID of the AHU to delete
  */
-export const deleteAhuWithCleanup = (ahuId) => (dispatch, getState) => {
-  const rooms = getState().room.list;
-
-  rooms.forEach(room => {
-    if (room.assignedAhuIds.includes(ahuId)) {
-      dispatch(setRoomAhu({ roomId: room.id, ahuId: null }));
-    }
-  });
-
+export const deleteAhuWithCleanup = (ahuId) => (dispatch) => {
   dispatch(deleteAHU(ahuId));
+  // setRoomAhu loop REMOVED (v2.2).
+  // roomSlice.extraReducers handles AHU assignment cleanup atomically.
 };
