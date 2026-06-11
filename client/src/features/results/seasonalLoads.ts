@@ -351,11 +351,17 @@ if (_badNum(grIn,  `grIn[${season}]`))  { /* logged */ }
   // DIAG-SL-02: suppressed diurnal solar correction (P3 audit — computeRdsRow.ts).
 // dailyRange=0 sets CLTD correction factor to 1.0, understating peak summer
 // solar gain on west/east walls by 10–20% in non-equatorial climates.
-if (dailyRange === 0 && latitude > 15) {
+// dailyRange affects CLTD correction on solar/transmission gains — only meaningful
+// for cooling seasons. Winter heating load (STEP 1 in heatingHumid) doesn't use
+// CLTD, so suppress this warning for winter to avoid misleading output.
+if (dailyRange === 0 && latitude > 15 && season !== 'winter') {
+  const seasonLabel = season === 'summer'
+    ? 'Peak summer ERSH'
+    : 'Monsoon peak ERSH';
   _warn(
     `DIAG-SL-02 [${season}]: dailyRange=0 at lat=${latitude.toFixed(1)}° — ` +
-    `diurnal CLF/CLTD correction suppressed. Peak summer ERSH likely understated. ` +
-    `Set project dailyRange (typical: 15–20°F for Delhi June, 12°F monsoon). ` +
+    `diurnal CLF/CLTD correction suppressed. ${seasonLabel} likely understated. ` +
+    `Set project dailyRange (typical: 18–20°F for Delhi June, 12°F monsoon). ` +
     `P3: dailyRange ?? 0 in rdsSelector.ts silently kills this correction.`
   );
 }

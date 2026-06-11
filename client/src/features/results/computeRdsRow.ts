@@ -109,6 +109,29 @@ export function computeRdsRow(
     }
     _log(`INPUT-02: raRH resolved=${raRH}%`);
 
+    // ── ELEVATION UNIT CONVERSION ───────────────────────────────────────────────
+// P1 BUG-HH-12 FIX: Redux persists elevation in metres (projectSlice log:
+// "elevation=0m"). Every downstream psychrometric function — calculateSeasonLoad,
+// calculateAirQuantities, resolveAdp, calculateAllSeasonOALoads,
+// calculateHeatingHumid, calculateAllSeasonStatePoints — expects feet.
+//
+// Single conversion here is the canonical fix. Do NOT add conversions at
+// individual call sites: that pattern led to the original mismatch.
+//
+// ⚠ UNRESOLVED: Cs and Cl are computed in rdsSelector.ts before this function
+// is called, using the raw elevation value. If sensibleFactor/latentFactor in
+// rdsSelector also expect feet, those will also be wrong for non-zero elevation.
+// Track as HIGH-RDS-03 — audit rdsSelector.ts next.
+const METERS_TO_FEET = 3.28084;
+const elevationFt    = Number(elevation) * METERS_TO_FEET;
+
+if (Number(elevation) > 0) {
+  _log(
+    `INPUT-03: elevation=${Number(elevation)}m → elevationFt=${elevationFt.toFixed(1)}ft ` +
+    `(altCf=${altCf.toFixed(4)} passed in from rdsSelector — verify rdsSelector uses feet too)`
+  );
+}
+
     // ══════════════════════════════════════════════════════════════════════════
     // STEP 1 — Seasonal loads
     // ══════════════════════════════════════════════════════════════════════════
@@ -118,7 +141,7 @@ export function computeRdsRow(
     SEASONS_LIST.forEach((season) => {
       const calcs = calculateSeasonLoad(
         room, envelope, climate, season, systemDesign,
-        altCf, elevation, floorAreaFt2, volumeFt3, latitude, dailyRange
+        altCf, elevationFt, floorAreaFt2, volumeFt3, latitude, dailyRange
       );
       seasonCalcs[season] = calcs;
 
@@ -171,11 +194,49 @@ export function computeRdsRow(
       );
     }
 
-    // ── Peak ERSH season ─────────────────────────────────────────────────────
-    const peakCFMSeason = SEASONS_LIST.reduce(
-      (best, s) => (seasonCalcs[s].ersh > seasonCalcs[best].ersh ? s : best),
-      'summer' as Season
+    // STEP1-02 P0-C: flat ERSH across seasons.
+// Two legitimate causes exist:
+//   (a) Interior room — envelopeGain=0 for all seasons → only season-invariant
+//       internal loads remain → flat ERSH is correct physics (DIAG-SL-03 explains it).
+//   (b) Envelope present but calcTotalEnvelopeGain not applying season variation
+//       → bug in envelopeAggregator.ts or envelopeCalc.js.
+//
+// Guard: only warn when at least one season has non-zero envelopeGain.
+const ershVariance = Math.abs(
+  (seasonCalcs.summer.ersh  ?? 0) - (seasonCalcs.winter.ersh ?? 0)
+);
+const hasEnvelope  = SEASONS_LIST.some(s => (seasonCalcs[s].envelopeGain ?? 0) !== 0);
+const maxSeasonErsh = Math.max(...SEASONS_LIST.map(s => seasonCalcs[s].ersh ?? 0));
+
+if (maxSeasonErsh > 0 && ershVariance < 50) {
+  if (hasEnvelope) {
+    _warn(
+      `STEP1-02 P0-C: ERSH is flat across seasons despite non-zero envelope gain ` +
+      `(summer=${Math.round(seasonCalcs.summer.ersh)}, ` +
+      `winter=${Math.round(seasonCalcs.winter.ersh)}, Δ=${Math.round(ershVariance)} BTU/hr). ` +
+      `calcTotalEnvelopeGain appears season-invariant. ` +
+      `Check envelopeAggregator.ts — expected Δ ≈ U×A×(summerΔT − winterΔT).`
     );
+  } else {
+    _log(
+      `STEP1-02 P0-C: ERSH flat (Δ=${Math.round(ershVariance)} BTU/hr) — ` +
+      `interior room, envelopeGain=0 for all seasons. Expected physics. (DIAG-SL-03)`
+    );
+  }
+}
+
+    
+
+    // ── Peak ERSH season ─────────────────────────────────────────────────────
+    // AFTER
+// Tropical-climate convention: summer governs CFM when ERSH is tied with monsoon
+// (or all seasons identical for interior rooms). For high-latitude or data-centre
+// projects where winter drives peak sensible load, this tiebreak needs re-evaluation.
+const TIEBREAK_SEASON: Season = 'summer';
+const peakCFMSeason = SEASONS_LIST.reduce(
+  (best, s) => (seasonCalcs[s].ersh > seasonCalcs[best].ersh ? s : best),
+  TIEBREAK_SEASON
+);
     const peakCalcs = seasonCalcs[peakCFMSeason];
     const peakErsh  = peakCalcs.ersh;
     const dbInF     = peakCalcs.dbInF ?? 72;
@@ -191,7 +252,7 @@ export function computeRdsRow(
     // ══════════════════════════════════════════════════════════════════════════
     const { adpF, adpSource, effectiveSystemDesign, ahuAdpMode } = resolveAdp(
       ahu, systemDesign, peakErsh, dbInF, bf,
-      altCf, elevation, room, envelope,
+      altCf, elevationFt, room, envelope,
       floorAreaFt2, volumeFt3
     );
 
@@ -199,7 +260,7 @@ export function computeRdsRow(
     // STEP 2 — Air quantities (STEP3-01)
     // ══════════════════════════════════════════════════════════════════════════
     const airQty = calculateAirQuantities(
-      room, envelope, ahu, effectiveSystemDesign, altCf, elevation,
+      room, envelope, ahu, effectiveSystemDesign, altCf, elevationFt,
       peakErsh, floorAreaFt2, volumeFt3
     );
 
@@ -239,7 +300,7 @@ export function computeRdsRow(
     // STEP 3 — Outdoor air coil loads (STEP4-01)
     // ══════════════════════════════════════════════════════════════════════════
     const oaLoads = calculateAllSeasonOALoads(
-      freshAirCheck, climate, dbInF, raRH, elevation
+      freshAirCheck, climate, dbInF, raRH, elevationFt
     );
 
     const oaFields: Record<string, number> = {};
@@ -282,7 +343,7 @@ export function computeRdsRow(
     // ══════════════════════════════════════════════════════════════════════════
     const eshfRes = computeEshf(
       peakCalcs, peakErshForCap, peakErlhForCap, oaPeak,
-      adpF, dbInF, elevation
+      adpF, dbInF, elevationFt
     );
 
     const { grADP_sat } = eshfRes;
@@ -323,8 +384,8 @@ export function computeRdsRow(
       dbInF,
       raRH,
       altCf,
-      Number(elevation),
-      revisedGrandTotal,
+      elevationFt,
+      Math.round(revisedGrandTotal),
       recircFraction
     );
 
@@ -370,7 +431,7 @@ export function computeRdsRow(
     // ══════════════════════════════════════════════════════════════════════════
     const psychroFields = calculateAllSeasonStatePoints(
       climate, dbInF, raRH, adpF, bf,
-      freshAirCheck, finalSupplyAir, Number(elevation), peakCoolingSeason
+      freshAirCheck, finalSupplyAir, elevationFt, peakCoolingSeason
     );
 
     if (!psychroFields || Object.keys(psychroFields).length === 0) {
