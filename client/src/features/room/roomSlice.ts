@@ -6,6 +6,42 @@
  *   state.room.list          →  Room[]
  *   state.room.activeRoomId  →  string | null
  *
+ * ── CHANGELOG v2.4 ────────────────────────────────────────────────────────────
+ *
+ *   FIX-R7 — makeRoom(): geometry not re-derived after override merge.
+ *
+ *     makeRoom() accepted overrides verbatim after spreading them into `merged`.
+ *     A caller passing conflicting geometry (e.g. { length:20, width:15,
+ *     floorArea:400 }) produced a room where length×width ≠ floorArea silently.
+ *     The default room overrides happened to be consistent, so no observed failure
+ *     — but the factory was unsafe for any programmatic caller.
+ *
+ *     Fix: after override merge and designDB derivation, re-derive floorArea from
+ *     length×width and volume from floorArea×height — matching the invariant
+ *     already enforced by updateRoom(). Canonical chain: l → w → floorArea → h → volume.
+ *
+ *   FIX-R8 — updateRoom(): classInOp change did not sync atRestClass.
+ *
+ *     Changing classInOp updated minAcph/designAcph from ACPH_RANGES but left
+ *     atRestClass at its previous value. The UI displayed a stale atRestClass
+ *     after the class changed. Calc layer unaffected (reads minAcph/designAcph
+ *     directly), but the inconsistency was misleading.
+ *
+ *     Fix: atRestClass is synced to the new classInOp value on every classInOp
+ *     change. Default behaviour: atRestClass = classInOp (equal classification
+ *     at rest). User may subsequently set a stricter (lower ISO number)
+ *     atRestClass independently via a direct updateRoom dispatch.
+ *
+ *   FIX-R9 — selectActiveRoom(): stale activeRoomId silently returned list[0].
+ *
+ *     If activeRoomId pointed to a non-existent room (stale after a delete bug
+ *     or external mutation), the selector silently returned list[0] — the wrong
+ *     room — with no diagnostic. Calculations would proceed on wrong room data
+ *     with no indication anything was wrong.
+ *
+ *     Fix: dev-mode console.warn fires when the fallback path is taken and
+ *     activeRoomId is non-null. Production behaviour unchanged.
+ *
  * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
  *
  *   FIX-R1 — makeRoom(): designDB desync when override supplies designDB only.
@@ -141,6 +177,15 @@
  *   overrides. updateRoom() re-derives it whenever field === 'designTemp'.
  *   Do not dispatch updateRoom({ field: 'designDB', value: X }) — it will be
  *   overwritten on the next designTemp change.
+ *
+ * ── atRestClass SYNC ──────────────────────────────────────────────────────────
+ *
+ *   atRestClass is auto-synced to classInOp whenever classInOp changes (FIX-R8).
+ *   Default assumption: at-rest classification equals in-operation classification.
+ *   To apply a stricter at-rest class (e.g. ISO 6 at rest / ISO 7 in operation),
+ *   dispatch a separate updateRoom({ field: 'atRestClass', value: 'ISO 6' })
+ *   after the classInOp change. atRestClass will not be overwritten again until
+ *   classInOp is next changed.
  */
 
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
@@ -184,6 +229,10 @@ const cToF_inline = (c: number | string): number | null => {
  *
  * designDB (°F) is ALWAYS derived from merged.designTemp (°C) after overrides
  * are applied — it cannot be independently set via overrides. (FIX-R1)
+ *
+ * Geometry (floorArea, volume) is ALWAYS re-derived from the canonical
+ * length/width/height chain after overrides are merged — overrides cannot
+ * produce an internally inconsistent room. (FIX-R7)
  */
 const makeRoom = (id: string, index: number = 0, overrides: Partial<Room> = {}): Room => {
   const base: Room = {
@@ -241,6 +290,17 @@ const makeRoom = (id: string, index: number = 0, overrides: Partial<Room> = {}):
   // supplied designDB without designTemp, causing a mismatch.
   const derivedDB = cToF_inline(merged.designTemp);
   if (derivedDB !== null) merged.designDB = derivedDB;
+
+  // FIX-R7: geometry is always re-derived from canonical l/w/h after override merge.
+  // Prevents inconsistent rooms if a caller passes conflicting overrides
+  // (e.g. { length:20, width:15, floorArea:400 } — l×w≠floorArea).
+  // Mirrors the invariant already enforced by updateRoom().
+  // Canonical chain: length × width → floorArea → × height → volume.
+  const _l = parseFloat(String(merged.length))  || 0;
+  const _w = parseFloat(String(merged.width))   || 0;
+  const _h = parseFloat(String(merged.height))  || 0;
+  if (_l > 0 && _w > 0) merged.floorArea = parseFloat((_l * _w).toFixed(1));
+  if (merged.floorArea > 0 && _h > 0) merged.volume = parseFloat((merged.floorArea * _h).toFixed(1));
 
   return merged;
 };
@@ -305,6 +365,10 @@ const roomSlice = createSlice({
      *   floorArea        → volume = fa × h,     width = fa / l  (l > 0)  [FIX-R3]
      *   volume           → height = vol / floorArea  (floorArea > 0)      [FIX-R2]
      *
+     * Classification invariant (post-v2.4):
+     *   classInOp        → atRestClass synced to same value               [FIX-R8]
+     *   User may set atRestClass independently afterward.
+     *
      * Note: dispatching field='designDB' directly is not supported — designDB
      * is always derived from designTemp and will be overwritten on the next
      * designTemp change. Set designTemp instead.
@@ -328,6 +392,11 @@ const roomSlice = createSlice({
           room.minAcph    = acph.min;
           room.designAcph = acph.design;
         }
+        // FIX-R8: sync atRestClass to the new classInOp value.
+        // Default assumption: at-rest classification = in-operation classification.
+        // Dispatch a separate updateRoom({ field: 'atRestClass', value: '...' })
+        // afterward to set a stricter at-rest class if required.
+        room.atRestClass = value as IsoClass;
       }
 
       // ── Geometry sync ───────────────────────────────────────────────────────
@@ -449,10 +518,22 @@ export const selectAllRooms = (state: RootState) => state.room.list;
 
 export const selectActiveRoomId = (state: RootState) => state.room.activeRoomId;
 
-export const selectActiveRoom = (state: RootState) =>
-  state.room.list.find(r => r.id === state.room.activeRoomId) ??
-  state.room.list[0] ??
-  null;
+/**
+ * selectActiveRoom
+ * Returns the room matching activeRoomId, falling back to list[0] if the ID
+ * is stale. In development, a console.warn fires on the fallback path to
+ * surface stale-ID bugs immediately. (FIX-R9)
+ */
+export const selectActiveRoom = (state: RootState) => {
+  const room = state.room.list.find(r => r.id === state.room.activeRoomId);
+  if (!room && import.meta.env.DEV && state.room.activeRoomId !== null) {
+    console.warn(
+      `[roomSlice] selectActiveRoom: activeRoomId="${state.room.activeRoomId}" ` +
+      `not found in list — falling back to list[0]. Possible stale ID.`
+    );
+  }
+  return room ?? state.room.list[0] ?? null;
+};
 
 export const selectRoomById = (state: RootState, id: string) =>
   state.room.list.find(r => r.id === id) ?? null;

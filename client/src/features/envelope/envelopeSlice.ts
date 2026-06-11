@@ -6,6 +6,42 @@
  * State shape:
  *   state.envelope.byRoomId  →  { [roomId]: RoomEnvelope }
  *
+ * ── CHANGELOG v2.3 ────────────────────────────────────────────────────────────
+ *
+ *   FIX-ENV-01 — addEnvelopeElement: no category guard caused runtime crash.
+ *
+ *     If `category` was not one of the six valid keys (walls/roofs/glass/
+ *     skylights/partitions/floors), elements[category] was undefined and
+ *     .push() threw an uncaught runtime error. Same crash in removeEnvelopeElement
+ *     via .filter() on undefined.
+ *
+ *     Fix: both reducers now return early (no-op) on an unrecognised category,
+ *     with a dev-mode console.warn pinpointing the bad dispatch.
+ *     updateEnvelopeElement was already safe (used optional chaining ?.find).
+ *
+ *   FIX-ENV-02 — setInternalLoads: new batch action to prevent triple selector fire.
+ *
+ *     updateInternalLoad updates a single load type (people | lights | equipment)
+ *     per dispatch. Any component initialising or resetting multiple load types
+ *     was forced to issue N sequential dispatches, each causing a full
+ *     rdsSelector recompute. In a default room with people + lights, this
+ *     produced three selector fires: initial (all-zero), after-people, after-lights.
+ *
+ *     Fix: setInternalLoads accepts a partial { people?, lights?, equipment? }
+ *     map and merges all provided sub-objects in a single Redux mutation.
+ *     One dispatch → one state change → one selector recompute.
+ *
+ *     updateInternalLoad is unchanged and correct for single-type edits
+ *     triggered by UI input events.
+ *
+ *   FIX-ENV-03 — field contract: corrected int. → internalLoads. prefix.
+ *
+ *     The FIELD NOTES section used the shorthand "int.people.count" etc.
+ *     The actual stored path from the RoomEnvelope root is
+ *     "internalLoads.people.count". The "int" alias is used by rdsSelector
+ *     when passing the sub-object to seasonalLoads (internal implementation
+ *     detail). Fixed to show the authoritative envelope-side path.
+ *
  * ── CHANGELOG v2.2 ────────────────────────────────────────────────────────────
  *
  *   INTEGRATION-01 FIX — extraReducers for addRoom / deleteRoom.
@@ -33,6 +69,20 @@
  *     Fix: module-level EMPTY_ENVELOPE constant. Stable reference; the fallback
  *     path now never creates a new object.
  *
+ *   ⚠️  KNOWN ISSUE — deleteRoom extraReducer fires even on last-room bail-out.
+ *
+ *     roomSlice.deleteRoom returns early if list.length <= 1, so the last room
+ *     is never removed. However, Redux extraReducers fire on the ACTION, not on
+ *     whether the primary reducer actually mutated state. If deleteRoom is
+ *     dispatched for the last room, this addCase(deleteRoom) still fires and
+ *     removes the envelope — leaving a room with no envelope (broken state).
+ *
+ *     Mitigation: deleteRoomWithCleanup() in roomActions.js mirrors the guard
+ *     (short-circuits before dispatch). NEVER dispatch deleteRoom directly.
+ *
+ *     Full fix would require emitting a separate deleteRoomSuccess action only
+ *     when the room is actually deleted, and reacting to that instead. Deferred.
+ *
  * ── CHANGELOG v2.1 ────────────────────────────────────────────────────────────
  *
  *   BUG-SLICE-02 FIX — initializeRoom dispatched with { id, room } payload.
@@ -43,43 +93,48 @@
  *   All must be present in the default factory so that parseFloat() and ??
  *   in the calc layer receive a numeric value, never undefined.
  *
+ *   Paths are from the RoomEnvelope root (state.envelope.byRoomId[roomId]).
+ *   Note: rdsSelector aliases internalLoads as "int" when passing to
+ *   seasonalLoads — this is an rdsSelector implementation detail, not the
+ *   stored field name. (FIX-ENV-03)
+ *
  *   PEOPLE (seasonalLoads.js):
- *     int.people.count                — occupant count
- *     int.people.sensiblePerPerson    — ASHRAE HOF Table 1 seated (BTU/hr)
- *     int.people.latentPerPerson      — ASHRAE HOF Table 1 seated (BTU/hr)
+ *     internalLoads.people.count                — occupant count
+ *     internalLoads.people.sensiblePerPerson     — ASHRAE HOF Table 1 seated (BTU/hr)
+ *     internalLoads.people.latentPerPerson       — ASHRAE HOF Table 1 seated (BTU/hr)
  *
  *   LIGHTS (seasonalLoads.js):
- *     int.lights.wattsPerSqFt         — installed lighting density
- *     int.lights.useSchedule          — operating fraction (0–100%)
- *     int.lights.ballastFactor        — lighting ballast loss multiplier.
- *                                       seasonalLoads reads:
- *                                         parseFloat(int.lights?.ballastFactor)
- *                                           || ASHRAE.LIGHTING_BALLAST_FACTOR
- *                                       Without this field the fallback fires
- *                                       silently and the UI has nothing to bind.
- *                                       1.0 = LED; T8 fluorescent = 1.2
+ *     internalLoads.lights.wattsPerSqFt          — installed lighting density
+ *     internalLoads.lights.useSchedule           — operating fraction (0–100%)
+ *     internalLoads.lights.ballastFactor         — lighting ballast loss multiplier.
+ *                                                  seasonalLoads reads:
+ *                                                    parseFloat(internalLoads.lights?.ballastFactor)
+ *                                                      || ASHRAE.LIGHTING_BALLAST_FACTOR
+ *                                                  Without this field the fallback fires
+ *                                                  silently and the UI has nothing to bind.
+ *                                                  1.0 = LED; T8 fluorescent = 1.2
  *
  *   EQUIPMENT (seasonalLoads.js):
- *     int.equipment.kw                — connected load
- *     int.equipment.sensiblePct       — fraction of kW that is sensible (0–100)
- *     int.equipment.latentPct         — fraction of kW that is latent   (0–100)
- *     int.equipment.diversityFactor   — simultaneous load fraction.
- *                                       seasonalLoads reads:
- *                                         parseFloat(int.equipment?.diversityFactor)
- *                                           ?? ASHRAE.PROCESS_DIVERSITY_FACTOR
- *                                       The ?? operator falls back ONLY on null |
- *                                       undefined — 0 and 0.5 pass through correctly.
- *                                       Without this field the fallback fires silently
- *                                       and the UI cannot expose it per-room.
- *                                       1.0 = fully loaded (conservative design).
- *                                       ASHRAE typical process diversity: 0.75–0.85.
+ *     internalLoads.equipment.kw                 — connected load
+ *     internalLoads.equipment.sensiblePct        — fraction of kW that is sensible (0–100)
+ *     internalLoads.equipment.latentPct          — fraction of kW that is latent   (0–100)
+ *     internalLoads.equipment.diversityFactor    — simultaneous load fraction.
+ *                                                  seasonalLoads reads:
+ *                                                    parseFloat(internalLoads.equipment?.diversityFactor)
+ *                                                      ?? ASHRAE.PROCESS_DIVERSITY_FACTOR
+ *                                                  The ?? operator falls back ONLY on null |
+ *                                                  undefined — 0 and 0.5 pass through correctly.
+ *                                                  Without this field the fallback fires silently
+ *                                                  and the UI cannot expose it per-room.
+ *                                                  1.0 = fully loaded (conservative design).
+ *                                                  ASHRAE typical process diversity: 0.75–0.85.
  *
  *   INFILTRATION (seasonalLoads.js):
- *     inf.achValue                    — infiltration air changes per hour.
- *                                       Default 0: positively pressurized / ISO-classified
- *                                       rooms have zero infiltration by definition.
- *                                       Reference: ISO 14644-4:2022 §6.4; ASHRAE HOF Ch.16.
- *                                       Only unpressurized rooms should have non-zero achValue.
+ *     infiltration.achValue                      — infiltration air changes per hour.
+ *                                                  Default 0: positively pressurized / ISO-classified
+ *                                                  rooms have zero infiltration by definition.
+ *                                                  Reference: ISO 14644-4:2022 §6.4; ASHRAE HOF Ch.16.
+ *                                                  Only unpressurized rooms should have non-zero achValue.
  *
  *   ELEMENTS (envelopeCalc.js + envelopeAggregator.js):
  *     elements.walls / roofs / glass / skylights / partitions / floors
@@ -99,6 +154,13 @@ import { RoomEnvelope, EnvelopeState, RootState, EnvelopeElement, InternalPeople
 // Used in extraReducers to keep envelopeSlice in sync with roomSlice atomically.
 // roomSlice does NOT import from envelopeSlice — no circular dependency.
 import { addRoom, deleteRoom } from '../room/roomSlice';
+
+// ── Valid element categories ──────────────────────────────────────────────────
+// Used by addEnvelopeElement and removeEnvelopeElement to guard against unknown
+// category strings that would cause a runtime crash (push/filter on undefined).
+const VALID_ELEMENT_CATEGORIES = new Set([
+  'walls', 'roofs', 'glass', 'skylights', 'partitions', 'floors',
+]);
 
 // ── Default envelope factory ──────────────────────────────────────────────────
 const createRoomEnvelope = (): RoomEnvelope => ({
@@ -202,9 +264,22 @@ const envelopeSlice = createSlice({
      * addEnvelopeElement
      * Append a new element to a category array.
      * { roomId, category, element }  —  category: 'walls' | 'roofs' | 'glass' | etc.
+     *
+     * FIX-ENV-01: returns early (no-op + dev warn) on unknown category to prevent
+     * a runtime crash from .push() on undefined.
      */
     addEnvelopeElement: (state, action: PayloadAction<{ roomId: string; category: string; element: any }>) => {
       const { roomId, category, element } = action.payload;
+
+      // FIX-ENV-01: guard against unknown category — push() on undefined crashes.
+      if (!VALID_ELEMENT_CATEGORIES.has(category)) {
+        if (import.meta.env.DEV) {
+          console.warn(`[envelopeSlice] addEnvelopeElement: unknown category "${category}". ` +
+            `Valid: ${[...VALID_ELEMENT_CATEGORIES].join(', ')}`);
+        }
+        return;
+      }
+
       if (!state.byRoomId[roomId]) {
         state.byRoomId[roomId] = createRoomEnvelope();
       }
@@ -218,6 +293,8 @@ const envelopeSlice = createSlice({
      * updateEnvelopeElement
      * Edit a single field on an existing element.
      * { roomId, category, id, field, value }
+     *
+     * Safe against unknown category — uses optional chaining ?.find().
      */
     updateEnvelopeElement: (state, action: PayloadAction<{ roomId: string; category: string; id: string; field: string; value: any }>) => {
       const { roomId, category, id, field, value } = action.payload;
@@ -230,9 +307,22 @@ const envelopeSlice = createSlice({
     /**
      * removeEnvelopeElement
      * { roomId, category, id }
+     *
+     * FIX-ENV-01: returns early (no-op + dev warn) on unknown category to prevent
+     * a runtime crash from .filter() on undefined.
      */
     removeEnvelopeElement: (state, action: PayloadAction<{ roomId: string; category: string; id: string }>) => {
       const { roomId, category, id } = action.payload;
+
+      // FIX-ENV-01: guard against unknown category — filter() on undefined crashes.
+      if (!VALID_ELEMENT_CATEGORIES.has(category)) {
+        if (import.meta.env.DEV) {
+          console.warn(`[envelopeSlice] removeEnvelopeElement: unknown category "${category}". ` +
+            `Valid: ${[...VALID_ELEMENT_CATEGORIES].join(', ')}`);
+        }
+        return;
+      }
+
       const roomEnv = state.byRoomId[roomId];
       if (!roomEnv) return;
       roomEnv.elements[category] = roomEnv.elements[category].filter((e: EnvelopeElement) => e.id !== id);
@@ -240,11 +330,15 @@ const envelopeSlice = createSlice({
 
     /**
      * updateInternalLoad
-     * Merge-update a sub-object (people | lights | equipment).
+     * Merge-update a single sub-object (people | lights | equipment).
      * { roomId, type, data }  —  type: 'people' | 'lights' | 'equipment'
      *
      * Uses Object.assign (merge) so callers can update a single field
      * without passing the entire sub-object.
+     *
+     * For updating multiple load types in one dispatch, use setInternalLoads.
+     * Dispatching updateInternalLoad N times causes N selector recomputes;
+     * setInternalLoads causes exactly one. (FIX-ENV-02)
      */
     updateInternalLoad: (state, action: PayloadAction<{ roomId: string; type: 'people' | 'lights' | 'equipment'; data: any }>) => {
       const { roomId, type, data } = action.payload;
@@ -253,6 +347,47 @@ const envelopeSlice = createSlice({
       }
       const target = state.byRoomId[roomId].internalLoads[type];
       if (target) Object.assign(target, data);
+    },
+
+    /**
+     * setInternalLoads  (FIX-ENV-02)
+     * Merge-update one or more internal load sub-objects in a single dispatch.
+     *
+     * This is the correct action for initialization or multi-type resets.
+     * It replaces N sequential updateInternalLoad dispatches with one, so
+     * rdsSelector recomputes exactly once regardless of how many load types
+     * are being set.
+     *
+     * Only the keys present in `data` are updated; omitted keys are unchanged.
+     * Within each sub-object, Object.assign merges the provided fields — partial
+     * updates are safe (omit any fields you don't want to change).
+     *
+     * Example (batch initialization — one dispatch, one recompute):
+     *   dispatch(setInternalLoads({
+     *     roomId: 'room_1',
+     *     data: {
+     *       people:    { count: 4 },
+     *       lights:    { wattsPerSqFt: 0.5, useSchedule: 80 },
+     *       equipment: { kw: 5.0, diversityFactor: 0.80 },
+     *     },
+     *   }));
+     */
+    setInternalLoads: (state, action: PayloadAction<{
+      roomId: string;
+      data: {
+        people?:    Partial<InternalPeople>;
+        lights?:    Partial<InternalLights>;
+        equipment?: Partial<InternalEquipment>;
+      };
+    }>) => {
+      const { roomId, data } = action.payload;
+      if (!state.byRoomId[roomId]) {
+        state.byRoomId[roomId] = createRoomEnvelope();
+      }
+      const loads = state.byRoomId[roomId].internalLoads;
+      if (data.people    && loads.people)    Object.assign(loads.people,    data.people);
+      if (data.lights    && loads.lights)    Object.assign(loads.lights,    data.lights);
+      if (data.equipment && loads.equipment) Object.assign(loads.equipment, data.equipment);
     },
 
     /**
@@ -314,13 +449,13 @@ const envelopeSlice = createSlice({
      * Remove the envelope in the same dispatch as the room deletion.
      * After this, no orphaned envelope entries remain in byRoomId.
      *
-     * NOTE: deleteRoom's reducer guards against deleting the last room
-     * (returns early if list.length <= 1). deleteRoomWithCleanup() in
-     * roomActions.js mirrors this guard before dispatching, so in normal
-     * usage this case never fires for the last room. If deleteRoom is
-     * dispatched directly and its reducer returns early, this case will
-     * still fire — leaving the envelope deleted but the room intact.
-     * Always use deleteRoomWithCleanup(), never dispatch deleteRoom directly.
+     * ⚠️  LAST-ROOM EDGE CASE (see CHANGELOG v2.2 known issue):
+     * deleteRoom's reducer guards against deleting the last room (returns
+     * early if list.length <= 1). This extraReducers case fires regardless
+     * of whether the primary reducer actually deleted the room — so if
+     * deleteRoom is dispatched directly for the last room, the envelope
+     * is deleted but the room survives. Always use deleteRoomWithCleanup(),
+     * never dispatch deleteRoom directly.
      */
     builder.addCase(deleteRoom, (state, action) => {
       delete state.byRoomId[action.payload];
@@ -334,6 +469,7 @@ export const {
   updateEnvelopeElement,
   removeEnvelopeElement,
   updateInternalLoad,
+  setInternalLoads,
   updateInfiltration,
   removeRoomEnvelope,
 } = envelopeSlice.actions;
