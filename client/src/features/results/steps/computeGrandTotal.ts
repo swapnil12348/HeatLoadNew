@@ -2,11 +2,25 @@
  * steps/computeGrandTotal.ts
  * STEP 4 / STEP5-01 — Peak cooling season selection, fan heat proxy, grand total.
  *
- * ⚠ HIGH-RDS-01 NOTE:
- *   supplyFanHeatBTU uses a percentage-of-capacity proxy because ahu.fanMotorKW is
- *   not yet in ahuSlice. The Excel formula (motor kW × 3412) gives ~17 000 BTU/hr
- *   for a 5 kW fan; this proxy gives ~400–900 BTU. Fix: add fanMotorKW to ahuSlice
- *   and replace the proxy with `ahu.fanMotorKW * KW_TO_BTU_HR`.
+ * ⚠ HIGH-RDS-01 NOTE (comment updated — stale "400–900 BTU" claim removed):
+ *   supplyFanHeatBTU uses a percentage-of-capacity proxy:
+ *     fanHeatPct × Cs × supplyAir × (dbInF − adpF) × (1 − bf)
+ *   = fanHeatPct × (full sensible capacity of the coil-air stream)
+ *
+ *   For a 14 000 CFM system at 5 %: ≈ 18 000 BTU/hr — comparable in magnitude to the
+ *   exact motor-power formula (5 kW fan × 3 412 = 17 060 BTU/hr). The previous comment
+ *   that said "~400–900 BTU" was written when the formula was `fanHeatPct × ERSH` (room
+ *   sensible only) and was never updated after the formula was upgraded.
+ *
+ *   ⟶ HIGH-RDS-01 STILL OPEN: ideal formula is `ahu.fanMotorKW × KW_TO_BTU_HR` once
+ *     fanMotorKW is added to ahuSlice (exact motor nameplate power). The proxy overstates
+ *     fan heat for small DX units (<5 000 CFM) and understates for high-static systems
+ *     (>2 inWG). For CHW AHUs in the 5 000–30 000 CFM range the proxy is ±30 %.
+ *
+ *   returnFanHeatBTU = supplyFanHeatBTU × returnFanHeatFraction.
+ *   Interpretation: the return fan contributes X % of what the supply fan adds.
+ *   Typical: 5 % (small inline return fan) → 20 % (balanced supply/return system).
+ *   This is NOT a second independent percentage-of-capacity calculation.
  *
  * Reference: ASHRAE HOF 2021 Ch.18
  */
@@ -67,18 +81,34 @@ export function computeGrandTotal(
     _warn(`STEP5-01: systemDesign.returnFanHeat="${systemDesign.returnFanHeat}" invalid — using 5% default`);
   }
 
-  // Percentage-of-capacity proxy (HIGH-RDS-01 pending fix — see file header).
-  const supplyFanHeatBTU = Math.round(
-    Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf)) * supplyFanHeatFraction
-  );
+  // Percentage-of-capacity proxy (HIGH-RDS-01 — see file header).
+  // Formula: fanHeatPct × |Cs × supplyAir × (dbInF − adpF) × (1 − bf)|
+  const coilSensibleBase = Math.abs(Cs * supplyAir * (dbInF - adpF) * (1 - bf));
+  const supplyFanHeatBTU = Math.round(coilSensibleBase * supplyFanHeatFraction);
+  // Return fan heat = fraction of supply fan heat (NOT an independent capacity %).
+  // See file header for interpretation. 5% default → small inline return fan.
   const returnFanHeatBTU = Math.round(supplyFanHeatBTU * returnFanHeatFraction);
 
-  if (supplyAir > 1000 && supplyFanHeatBTU < 500) {
+  // ── Fan heat audit log — shows formula inputs for traceability ────────────
+  _log(
+    `STEP5-01: fanHeat proxy — Cs=${Cs}×SA=${Math.round(supplyAir)}` +
+    `×(db${dbInF.toFixed(1)}-adp${adpF})×(1-bf${bf})` +
+    ` = ${Math.round(coilSensibleBase)} BTU base | ` +
+    `supply=${supplyFanHeatBTU} (${(supplyFanHeatFraction * 100).toFixed(0)}% of base) | ` +
+    `return=${returnFanHeatBTU} (${(returnFanHeatFraction * 100).toFixed(0)}% of supply fan heat)`
+  );
+
+  // Sanity guard: for any real AHU serving >1 000 CFM, fan heat should exceed
+  // 0.5 BTU/CFM. A value below this implies a near-zero supplyDT, zero fanHeat%,
+  // or a formula path that is not running (HIGH-RDS-01).
+  if (supplyAir > 1000 && supplyFanHeatBTU < Math.round(supplyAir * 0.5)) {
     _warn(
-      `STEP5-02 HIGH-RDS-01: supplyFanHeatBTU=${supplyFanHeatBTU} is very low ` +
-      `for supplyAir=${Math.round(supplyAir)} CFM. ` +
-      `Excel motor-power formula gives ~17,000 BTU/hr for a 5 kW fan. ` +
-      `This will understate grandTotal and coolingCapTR until ahu.fanMotorKW is added to ahuSlice.`
+      `STEP5-02 HIGH-RDS-01: supplyFanHeatBTU=${supplyFanHeatBTU} BTU/hr is very low ` +
+      `for supplyAir=${Math.round(supplyAir)} CFM (< 0.5 BTU/CFM). ` +
+      `Expected ≥ ${Math.round(supplyAir * 1.0)}–${Math.round(supplyAir * 2.0)} BTU/hr. ` +
+      `Likely causes: (1) fanHeat%≈0, (2) supplyDT≈0 (dbInF≈adpF), ` +
+      `or (3) HIGH-RDS-01 — proxy formula receiving unexpected inputs. ` +
+      `Inputs: Cs=${Cs}, supplyAir=${Math.round(supplyAir)}, dbInF=${dbInF.toFixed(1)}, adpF=${adpF}, bf=${bf}.`
     );
   }
 
