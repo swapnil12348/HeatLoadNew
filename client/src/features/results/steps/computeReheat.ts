@@ -43,6 +43,17 @@ export function computeReheat(
   roomId:            string,
 ): ReheatResult {
 
+  // ── ENTRY ─────────────────────────────────────────────────────────────────
+  _log(
+    `STEP7-01: ENTER peakCoolingSeason=${peakCoolingSeason}` +
+    ` | dbInF=${dbInF.toFixed(1)}°F adpF=${adpF.toFixed(1)}°F bf=${bf}` +
+    ` | supplyAir=${Math.round(supplyAir)}CFM thermalCFM=${Math.round(thermalCFM)}` +
+    ` | Cs=${Cs.toFixed(4)} Cl=${Cl.toFixed(4)}` +
+    ` | grandTotal=${Math.round(grandTotal)} coilLoadBTU=${Math.round(coilLoadBTU)}BTU/hr` +
+    ` | grADP_sat=${grADP_sat?.toFixed(2)}gr/lb grIn=${peakCalcs.grIn?.toFixed(2)}gr/lb`
+  );
+
+  // ── supplyDT ──────────────────────────────────────────────────────────────
   const supplyDT = (1 - bf) * (dbInF - adpF);
 
   if (supplyDT <= 0) {
@@ -51,16 +62,33 @@ export function computeReheat(
       `adpF=${adpF.toFixed(1)}, dbInF=${dbInF.toFixed(1)}, bf=${bf}. ` +
       `Fan heat will be 0 and reheat check will be skipped.`
     );
+  } else {
+    _log(
+      `STEP7-01: supplyDT=(1-${bf})×(${dbInF.toFixed(1)}-${adpF.toFixed(1)})` +
+      ` = ${(1 - bf).toFixed(3)}×${(dbInF - adpF).toFixed(2)}` +
+      ` = ${supplyDT.toFixed(3)}°F`
+    );
   }
 
-  // ── minESHF: minimum ESHF the coil can deliver at this ADP and BF ────────
-  // Denominator uses grADP_sat passed in from computeEshf (declared once, used
-  // in both STEP 4b and 4c — avoids recomputing calculateGrains here).
+  // ── minESHF ───────────────────────────────────────────────────────────────
+  // Extract grDelta as a named const — used in both the formula and the log.
+  // Denominator uses grADP_sat passed in from computeEshf (declared once,
+  // avoids recomputing calculateGrains here).
   const minESHFNum   = Cs * supplyDT;
-  const minESHFDenom = minESHFNum + Cl * Math.max(0, peakCalcs.grIn - grADP_sat);
+  const grDeltaMinESHF = Math.max(0, peakCalcs.grIn - grADP_sat);
+  const minESHFDenom = minESHFNum + Cl * grDeltaMinESHF;
   const minESHF      = supplyDT > 0 && minESHFDenom > 0 ? minESHFNum / minESHFDenom : 1.0;
 
-  // ── Room ESHF from raw (pre-safety) sensible / total ─────────────────────
+  _log(
+    `STEP7-01: minESHF — sensible_term=Cs×supplyDT=${Cs.toFixed(4)}×${supplyDT.toFixed(3)}=${minESHFNum.toFixed(3)}` +
+    ` | grDelta=max(0,${peakCalcs.grIn?.toFixed(2)}-${grADP_sat?.toFixed(2)})=${grDeltaMinESHF.toFixed(3)}gr/lb` +
+    ` | latent_term=Cl×grDelta=${Cl.toFixed(4)}×${grDeltaMinESHF.toFixed(3)}=${(Cl * grDeltaMinESHF).toFixed(3)}` +
+    ` | denom=${minESHFDenom.toFixed(4)}` +
+    ` → minESHF=${minESHFNum.toFixed(3)}/${minESHFDenom.toFixed(3)}=${minESHF.toFixed(4)}` +
+    `${supplyDT <= 0 || minESHFDenom <= 0 ? ' [FALLBACK=1.0]' : ''}`
+  );
+
+  // ── roomESHF ──────────────────────────────────────────────────────────────
   const reheatCalcs = seasonCalcs[peakCoolingSeason];
   const reheatErsh  = seasonResults[`ershOn_${peakCoolingSeason}`] || 0;
   const reheatErlh  = seasonResults[`erlhOn_${peakCoolingSeason}`] || 0;
@@ -68,6 +96,16 @@ export function computeReheat(
   const erthRaw  = reheatCalcs.rawSensible + reheatCalcs.rawLatent;
   const erthSafe = reheatErsh + reheatErlh;
   const roomESHF = erthRaw > 0 ? reheatCalcs.rawSensible / erthRaw : 1.0;
+
+  _log(
+    `STEP7-01: roomESHF — season[${peakCoolingSeason}]` +
+    ` rawSens=${Math.round(reheatCalcs.rawSensible)} rawLat=${Math.round(reheatCalcs.rawLatent)}` +
+    ` | erthRaw=${Math.round(erthRaw)}BTU/hr` +
+    ` | reheatErsh=${Math.round(reheatErsh)} reheatErlh=${Math.round(reheatErlh)}` +
+    ` | erthSafe=${Math.round(erthSafe)}BTU/hr` +
+    ` → roomESHF=${reheatCalcs.rawSensible?.toFixed(0)}/${erthRaw?.toFixed(0)}=${roomESHF.toFixed(4)}` +
+    `${erthRaw <= 0 ? ' [FALLBACK=1.0 — zero total load]' : ''}`
+  );
 
   if (
     _badNum(reheatCalcs.rawSensible, 'rawSensible', roomId) ||
@@ -105,7 +143,21 @@ export function computeReheat(
   } else if (supplyDT > 0 && roomESHF < minESHF - 0.001) {
     // CRIT-RDS-03: `&& minESHF < 1.0` guard intentionally absent — see file header.
     reheatRequired = true;
-    reheatBTU = Math.max(0, (minESHF * erthSafe - reheatErsh) / (1 - minESHF));
+
+    // Extract numerator and denominator as named values for auditability.
+    const reheatNumerator   = minESHF * erthSafe - reheatErsh;
+    const reheatDenominator = 1 - minESHF;
+    reheatBTU = Math.max(0, reheatNumerator / reheatDenominator);
+
+    _log(
+      `STEP7-01: reheat formula — (minESHF×erthSafe − reheatErsh) / (1 − minESHF)` +
+      ` = (${minESHF.toFixed(4)}×${Math.round(erthSafe)} − ${Math.round(reheatErsh)})` +
+      ` / (1 − ${minESHF.toFixed(4)})` +
+      ` = ${reheatNumerator.toFixed(1)} / ${reheatDenominator.toFixed(5)}` +
+      ` = ${(reheatNumerator / reheatDenominator).toFixed(1)}BTU/hr` +
+      `${reheatNumerator < 0 ? ' → max(0,·)=0 [numerator negative]' : ''}`
+    );
+
     _warn(
       `STEP7-01: REHEAT REQUIRED — roomESHF=${roomESHF.toFixed(3)} < minESHF=${minESHF.toFixed(3)}. ` +
       `reheatBTU=${Math.round(reheatBTU)}, reheatKW=${(reheatBTU / KW_TO_BTU_HR).toFixed(2)}`
@@ -137,7 +189,9 @@ export function computeReheat(
 
   _log(
     `STEP5-01: coolingCapTR=${coolingCapTR} TR (type=${typeof coolingCapTR}), ` +
-    `revisedGrandTotal=${Math.round(revisedGrandTotal)} BTU/hr`
+    `revisedGrandTotal=${Math.round(revisedGrandTotal)} BTU/hr, ` +
+    `revisedCoilLoadBTU=${Math.round(revisedCoilLoadBTU)} BTU/hr` +
+    ` [grandTotal=${Math.round(grandTotal)} + reheatBTU=${Math.round(reheatBTU)}]`
   );
 
   // ── Revised air quantities (post-reheat) ──────────────────────────────────
@@ -163,6 +217,15 @@ export function computeReheat(
       `${Math.round(finalSupplyAir)} CFM (governed by: reheat)`
     );
   }
+
+  // Always log final air quantities — previous log only fires when supply changed.
+  _log(
+    `STEP7-01: final air qtys` +
+    ` | supply=${Math.round(finalSupplyAir)}CFM (governed=${finalSupplyAirGoverned})` +
+    ` | coil=${Math.round(finalCoilAir)} bypass=${Math.round(finalBypassAir)} return=${Math.round(finalReturnAir)}` +
+    ` | revisedThermalCFM=${Math.round(revisedThermalCFM)} thermalIn=${Math.round(thermalCFM)}` +
+    ` | ACPH=${finalSupplyAcph}`
+  );
 
   return {
     reheatRequired,

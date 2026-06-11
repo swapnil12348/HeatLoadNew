@@ -78,6 +78,22 @@
 
 import ASHRAE from '../constants/ashrae';
 
+// ─── Audit logging ────────────────────────────────────────────────────────────
+//
+// PSYCH_LOG     – always-on trace for low-frequency functions:
+//                   calculateDewPoint, grainsFromDewPoint,
+//                   calculateAdpFromLoads, calculateRequiredADP,
+//                   altitudeCorrectionFactor (elev > 0 only).
+//
+// PSYCH_VERBOSE – high-frequency functions: calculateGrains, calculateRH,
+//                 calculateEnthalpy, calculateWetBulb, calculateSpecificVolume.
+//                 psychroStatePoints.ts computes 71 state points per RDS row,
+//                 so VERBOSE produces 200+ lines per selector run.
+//                 Leave OFF unless tracing a specific state-point bug.
+const PSYCH_LOG     = true;
+const PSYCH_VERBOSE = false;
+const TAG = '[psychro]';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,6 +152,9 @@ const HW_LIQ = {
  *   T < 0°C  → ice surface (Eq.3) — frost point conditions
  *   T ≥ 0°C  → liquid surface (Eq.5) — dew point conditions
  *
+ * NOT logged here — called ~10× per calculateGrains call.
+ * Verify its output indirectly via the Es values in calculateGrains logs.
+ *
  * @param {number} dbC - temperature (°C), valid −100 to +200
  * @returns {number} saturation vapour pressure (hPa)
  */
@@ -185,7 +204,12 @@ const saturatedW = (tC: number, Patm: number): number => {
 export const altitudeCorrectionFactor = (elevFt: number | string = 0): number => {
   const elev = Math.max(0, parseFloat(String(elevFt)) || 0);
   if (elev === 0) return 1;
-  return Math.pow(1 - 6.8754e-6 * elev, 5.2559);
+  const cf = Math.pow(1 - 6.8754e-6 * elev, 5.2559);
+  PSYCH_LOG && console.log(
+    `${TAG} altitudeCorrectionFactor: elev=${elev}ft` +
+    ` → Patm=${(1013.25 * cf).toFixed(2)}hPa Cf=${cf.toFixed(6)}`
+  );
+  return cf;
 };
 
 /**
@@ -241,19 +265,39 @@ export const calculateGrains = (
 ): number => {
   const dbFNum = parseFloat(String(dbF));
   const rhNum = parseFloat(String(rh));
-  if (isNaN(dbFNum) || isNaN(rhNum)) return 0;
+  if (isNaN(dbFNum) || isNaN(rhNum)) {
+    PSYCH_VERBOSE && console.warn(
+      `${TAG} calculateGrains: NaN input — db=${dbF} rh=${rh} → 0`
+    );
+    return 0;
+  }
 
   const rhClamped = Math.min(100, Math.max(0, rhNum));
   const dbC = ((dbFNum - 32) * 5) / 9;
   const Es = saturationPressure(dbC);
   const E = (rhClamped / 100) * Es;
   const Patm = sitePressure(elevFt);
-  if (Patm <= E) return 0;
+
+  if (Patm <= E) {
+    // Non-physical: partial pressure exceeds atmospheric. Likely bad inputs.
+    console.warn(
+      `${TAG} calculateGrains: ⚠ Patm(${Patm.toFixed(2)}hPa) ≤ E(${E.toFixed(2)}hPa)` +
+      ` at DB=${dbF}°F RH=${rh}% — returning 0`
+    );
+    return 0;
+  }
 
   const W_kg = (0.62198 * E) / (Patm - E);
   const grains = W_kg * ASHRAE.GR_PER_LB;
 
-  if (isNaN(grains) || grains < 0) return 0;
+  if (isNaN(grains) || grains < 0) {
+    console.warn(
+      `${TAG} calculateGrains: ⚠ NaN/negative result` +
+      ` W_kg=${W_kg} at DB=${dbF}°F RH=${rh}% → 0`
+    );
+    return 0;
+  }
+
   if (grains > 500) {
     console.warn(
       `calculateGrains: result ${grains.toFixed(1)} gr/lb exceeds physical bounds ` +
@@ -261,6 +305,14 @@ export const calculateGrains = (
     );
     return 500;
   }
+
+  PSYCH_VERBOSE && console.log(
+    `${TAG} calculateGrains: DB=${dbF}°F RH=${rh}% elev=${elevFt}ft` +
+    ` → dbC=${dbC.toFixed(2)}°C Es=${Es.toFixed(4)}hPa E=${E.toFixed(4)}hPa` +
+    ` Patm=${Patm.toFixed(2)}hPa W=${W_kg.toFixed(6)}kg/kg` +
+    ` → ${grains.toFixed(3)}gr/lb`
+  );
+
   return grains;
 };
 
@@ -282,7 +334,12 @@ export const calculateRH = (
 ): number => {
   const dbFNum = parseFloat(String(dbF));
   const grNum = parseFloat(String(grains));
-  if (isNaN(dbFNum) || isNaN(grNum) || grNum < 0) return 0;
+  if (isNaN(dbFNum) || isNaN(grNum) || grNum < 0) {
+    PSYCH_VERBOSE && console.warn(
+      `${TAG} calculateRH: invalid input db=${dbF} gr=${grains} → 0`
+    );
+    return 0;
+  }
 
   const dbC = ((dbFNum - 32) * 5) / 9;
   const Es = saturationPressure(dbC);
@@ -292,8 +349,15 @@ export const calculateRH = (
   const W = grNum / ASHRAE.GR_PER_LB;
   const E = (W * Patm) / (0.62198 + W);
   const rh = (E / Es) * 100;
+  const result = isNaN(rh) ? 0 : Math.min(100, Math.max(0, rh));
 
-  return isNaN(rh) ? 0 : Math.min(100, Math.max(0, rh));
+  PSYCH_VERBOSE && console.log(
+    `${TAG} calculateRH: DB=${dbF}°F gr=${grains}gr/lb elev=${elevFt}ft` +
+    ` → dbC=${dbC.toFixed(2)}°C Es=${Es.toFixed(4)}hPa W=${W.toFixed(6)}kg/kg` +
+    ` E=${E.toFixed(4)}hPa → ${result.toFixed(2)}%RH`
+  );
+
+  return result;
 };
 
 /**
@@ -332,11 +396,27 @@ export const calculateDewPoint = (
   const dbFNum = parseFloat(String(dbF));
   const rhNum = parseFloat(String(rh));
 
-  if (isNaN(dbFNum) || isNaN(rhNum)) return 0;
-  if (rhNum <= 0) return null;
+  if (isNaN(dbFNum) || isNaN(rhNum)) {
+    PSYCH_LOG && console.warn(
+      `${TAG} calculateDewPoint: NaN input db=${dbF} rh=${rh} → 0`
+    );
+    return 0;
+  }
+  if (rhNum <= 0) {
+    PSYCH_LOG && console.log(
+      `${TAG} calculateDewPoint: RH=${rh}% ≤ 0 — dew point undefined → null`
+    );
+    return null;
+  }
 
   const rhClamped = Math.min(100, Math.max(0.001, rhNum));
-  if (rhClamped >= 100) return Math.round(dbFNum * 10) / 10;
+
+  if (rhClamped >= 100) {
+    PSYCH_LOG && console.log(
+      `${TAG} calculateDewPoint: RH=100% → DP=DB=${dbFNum}°F (saturated)`
+    );
+    return Math.round(dbFNum * 10) / 10;
+  }
 
   const dbC = ((dbFNum - 32) * 5) / 9;
   const Es = saturationPressure(dbC);
@@ -366,7 +446,16 @@ export const calculateDewPoint = (
 
   const dpC = (lo + hi) / 2;
   const dpF = dpC * (9 / 5) + 32;
-  return isNaN(dpF) ? 0 : Math.round(dpF * 10) / 10;
+  const result = isNaN(dpF) ? 0 : Math.round(dpF * 10) / 10;
+
+  PSYCH_LOG && console.log(
+    `${TAG} calculateDewPoint: DB=${dbF}°F RH=${rh}%` +
+    ` → dbC=${dbC.toFixed(2)}°C Es=${Es.toFixed(4)}hPa Epw=${Epw.toFixed(4)}hPa` +
+    ` → dpC=${dpC.toFixed(3)}°C → DP=${result}°F` +
+    `${result < 32 ? ' (FROST POINT — ice surface)' : ''}`
+  );
+
+  return result;
 };
 
 /**
@@ -385,16 +474,36 @@ export const grainsFromDewPoint = (
   elevFt: number | string = 0
 ): number => {
   const dpFNum = parseFloat(String(dpF));
-  if (isNaN(dpFNum)) return 0;
+  if (isNaN(dpFNum)) {
+    PSYCH_LOG && console.warn(
+      `${TAG} grainsFromDewPoint: NaN input dpF=${dpF} → 0`
+    );
+    return 0;
+  }
 
   const dpC = ((dpFNum - 32) * 5) / 9;
   const Edp = saturationPressure(dpC);
   const Patm = sitePressure(elevFt);
-  if (Patm <= Edp) return 0;
+
+  if (Patm <= Edp) {
+    console.warn(
+      `${TAG} grainsFromDewPoint: ⚠ Patm(${Patm.toFixed(2)}hPa) ≤ Edp(${Edp.toFixed(2)}hPa)` +
+      ` at DP=${dpF}°F — returning 0`
+    );
+    return 0;
+  }
 
   const W_kg = (0.62198 * Edp) / (Patm - Edp);
   const gr = W_kg * ASHRAE.GR_PER_LB;
-  return isNaN(gr) || gr < 0 ? 0 : gr;
+  const result = isNaN(gr) || gr < 0 ? 0 : gr;
+
+  PSYCH_LOG && console.log(
+    `${TAG} grainsFromDewPoint: DP=${dpF}°F elev=${elevFt}ft` +
+    ` → dpC=${dpC.toFixed(2)}°C Edp=${Edp.toFixed(4)}hPa Patm=${Patm.toFixed(2)}hPa` +
+    ` W=${W_kg.toFixed(6)}kg/kg → ${result.toFixed(3)}gr/lb`
+  );
+
+  return result;
 };
 
 /**
@@ -416,7 +525,15 @@ export const calculateEnthalpy = (
   const t = parseFloat(String(dbF)) || 0;
   const W = (parseFloat(String(grains)) || 0) / ASHRAE.GR_PER_LB;
   const h = 0.240 * t + W * (ASHRAE.LATENT_HFG_BTU_LB + 0.444 * t);
-  return isNaN(h) ? 0 : h;
+  const result = isNaN(h) ? 0 : h;
+
+  PSYCH_VERBOSE && console.log(
+    `${TAG} calculateEnthalpy: DB=${dbF}°F gr=${grains}gr/lb` +
+    ` → W=${W.toFixed(6)}lb/lb sensible=${(0.240 * t).toFixed(3)} latent=${(W * (ASHRAE.LATENT_HFG_BTU_LB + 0.444 * t)).toFixed(3)}` +
+    ` → h=${result.toFixed(4)}BTU/lb`
+  );
+
+  return result;
 };
 
 /**
@@ -440,10 +557,20 @@ export const calculateWetBulb = (
 ): number => {
   const dbFNum = parseFloat(String(dbF));
   const rhNum = parseFloat(String(rh));
-  if (isNaN(dbFNum) || isNaN(rhNum)) return dbFNum || 0;
+  if (isNaN(dbFNum) || isNaN(rhNum)) {
+    PSYCH_VERBOSE && console.warn(
+      `${TAG} calculateWetBulb: NaN input db=${dbF} rh=${rh} → ${dbFNum || 0}`
+    );
+    return dbFNum || 0;
+  }
 
   const rhClamped = Math.min(100, Math.max(0, rhNum));
-  if (rhClamped >= 100) return Math.round(dbFNum * 10) / 10;
+  if (rhClamped >= 100) {
+    PSYCH_VERBOSE && console.log(
+      `${TAG} calculateWetBulb: RH=100% → WB=DB=${dbFNum.toFixed(1)}°F`
+    );
+    return Math.round(dbFNum * 10) / 10;
+  }
 
   const db = ((dbFNum - 32) * 5) / 9;
   const Patm = sitePressure(elevFt);
@@ -464,7 +591,14 @@ export const calculateWetBulb = (
 
   let lo = -40;
   let hi = db;
-  if (f(lo) * f(hi) > 0) return Math.round(dbFNum * 10) / 10;
+  if (f(lo) * f(hi) > 0) {
+    PSYCH_VERBOSE && console.warn(
+      `${TAG} calculateWetBulb: bisection bounds have same sign` +
+      ` f(-40°C)=${f(lo).toFixed(4)} f(${db.toFixed(1)}°C)=${f(hi).toFixed(4)}` +
+      ` — returning DB=${dbFNum.toFixed(1)}°F`
+    );
+    return Math.round(dbFNum * 10) / 10;
+  }
 
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
@@ -478,7 +612,15 @@ export const calculateWetBulb = (
 
   const wbC = (lo + hi) / 2;
   const wbF = wbC * (9 / 5) + 32;
-  return isNaN(wbF) ? dbFNum : Math.round(wbF * 10) / 10;
+  const result = isNaN(wbF) ? dbFNum : Math.round(wbF * 10) / 10;
+
+  PSYCH_VERBOSE && console.log(
+    `${TAG} calculateWetBulb: DB=${dbF}°F RH=${rh}% elev=${elevFt}ft` +
+    ` → db=${db.toFixed(2)}°C W=${W.toFixed(6)}kg/kg` +
+    ` → wbC=${wbC.toFixed(3)}°C → WB=${result}°F (ΔDB-WB=${(dbFNum - result).toFixed(1)}°F)`
+  );
+
+  return result;
 };
 
 /**
@@ -505,7 +647,15 @@ export const calculateSpecificVolume = (
   if (Patm_psia <= 0) return 0;
 
   const v = 0.370486 * (T / Patm_psia) * (1 + 1.607858 * W);
-  return isNaN(v) ? 0 : v;
+  const result = isNaN(v) ? 0 : v;
+
+  PSYCH_VERBOSE && console.log(
+    `${TAG} calculateSpecificVolume: DB=${dbF}°F gr=${grains}gr/lb elev=${elevFt}ft` +
+    ` → T_R=${T.toFixed(2)}°R W=${W.toFixed(6)}lb/lb Patm=${Patm_psia.toFixed(4)}psia` +
+    ` → v=${result.toFixed(4)}ft³/lb`
+  );
+
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -551,19 +701,50 @@ export const calculateAdpFromLoads = (
   const bfNum = parseFloat(String(bf));
 
   if (isNaN(dbNum) || isNaN(ersh) || isNaN(cfm) || isNaN(bfNum)) {
+    PSYCH_LOG && console.warn(
+      `${TAG} calculateAdpFromLoads: NaN input db=${dbInF} ersh=${peakErsh}` +
+      ` cfm=${supplyAir} bf=${bf} → DEFAULT_ADP=${ASHRAE.DEFAULT_ADP}`
+    );
     return ASHRAE.DEFAULT_ADP;
   }
-  if (ersh <= 0 || cfm <= 0) return ASHRAE.DEFAULT_ADP;
+
+  if (ersh <= 0 || cfm <= 0) {
+    PSYCH_LOG && console.log(
+      `${TAG} calculateAdpFromLoads: zero ersh(${ersh}) or cfm(${cfm})` +
+      ` → DEFAULT_ADP=${ASHRAE.DEFAULT_ADP}`
+    );
+    return ASHRAE.DEFAULT_ADP;
+  }
 
   const coilAir = cfm * (1 - Math.min(0.99, Math.max(0, bfNum)));
-  if (coilAir <= 0) return ASHRAE.DEFAULT_ADP;
+  if (coilAir <= 0) {
+    PSYCH_LOG && console.warn(
+      `${TAG} calculateAdpFromLoads: coilAir≤0 (cfm=${cfm} bf=${bfNum})` +
+      ` → DEFAULT_ADP=${ASHRAE.DEFAULT_ADP}`
+    );
+    return ASHRAE.DEFAULT_ADP;
+  }
 
   const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
   if (Cs <= 0) return ASHRAE.DEFAULT_ADP;
 
   const adpRaw = dbNum - ersh / (Cs * coilAir);
   const adpClamped = Math.max(35, Math.min(adpRaw, dbNum - 2));
-  return Math.round(adpClamped * 10) / 10;
+  const result = Math.round(adpClamped * 10) / 10;
+
+  const clampReason =
+    adpRaw < 35        ? ' [clamped LOW: raw<35°F min coil temp]' :
+    adpRaw > dbNum - 2 ? ' [clamped HIGH: raw>dbIn-2°F, near-zero load]' :
+                         '';
+
+  PSYCH_LOG && console.log(
+    `${TAG} calculateAdpFromLoads: dbIn=${dbInF}°F ersh=${ersh}BTU/hr` +
+    ` cfm=${cfm} bf=${bfNum} elev=${elevFt}ft` +
+    ` → coilAir=${coilAir.toFixed(0)}CFM Cs=${Cs.toFixed(4)}` +
+    ` adpRaw=${adpRaw.toFixed(2)}°F → ADP=${result}°F${clampReason}`
+  );
+
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -658,7 +839,16 @@ export const calculateRequiredADP = (
   const sensNum = parseFloat(String(totalSensible));
   const latNum = parseFloat(String(totalLatent));
 
+  PSYCH_LOG && console.log(
+    `${TAG} calculateRequiredADP: ENTER` +
+    ` roomDB=${roomDB}°F roomGr=${roomGr}gr/lb` +
+    ` totalSens=${totalSensible}BTU/hr totalLat=${totalLatent}BTU/hr elev=${elevFt}ft`
+  );
+
   if (isNaN(dbNum) || isNaN(grNum) || isNaN(sensNum) || isNaN(latNum)) {
+    PSYCH_LOG && console.warn(
+      `${TAG} calculateRequiredADP: NaN input — type=sensible_only`
+    );
     return {
       type: 'sensible_only',
       requiredADP: null,
@@ -669,6 +859,9 @@ export const calculateRequiredADP = (
 
   const totalLoad = sensNum + latNum;
   if (totalLoad <= 0) {
+    PSYCH_LOG && console.log(
+      `${TAG} calculateRequiredADP: totalLoad=${totalLoad} ≤ 0 → sensible_only`
+    );
     return {
       type: 'sensible_only',
       requiredADP: null,
@@ -679,7 +872,15 @@ export const calculateRequiredADP = (
 
   const eshf = sensNum / totalLoad;
 
+  PSYCH_LOG && console.log(
+    `${TAG} calculateRequiredADP: totalLoad=${totalLoad.toFixed(0)}BTU/hr` +
+    ` → eshf=${eshf.toFixed(4)} (sens=${sensNum.toFixed(0)} lat=${latNum.toFixed(0)})`
+  );
+
   if (eshf >= 0.995) {
+    PSYCH_LOG && console.log(
+      `${TAG} calculateRequiredADP: eshf=${eshf.toFixed(4)} ≥ 0.995 → sensible_only`
+    );
     return {
       type: 'sensible_only',
       requiredADP: null,
@@ -688,8 +889,6 @@ export const calculateRequiredADP = (
     };
   }
 
-  // Site-pressure-corrected saturation grains.
-  // Uses saturationPressure (Hyland-Wexler) already in scope — internal to this module.
   const Patm = sitePressure(elevFt);
   const satGr = (tF: number): number => {
     const tC = ((tF - 32) * 5) / 9;
@@ -698,8 +897,12 @@ export const calculateRequiredADP = (
     return Math.max(0, ((0.62198 * Es) / (Patm - Es)) * ASHRAE.GR_PER_LB);
   };
 
-  // Guard: room so dry that coil at 32°F cannot dehumidify further.
-  if (grNum <= satGr(32)) {
+  const satGrAt32 = satGr(32);
+  if (grNum <= satGrAt32) {
+    PSYCH_LOG && console.log(
+      `${TAG} calculateRequiredADP: roomGr=${grNum.toFixed(2)}gr/lb` +
+      ` ≤ satGr(32°F)=${satGrAt32.toFixed(2)}gr/lb → sensible_only (room too dry)`
+    );
     return {
       type: 'sensible_only',
       requiredADP: null,
@@ -708,8 +911,7 @@ export const calculateRequiredADP = (
     };
   }
 
-  // Find room dew point — upper bound for bisection.
-  // Above room dew point: satGr(adp) > roomGr → coil adds moisture → non-physical.
+  // Find room dew point (upper bisection bound)
   let dpLo = -100 * (9 / 5) + 32; // −148°F
   let dpHi = dbNum;
   for (let i = 0; i < 80; i++) {
@@ -721,9 +923,12 @@ export const calculateRequiredADP = (
   const roomDewPointF = (dpLo + dpHi) / 2;
   const upperBound = roomDewPointF - 0.5;
 
-  // ESHF bisection target function:
-  // f(adp) = computedESHF(adp) − targetESHF
-  // Bisect until f = 0 — that adp is the Required ADP.
+  PSYCH_LOG && console.log(
+    `${TAG} calculateRequiredADP: roomDP=${roomDewPointF.toFixed(2)}°F` +
+    ` → bisect range [32°F, ${upperBound.toFixed(2)}°F]` +
+    ` (Patm=${Patm.toFixed(2)}hPa satGr_32=${satGrAt32.toFixed(2)}gr/lb)`
+  );
+
   const Cs = ASHRAE.SENSIBLE_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
   const Cl = ASHRAE.LATENT_FACTOR_SEA_LEVEL * altitudeCorrectionFactor(elevFt);
 
@@ -738,8 +943,18 @@ export const calculateRequiredADP = (
   const f_lo = f(32);
   const f_hi = f(upperBound);
 
+  PSYCH_LOG && console.log(
+    `${TAG} calculateRequiredADP: sign check` +
+    ` f(32°F)=${f_lo.toFixed(4)} f(${upperBound.toFixed(1)}°F)=${f_hi.toFixed(4)}` +
+    ` Cs=${Cs.toFixed(4)} Cl=${Cl.toFixed(4)}`
+  );
+
   if (f_lo * f_hi > 0) {
     if (f_lo >= 0) {
+      PSYCH_LOG && console.log(
+        `${TAG} calculateRequiredADP: f_lo≥0 (same sign, positive)` +
+        ` → Required ADP < 32°F → sensible_only`
+      );
       return {
         type: 'sensible_only',
         requiredADP: null,
@@ -747,6 +962,11 @@ export const calculateRequiredADP = (
         note: 'Required ADP < 32°F — room is sensible-dominated, any standard coil works',
       };
     } else {
+      PSYCH_LOG && console.warn(
+        `${TAG} calculateRequiredADP: ⚠ f_lo<0 f_hi<0 (same sign, negative)` +
+        ` → no_solution — ESHF line misses saturation curve` +
+        ` — supplemental dehumidification required`
+      );
       return {
         type: 'no_solution',
         requiredADP: null,
@@ -764,9 +984,17 @@ export const calculateRequiredADP = (
     if (hi - lo < 0.01) break;
   }
 
+  const requiredADP = Math.round(((lo + hi) / 2) * 10) / 10;
+
+  PSYCH_LOG && console.log(
+    `${TAG} calculateRequiredADP: ✅ type=found` +
+    ` requiredADP=${requiredADP}°F eshf=${eshf.toFixed(4)}` +
+    ` (bisect converged: lo=${lo.toFixed(2)} hi=${hi.toFixed(2)})`
+  );
+
   return {
     type: 'found',
-    requiredADP: Math.round(((lo + hi) / 2) * 10) / 10,
+    requiredADP,
     eshf,
     note: '',
   };
