@@ -50,6 +50,10 @@ import { sensibleFactor, latentFactor } from './psychro';
 // @ts-ignore - Ignore missing types until envelopeHelpers.js is converted
 import { getMeanOutdoorTemp, getLM, swapForHemisphere } from './envelopeHelpers';
 
+// ─── Logging ──────────────────────────────────────────────────────────────────
+const logC = (...args: any[]): void => console.log('[envelopeCalc]', ...args);
+const warnC = (...args: any[]): void => console.warn('[envelopeCalc]', ...args);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,33 +135,55 @@ export const calcWallGain = (
   dailyRange: number = 0
 ): number => {
   const area = parseFloat(String(wall.area)) || 0;
-  const u = parseFloat(String(wall.uValue)) || 0;
-  if (area === 0 || u === 0) return 0;
+  const u    = parseFloat(String(wall.uValue)) || 0;
 
-  const orientation = wall.orientation || 'N';
-  const construction = wall.construction || 'medium';
-  const dbOut = parseFloat(String(climate?.outside?.[season]?.db)) || 95;
-
-  if (season === 'winter') {
-    return u * area * (dbOut - tRoom);
+  if (area === 0 || u === 0) {
+    warnC(`wall: area=${wall.area}→${area}sf  U=${wall.uValue}→${u} — zero value, returning 0`);
+    return 0;
   }
 
-  // Use hemisphere-swapped orientation for BOTH the WALL_CLTD base lookup
-  // and the LM correction
-  const effectiveOrientation = swapForHemisphere(orientation, latitude);
-  
-  // Cast table to any to bypass indexing errors if ashraeTables isn't perfectly typed
-  const cltdTable: any = WALL_CLTD;
-  const baseCLTD = cltdTable[effectiveOrientation]?.[construction] ?? 15;
-  
-  const seasonalTable: any = WALL_CLTD_SEASONAL;
-  const seasonMult = seasonalTable[season] ?? 1.0;
-  
-  const tMeanOutdoor = getMeanOutdoorTemp(dbOut, season, dailyRange);
-  const lm = getLM(latitude, orientation);
+  const orientation  = wall.orientation  || 'N';
+  const construction = wall.construction || 'medium';
+  const rawDb        = climate?.outside?.[season]?.db;
+  const dbOut        = parseFloat(String(rawDb)) || 95;
 
+  if (rawDb === undefined || rawDb === null) {
+    warnC(`wall: climate.outside.${season}.db missing — using fallback dbOut=${dbOut}°F`);
+  }
+
+  // ── Winter: steady-state U×A×ΔT ────────────────────────────────────────
+  if (season === 'winter') {
+    const result = u * area * (dbOut - tRoom);
+    logC(`wall [winter]: U=${u}×A=${area}sf×(db${dbOut}-room${tRoom})°F = ${Math.round(result)} BTU/hr`);
+    return result;
+  }
+
+  // ── Summer / Monsoon: CLTD method ────────────────────────────────────────
+  const effectiveOrientation = swapForHemisphere(orientation, latitude);
+
+  const cltdTable: any  = WALL_CLTD;
+  const rawBaseCLTD     = cltdTable[effectiveOrientation]?.[construction];
+  const baseCLTD        = rawBaseCLTD ?? 15;
+  if (rawBaseCLTD === undefined) {
+    warnC(`wall: WALL_CLTD[${effectiveOrientation}][${construction}] not found — using fallback baseCLTD=15`);
+  }
+
+  const seasonalTable: any = WALL_CLTD_SEASONAL;
+  const rawSeasonMult      = seasonalTable[season];
+  const seasonMult         = rawSeasonMult ?? 1.0;
+  if (rawSeasonMult === undefined) {
+    warnC(`wall: WALL_CLTD_SEASONAL[${season}] not found — using fallback seasonMult=1.0`);
+  }
+
+  const tMeanOutdoor  = getMeanOutdoorTemp(dbOut, season, dailyRange);
+  const lm            = getLM(latitude, orientation);
   const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, lm) * seasonMult;
-  return u * area * correctedCLTD;
+  const result        = u * area * correctedCLTD;
+
+  logC(`wall [${season}]: A=${area}sf U=${u} orient=${orientation}→${effectiveOrientation} const=${construction} dbOut=${dbOut}°F dailyRange=${dailyRange}`);
+  logC(`wall [${season}]: baseCLTD=${baseCLTD} seasonMult=${seasonMult} tMean=${tMeanOutdoor.toFixed(1)}°F LM=${lm} corrCLTD=${correctedCLTD.toFixed(2)} → ${Math.round(result)} BTU/hr`);
+
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,26 +205,51 @@ export const calcRoofGain = (
   dailyRange: number = 0
 ): number => {
   const area = parseFloat(String(roof.area)) || 0;
-  const u = parseFloat(String(roof.uValue)) || 0;
-  if (area === 0 || u === 0) return 0;
+  const u    = parseFloat(String(roof.uValue)) || 0;
 
-  const construction = roof.construction || '2" insulation';
-  const dbOut = parseFloat(String(climate?.outside?.[season]?.db)) || 95;
-
-  if (season === 'winter') {
-    return u * area * (dbOut - tRoom);
+  if (area === 0 || u === 0) {
+    warnC(`roof: area=${roof.area}→${area}sf  U=${roof.uValue}→${u} — zero value, returning 0`);
+    return 0;
   }
 
-  const cltdTable: any = ROOF_CLTD;
-  const baseCLTD = cltdTable[construction] ?? 30;
-  
-  const seasonalTable: any = ROOF_CLTD_SEASONAL;
-  const seasonMult = seasonalTable[season] ?? 1.0;
-  
-  const tMeanOutdoor = getMeanOutdoorTemp(dbOut, season, dailyRange);
+  const construction = roof.construction || '2" insulation';
+  const rawDb        = climate?.outside?.[season]?.db;
+  const dbOut        = parseFloat(String(rawDb)) || 95;
 
+  if (rawDb === undefined || rawDb === null) {
+    warnC(`roof: climate.outside.${season}.db missing — using fallback dbOut=${dbOut}°F`);
+  }
+
+  // ── Winter: steady-state U×A×ΔT ────────────────────────────────────────
+  if (season === 'winter') {
+    const result = u * area * (dbOut - tRoom);
+    logC(`roof [winter]: U=${u}×A=${area}sf×(db${dbOut}-room${tRoom})°F = ${Math.round(result)} BTU/hr`);
+    return result;
+  }
+
+  // ── Summer / Monsoon: CLTD method ────────────────────────────────────────
+  const cltdTable: any  = ROOF_CLTD;
+  const rawBaseCLTD     = cltdTable[construction];
+  const baseCLTD        = rawBaseCLTD ?? 30;
+  if (rawBaseCLTD === undefined) {
+    warnC(`roof: ROOF_CLTD[${construction}] not found — using fallback baseCLTD=30`);
+  }
+
+  const seasonalTable: any = ROOF_CLTD_SEASONAL;
+  const rawSeasonMult      = seasonalTable[season];
+  const seasonMult         = rawSeasonMult ?? 1.0;
+  if (rawSeasonMult === undefined) {
+    warnC(`roof: ROOF_CLTD_SEASONAL[${season}] not found — using fallback seasonMult=1.0`);
+  }
+
+  const tMeanOutdoor  = getMeanOutdoorTemp(dbOut, season, dailyRange);
   const correctedCLTD = correctCLTD(baseCLTD, tRoom, tMeanOutdoor, 0) * seasonMult;
-  return u * area * correctedCLTD;
+  const result        = u * area * correctedCLTD;
+
+  logC(`roof [${season}]: A=${area}sf U=${u} const=${construction} dbOut=${dbOut}°F dailyRange=${dailyRange}`);
+  logC(`roof [${season}]: baseCLTD=${baseCLTD} seasonMult=${seasonMult} tMean=${tMeanOutdoor.toFixed(1)}°F corrCLTD=${correctedCLTD.toFixed(2)} → ${Math.round(result)} BTU/hr`);
+
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,20 +269,40 @@ export const calcPartitionGain = (
   season: Season = 'summer'
 ): number => {
   const area = parseFloat(String(element.area)) || 0;
-  const u = parseFloat(String(element.uValue)) || 0;
-  if (area === 0 || u === 0) return 0;
+  const u    = parseFloat(String(element.uValue)) || 0;
 
-  let tAdj: number;
-  
-  if (season === 'winter') {
-    const tAdjWinter = safeTemp(element.tAdjWinter, null);
-    tAdj = tAdjWinter !== null ? tAdjWinter : safeTemp(element.tAdj, 65);
-  } else {
-    const tAdjSummer = safeTemp(element.tAdjSummer, null);
-    tAdj = tAdjSummer !== null ? tAdjSummer : safeTemp(element.tAdj, 85);
+  if (area === 0 || u === 0) {
+    warnC(`partition: area=${element.area}→${area}sf  U=${element.uValue}→${u} — zero value, returning 0`);
+    return 0;
   }
 
-  return u * area * (tAdj - tRoom);
+  let tAdj: number;
+  let tAdjSource: string;
+
+  if (season === 'winter') {
+    const tAdjWinter = safeTemp(element.tAdjWinter, null);
+    if (tAdjWinter !== null) {
+      tAdj       = tAdjWinter;
+      tAdjSource = `tAdjWinter=${tAdjWinter}`;
+    } else {
+      tAdj       = safeTemp(element.tAdj, 65);
+      tAdjSource = element.tAdj != null ? `tAdj=${element.tAdj}` : `fallback=65°F`;
+    }
+  } else {
+    const tAdjSummer = safeTemp(element.tAdjSummer, null);
+    if (tAdjSummer !== null) {
+      tAdj       = tAdjSummer;
+      tAdjSource = `tAdjSummer=${tAdjSummer}`;
+    } else {
+      tAdj       = safeTemp(element.tAdj, 85);
+      tAdjSource = element.tAdj != null ? `tAdj=${element.tAdj}` : `fallback=85°F`;
+    }
+  }
+
+  const result = u * area * (tAdj - tRoom);
+  logC(`partition [${season}]: A=${area}sf U=${u} tAdj=${tAdj}°F (${tAdjSource}) tRoom=${tRoom}°F → ${Math.round(result)} BTU/hr`);
+
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,12 +322,24 @@ export const calcSlabGain = (
   tGround: number = 55
 ): number => {
   const perimeter = parseFloat(String(perimeterFt)) || 0;
-  if (perimeter === 0) return 0;
+
+  if (perimeter === 0) {
+    warnC(`slab: perimeterFt=${perimeterFt}→${perimeter}ft — zero perimeter, returning 0`);
+    return 0;
+  }
 
   const slabTable: any = SLAB_F_FACTOR;
-  const fFactor = slabTable[insulationType] ?? slabTable['Uninsulated'];
-  
-  return fFactor * perimeter * (tGround - tRoom);
+  const rawFactor      = slabTable[insulationType];
+  const fFactor        = rawFactor ?? slabTable['Uninsulated'];
+
+  if (rawFactor === undefined) {
+    warnC(`slab: SLAB_F_FACTOR[${insulationType}] not found — using Uninsulated fallback (fFactor=${fFactor})`);
+  }
+
+  const result = fFactor * perimeter * (tGround - tRoom);
+  logC(`slab: perim=${perimeter}ft insul=${insulationType} fFactor=${fFactor} tGround=${tGround}°F tRoom=${tRoom}°F → ${Math.round(result)} BTU/hr`);
+
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,19 +363,30 @@ export const calcInfiltrationGain = (
   elevFt: number = 0
 ): InfiltrationResult => {
   const isPressurized = room?.pressurized ?? false;
-  if (isPressurized) return { sensible: 0, latent: 0, cfm: 0 };
+
+  if (isPressurized) {
+    logC(`infiltration: pressurized=true — returning zeros (no infiltration for pressurized room)`);
+    return { sensible: 0, latent: 0, cfm: 0 };
+  }
 
   const achInf = parseFloat(String(inf?.achValue)) || 0;
-  const cfm = (volumeFt3 * achInf) / 60;
-  
+  const cfm    = (volumeFt3 * achInf) / 60;
+
+  logC(`infiltration: pressurized=false achValue=${inf?.achValue}→ach=${achInf} volumeFt3=${volumeFt3.toFixed(0)}ft³ cfm=${cfm.toFixed(1)}`);
+
+  if (achInf === 0) {
+    warnC(`infiltration: achValue=0 — no infiltration load (set room envelope ACH if infiltration is expected)`);
+  }
+
   if (cfm <= 0) return { sensible: 0, latent: 0, cfm: 0 };
 
-  const sf = sensibleFactor(elevFt);
-  const lf = latentFactor(elevFt);
+  const sf       = sensibleFactor(elevFt);
+  const lf       = latentFactor(elevFt);
+  const sensible = Math.round(sf * cfm * (dbOut - tRoom));
+  const latent   = Math.round(lf * cfm * Math.max(0, grOut - grIn));
 
-  return {
-    sensible: Math.round(sf * cfm * (dbOut - tRoom)),
-    latent: Math.round(lf * cfm * Math.max(0, grOut - grIn)),
-    cfm,
-  };
+  logC(`infiltration: sf=${sf.toFixed(4)} lf=${lf.toFixed(4)} (elevFt=${elevFt}) dbOut=${dbOut}°F tRoom=${tRoom}°F grOut=${grOut.toFixed(1)} grIn=${grIn.toFixed(1)}`);
+  logC(`infiltration: → sens=${sensible} BTU/hr  lat=${latent} BTU/hr  cfm=${cfm.toFixed(1)}`);
+
+  return { sensible, latent, cfm };
 };

@@ -36,6 +36,10 @@ export {
   calcSkylightGain,
 };
 
+// ─── Logging ──────────────────────────────────────────────────────────────────
+const logA = (...args: any[]): void => console.log('[envelopeAggr]', ...args);
+const warnA = (...args: any[]): void => console.warn('[envelopeAggr]', ...args);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,42 +110,97 @@ export const calcTotalEnvelopeGain = (
   latitude: number = 28,
   dailyRange: number = 0
 ): number => {
-  if (!elements) return 0;
+  logA(`── calcTotalEnvelopeGain [${season}] tRoom=${tRoom}°F lat=${latitude}° dailyRange=${dailyRange}`);
+
+  if (!elements) {
+    warnA(`⚠ elements=null/undefined — returning 0 [DIAG-SL-03 root: no envelope object passed for this room]`);
+    return 0;
+  }
+
+  const wallCnt  = elements.walls?.length      ?? 0;
+  const roofCnt  = elements.roofs?.length      ?? 0;
+  const glassCnt = elements.glass?.length      ?? 0;
+  const skysCnt  = elements.skylights?.length  ?? 0;
+  const partCnt  = elements.partitions?.length ?? 0;
+  const floorCnt = elements.floors?.length     ?? 0;
+  const slabCnt  = elements.slabs?.length      ?? 0;
+  const totalEl  = wallCnt + roofCnt + glassCnt + skysCnt + partCnt + floorCnt + slabCnt;
+
+  logA(`   counts: walls=${wallCnt} roofs=${roofCnt} glass=${glassCnt} skylights=${skysCnt} partitions=${partCnt} floors=${floorCnt} slabs=${slabCnt} (total=${totalEl})`);
+
+  if (totalEl === 0) {
+    warnA(`⚠ elements object exists but ALL arrays empty — returning 0 [DIAG-SL-03 root: add envelope elements in Envelope tab]`);
+    return 0;
+  }
 
   let total = 0;
+  let wallSum = 0, roofSum = 0, glassSum = 0, skySum = 0, partSum = 0, floorSum = 0, slabSum = 0;
 
-  (elements.walls || []).forEach((w) => {
-    total += calcWallGain(w, climate, tRoom, season, latitude, dailyRange);
+  (elements.walls || []).forEach((w, i) => {
+    const g = calcWallGain(w, climate, tRoom, season, latitude, dailyRange);
+    logA(`   wall[${i}] = ${Math.round(g)} BTU/hr`);
+    wallSum += g;
+    total += g;
   });
 
-  (elements.roofs || []).forEach((r) => {
-    total += calcRoofGain(r, climate, tRoom, season, latitude, dailyRange);
+  (elements.roofs || []).forEach((r, i) => {
+    const g = calcRoofGain(r, climate, tRoom, season, latitude, dailyRange);
+    logA(`   roof[${i}] = ${Math.round(g)} BTU/hr`);
+    roofSum += g;
+    total += g;
   });
 
-  (elements.glass || []).forEach((g) => {
-    total += calcGlassGain(g, climate, tRoom, season, latitude, dailyRange).total;
+  (elements.glass || []).forEach((g_el, i) => {
+    const res = calcGlassGain(g_el, climate, tRoom, season, latitude, dailyRange);
+    logA(`   glass[${i}] = ${res.total} BTU/hr (cond=${res.conduction} solar=${res.solar})`);
+    glassSum += res.total;
+    total += res.total;
   });
 
-  (elements.skylights || []).forEach((s) => {
-    total += calcSkylightGain(s, climate, tRoom, season, latitude, dailyRange).total;
+  (elements.skylights || []).forEach((s, i) => {
+    const res = calcSkylightGain(s, climate, tRoom, season, latitude, dailyRange);
+    logA(`   skylight[${i}] = ${res.total} BTU/hr (cond=${res.conduction} solar=${res.solar})`);
+    skySum += res.total;
+    total += res.total;
   });
 
   // season passed through so tAdjSummer / tAdjWinter is selected correctly.
-  (elements.partitions || []).forEach((p) => {
-    total += calcPartitionGain(p, tRoom, season);
+  (elements.partitions || []).forEach((p, i) => {
+    const g = calcPartitionGain(p, tRoom, season);
+    logA(`   partition[${i}] = ${Math.round(g)} BTU/hr`);
+    partSum += g;
+    total += g;
   });
 
   // Floors between conditioned spaces treated as partitions.
-  (elements.floors || []).forEach((f) => {
-    total += calcPartitionGain(f, tRoom, season);
+  (elements.floors || []).forEach((f, i) => {
+    const g = calcPartitionGain(f, tRoom, season);
+    logA(`   floor[${i}] = ${Math.round(g)} BTU/hr`);
+    floorSum += g;
+    total += g;
   });
 
   // Slabs: optional array — elements carry { perimeterFt, insulationType, tGround }
-  (elements.slabs || []).forEach((s) => {
-    total += calcSlabGain(s.perimeterFt, s.insulationType, tRoom, s.tGround ?? 55);
+  (elements.slabs || []).forEach((s, i) => {
+    const g = calcSlabGain(s.perimeterFt, s.insulationType, tRoom, s.tGround ?? 55);
+    logA(`   slab[${i}] = ${Math.round(g)} BTU/hr`);
+    slabSum += g;
+    total += g;
   });
 
-  return Math.round(total);
+  const rounded = Math.round(total);
+  logA(
+    `   subtotals[${season}]: walls=${Math.round(wallSum)} | roofs=${Math.round(roofSum)} | glass=${Math.round(glassSum)} | skylights=${Math.round(skySum)} | partitions=${Math.round(partSum)} | floors=${Math.round(floorSum)} | slabs=${Math.round(slabSum)}`
+  );
+  logA(`   TOTAL[${season}] = ${rounded} BTU/hr`);
+
+  if (rounded === 0 && totalEl > 0) {
+    warnA(
+      `⚠ TOTAL=0 despite ${totalEl} element(s) — check: U-values all >0? areas all >0? climate.outside.${season}.db populated?`
+    );
+  }
+
+  return rounded;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +212,10 @@ export const calcTotalEnvelopeGain = (
  *
  * Same as calcTotalEnvelopeGain but returns a per-category breakdown.
  * Used by RDSPage to populate individual envelope load rows.
+ *
+ * NOTE: This function independently calls the same underlying calc functions
+ * as calcTotalEnvelopeGain. Both will emit [envelopeCalc] logs when called.
+ * The [envelopeAggr] tag here identifies this as the UI-breakdown call path.
  */
 export const calcDetailedEnvelopeGain = (
   elements: EnvelopeElements | undefined | null,
@@ -162,7 +225,10 @@ export const calcDetailedEnvelopeGain = (
   latitude: number = 28,
   dailyRange: number = 0
 ): DetailedEnvelopeBreakdown => {
+  logA(`── calcDetailedEnvelopeGain [${season}] (UI breakdown call)`);
+
   if (!elements) {
+    logA(`   elements null — returning zero breakdown`);
     return {
       walls: 0,
       roofs: 0,
@@ -226,6 +292,10 @@ export const calcDetailedEnvelopeGain = (
 
   const total = Math.round(
     walls + roofs + glass.total + skylights.total + partitions + floors + slabs
+  );
+
+  logA(
+    `   detailed TOTAL[${season}] = ${total} BTU/hr | walls=${Math.round(walls)} roofs=${Math.round(roofs)} glass=${Math.round(glass.total)} skylights=${Math.round(skylights.total)} partitions=${Math.round(partitions)} floors=${Math.round(floors)} slabs=${Math.round(slabs)}`
   );
 
   return {
