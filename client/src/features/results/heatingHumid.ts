@@ -408,6 +408,40 @@ export const calculateHeatingHumid = (
     if (_badNum(Cl, 'Cl')) { /* logged */ }
 
     _log(`INPUT-02: Cs=${Cs?.toFixed(4)}, Cl=${Cl?.toFixed(4)}, altCf=${altCf?.toFixed(4)}`);
+    // BUG-HH-12 DETECT — elevation/altCf unit-mismatch cross-check.
+// sensibleFactor(elevation), latentFactor(elevation), and calculateGrains() all
+// expect elevation in FEET. If the caller (computeRdsRow.ts) passed metres,
+// Cs/Cl will be near-sea-level while the correctly-computed altCf will reflect
+// the true altitude.
+//
+// Formula: altCf ≈ exp(−elev_ft / 26132)  [ASHRAE ISA, accurate to ±1% < 15 000 ft]
+//   Delhi  (   0 ft) → 1.000
+//   Hyderabad(1778 ft)→ 0.935
+//   Bangalore(2953 ft)→ 0.906   ← 900 m correctly converted
+//   900 as feet      → 0.967   ← wrong: 61 pt delta fires the warning
+//
+// Tolerance 0.05 catches the Bangalore case (Δ ≈ 0.061) while ignoring
+// sea-level rounding noise (Δ < 0.001 at 0 ft).
+if (elevation > 0 && isFinite(altCf)) {
+  const altCfExpected = Math.exp(-elevation / 26132);
+  const altCfDelta    = Math.abs(altCfExpected - altCf);
+  if (altCfDelta > 0.05) {
+    _warn(
+      `INPUT-02 ⚠ BUG-HH-12: elevation/altCf unit mismatch suspected. ` +
+      `elevation=${elevation} (treated as ft) → altCf_expected=${altCfExpected.toFixed(4)}; ` +
+      `passed altCf=${altCf.toFixed(4)} (Δ=${altCfDelta.toFixed(4)} > 0.05). ` +
+      `If elevation is stored in metres in Redux, computeRdsRow.ts must convert: ` +
+      `elevationFt = elevation_m × 3.28084 before calling calculateHeatingHumid. ` +
+      `P1 BUG-HH-12 — see also selectElevation in rdsSelector.ts.`
+    );
+  } else {
+    _log(
+      `INPUT-02: elevation/altCf cross-check OK — ` +
+      `altCf_expected=${altCfExpected.toFixed(4)} vs passed=${altCf.toFixed(4)} ` +
+      `(Δ=${altCfDelta.toFixed(4)} ≤ 0.05)`
+    );
+  }
+}
 
     // BUG-HH-11: resilient winter climate access — try canonical path first
     const { source: climateSource, data: winterOut } = resolveWinterOutdoor(climate);

@@ -288,12 +288,26 @@ export const calculateSeasonLoad = (
   latitude: number = 28,
   dailyRange: number = 0
 ): SeasonalLoadResult => {
+  if (LOG_SL) console.group(`[seasonalLoads] ── ${season} ──`);
+  try{
+
   const env = envelope || { internalLoads: {}, infiltration: {} };
   const int = env.internalLoads || {};
   const inf = env.infiltration || {};
 
   // ── Outdoor conditions ──────────────────────────────────────────────────────
  const outdoor = climate?.outside?.[season] || { db: 95, rh: 40 };
+ // DIAG-SL-01: detect climate fallback — if all three seasons fall back,
+// grOut will be identical → infilSens/infilLat season-invariant → flat ERSH.
+// Root cause: climate slice not populated before RDS calculation fires.
+if (!climate?.outside?.[season]) {
+  _warn(
+    `DIAG-SL-01 [${season}]: climate.outside.${season} absent — using hardcoded ` +
+    `fallback { db:95, rh:40 }. If all seasons fallback, outdoor Δgr and ΔT are ` +
+    `identical across seasons, making ERSH artificially flat. ` +
+    `Check climateSlice — seasons must be populated before RDS recalculates.`
+  );
+}
 const dbOut   = parseDef(outdoor?.db, 95);
 // Season-appropriate RH defaults — only fire when rh field is absent from the
 // climate slice (e.g. progressive form save where DB was entered but RH was not).
@@ -321,6 +335,8 @@ const ambRH   = parseDef(
   const rhIn = !isNaN(parsedRhIn) ? parsedRhIn : 50;
 
   const grIn = calculateGrains(dbInF, rhIn, elevation);
+  if (_badNum(grOut, `grOut[${season}]`)) { /* logged */ }
+if (_badNum(grIn,  `grIn[${season}]`))  { /* logged */ }
 
   // ── 1. Envelope gain ────────────────────────────────────────────────────────
   const envelopeGain = calcTotalEnvelopeGain(
@@ -331,6 +347,32 @@ const ambRH   = parseDef(
     latitude,
     dailyRange
   );
+
+  // DIAG-SL-02: suppressed diurnal solar correction (P3 audit — computeRdsRow.ts).
+// dailyRange=0 sets CLTD correction factor to 1.0, understating peak summer
+// solar gain on west/east walls by 10–20% in non-equatorial climates.
+if (dailyRange === 0 && latitude > 15) {
+  _warn(
+    `DIAG-SL-02 [${season}]: dailyRange=0 at lat=${latitude.toFixed(1)}° — ` +
+    `diurnal CLF/CLTD correction suppressed. Peak summer ERSH likely understated. ` +
+    `Set project dailyRange (typical: 15–20°F for Delhi June, 12°F monsoon). ` +
+    `P3: dailyRange ?? 0 in rdsSelector.ts silently kills this correction.`
+  );
+}
+
+// DIAG-SL-03: envelope zero — dominant cause of flat ERSH across seasons.
+// Interior rooms (no exterior envelope) will show zero here, making all
+// seasonal ERSH equal to internal loads only (season-invariant by definition).
+if (envelopeGain === 0) {
+  _warn(
+    `DIAG-SL-03 [${season}]: envelopeGain=0 — room is fully interior (no envelope ` +
+    `elements) OR calcTotalEnvelopeGain returned 0. ` +
+    `ERSH will be identical across all three seasons (internal loads only). ` +
+    `If the room has exterior walls, roof, or glazing, check envelopeSlice: ` +
+    `verify env.elements is non-empty for this room. ` +
+    `This is the expected root cause of the flat-ERSH P0-C pattern.`
+  );
+}
 
   // ── 2. People (ASHRAE HOF 2021 Ch.18 Table 1) ──────────────────────────────
   // CLF = 1.0 assumed — occupants present 100% of occupied hours.
@@ -406,6 +448,34 @@ const ambRH   = parseDef(
   const ersh = Math.round(rawSensible * safetyMult * gmpSafetyMult);
   const erlh = Math.round(rawLatent); // no safetyMult on latent
 
+  // DIAG-SL-04: full component breakdown.
+// Three consecutive groups ([summer]/[monsoon]/[winter]) let you instantly see
+// whether envelope and infiltration vary across seasons or are flatlined.
+// If envelope=0 in all three: interior room — flat ERSH is correct, not a bug.
+// If envelope≠0 but identical: calcTotalEnvelopeGain is not applying season. Dig there.
+// If infil is identical but outdoor fallback was flagged by DIAG-SL-01: climate data missing.
+_log(
+  `psych: dbOut=${dbOut}°F ambRH=${ambRH}% grOut=${grOut.toFixed(2)} gr/lb | ` +
+  `dbInF=${dbInF}°F rhIn=${rhIn}% grIn=${grIn.toFixed(2)} gr/lb`
+);
+_log(
+  `sensible components (BTU/hr): ` +
+  `envelope=${Math.round(envelopeGain)} | people=${Math.round(pplSens)} | ` +
+  `lights=${Math.round(lightsSens)} | equip=${Math.round(equipSens)} | ` +
+  `infil=${Math.round(infilSens)} [CFM=${(infilCFM || 0).toFixed(0)}] | ` +
+  `rawSens=${Math.round(rawSensible)}`
+);
+_log(
+  `latent components (BTU/hr): ` +
+  `people=${Math.round(pplLat)} | equip=${Math.round(equipLatent)} | ` +
+  `infil=${Math.round(infilLat)} | rawLat=${Math.round(rawLatent)}`
+);
+_log(
+  `result: safetyMult=${safetyMult.toFixed(3)}` +
+  `${gmpSafetyMult > 1 ? ` × gmpSafetyMult=${gmpSafetyMult.toFixed(2)} (pharma)` : ''} | ` +
+  `ersh=${ersh} BTU/hr | erlh=${erlh} BTU/hr`
+);
+
   return {
     // Primary outputs consumed by rdsSelector
     ersh,
@@ -436,4 +506,7 @@ const ambRH   = parseDef(
     safetyMult,
     gmpSafetyMult,
   };
+}finally{
+  if (LOG_SL) console.groupEnd();
+}
 };
