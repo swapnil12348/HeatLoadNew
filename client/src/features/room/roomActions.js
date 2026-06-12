@@ -57,6 +57,7 @@
 import { addRoom as addRoomAction, deleteRoom } from './roomSlice';
 import { deleteAHU }                            from '../ahu/ahuSlice';
 import { getAcphDefaults }                      from '../../constants/isoCleanroom';
+import { generateId } from '../../utils/generateId';
 
 // ── ID generator ──────────────────────────────────────────────────────────────
 const generateRoomId = () =>
@@ -79,7 +80,7 @@ const DEFAULT_NEW_ROOM_CLASS = 'ISO 8';
  * state between dispatches.
  */
 export const addNewRoom = () => (dispatch) => {
-  const newId = generateRoomId();
+  const newId = generateId('room');
   const { minAcph, designAcph } = getAcphDefaults(DEFAULT_NEW_ROOM_CLASS);
 
   dispatch(addRoomAction({

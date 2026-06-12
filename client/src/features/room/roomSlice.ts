@@ -191,6 +191,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { ACPH_RANGES, IsoClass } from '../../constants/isoCleanroom';
 import { Room, RoomState, RootState } from '../../utils/types';
+import { generateId } from '../../utils/generateId';
 
 // ── Cross-slice action imports ────────────────────────────────────────────────
 // Used in extraReducers to clean up AHU assignments when an AHU is deleted.
@@ -200,8 +201,7 @@ import { deleteAHU } from '../ahu/ahuSlice';
 // ── ID generator ──────────────────────────────────────────────────────────────
 // FIX-R5: exported so roomActions.js can import it instead of duplicating.
 // TODO: move to src/utils/generateId.ts when convenient.
-export const generateRoomId = (): string =>
-  `room_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+
 
 // ── Nested field setter ───────────────────────────────────────────────────────
 const setNestedValue = (obj: any, path: string, value: any) => {
@@ -342,7 +342,7 @@ const roomSlice = createSlice({
     addRoom: (state, action: PayloadAction<string | Partial<Room>>) => {
       const payload  = action.payload;
       const isLegacy = typeof payload === 'string';
-      const id       = isLegacy ? payload : (payload.id ?? generateRoomId());
+      const id       = isLegacy ? payload : (payload.id ?? generateId('room'));
 
       let overrides: Partial<Room> = {};
       if (!isLegacy && typeof payload === 'object') {
