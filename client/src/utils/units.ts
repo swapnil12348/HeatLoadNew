@@ -68,7 +68,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** Safe parse for values where 0 is a valid meaningful result (area, flow, power). */
-const num = (v: number | string | null | undefined): number => {
+export const num = (v: number | string | null | undefined): number => {
   if (v === null || v === undefined) return 0;
   return parseFloat(String(v)) || 0;
 };
@@ -287,22 +287,7 @@ export const formatTR = (btuHr: number | string): string =>
 export const formatKW = (btuHr: number | string): string =>
   `${btuHrToKw(btuHr).toFixed(2)} kW`;
 
-/**
- * checkFigure(totalAreaM2, totalTR)
- * Computes ft²/TR — standard HVAC sanity check for load density.
- *
- * Typical benchmarks:
- *   Semiconductor fab:    20–50 ft²/TR  (very high process load density)
- *   Pharma cleanroom:     50–150 ft²/TR
- *   General commercial:   250–400 ft²/TR
- *   Data centre:          10–30 ft²/TR
- * Source: ASHRAE HVAC Applications 2019, Ch.18 / industry benchmarks.
- */
-export const checkFigure = (totalAreaM2: number | string, totalTR: number | string | null | undefined): number => {
-  const tr = num(totalTR);
-  if (tr <= 0) return 0;
-  return parseFloat((m2ToFt2(totalAreaM2) / tr).toFixed(1));
-};
+
 
 // ══════════════════════════════════════════════════════════════════════════════
 // REGRESSION / SANITY CHECK REFERENCE VALUES
