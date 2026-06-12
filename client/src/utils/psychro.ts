@@ -104,7 +104,6 @@ export interface RequiredAdpResult {
   eshf: number;
   note: string;
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ASHRAE Hyland-Wexler saturation pressure constants
 // Source: ASHRAE Fundamentals 2021, Chapter 1, Equations 3 & 5
