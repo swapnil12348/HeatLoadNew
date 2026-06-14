@@ -304,5 +304,6 @@ export default function ClimateConfig() {
         For critical facilities (semiconductor, pharma, battery), use the 0.4% design condition.
       </div>
     </div>
+    
   );
 }
