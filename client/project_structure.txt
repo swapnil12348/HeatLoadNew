@@ -42,6 +42,7 @@
 │   │   │   │   └── resolveAdp.ts
 │   │   │   └── airQuantities.ts
 │   │   │   └── assembleRdsRow.ts
+│   │   │   └── checkFigure.ts
 │   │   │   └── computeRdsRow.ts
 │   │   │   └── heatingHumid.ts
 │   │   │   └── outdoorAirLoad.ts
@@ -87,6 +88,7 @@
 │   │   └── envelopeAggregator.ts
 │   │   └── envelopeCalc.ts
 │   │   └── envelopeHelpers.ts
+│   │   └── generateId.ts
 │   │   └── glazingCalc.ts
 │   │   └── isoValidation.ts
 │   │   └── psychro.ts

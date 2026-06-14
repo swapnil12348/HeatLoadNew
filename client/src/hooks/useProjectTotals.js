@@ -123,7 +123,7 @@ import { useSelector } from 'react-redux';
 import { selectRdsData }                from '../features/results/rdsSelector';
 import { validateAllRooms }             from '../utils/isoValidation';
 import { calculateProjectPipeSizing }   from '../features/results/pipeSizing';
-import { checkFigure }                  from '../utils/units';
+import { checkFigure }                  from '../../src/features/results/checkFigure';
 
 // ft² → m² conversion factor (exact reciprocal of M2_TO_FT2 = 10.7639)
 const FT2_TO_M2 = 1 / 10.7639;
