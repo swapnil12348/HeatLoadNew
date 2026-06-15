@@ -3,6 +3,30 @@
  * Responsibility: Project dashboard — KPI cards, system load breakdown,
  *                 zone supply air governance summary, design parameters.
  *
+ * -- CHANGELOG v2.5.1 ---------------------------------------------------------
+ *
+ *   AUDIT-RS-01 — systemSummary rebuilt from byAhu (orphaned-ahuId fix).
+ *
+ *     Previous implementation iterated ahus.map() + a separate !r.ahuId filter.
+ *     If a room's ahuId pointed to a deleted AHU, it matched neither
+ *     r.ahuId === ahu.id (no entry in ahus) nor !r.ahuId (truthy string) —
+ *     the room disappeared from systemSummary entirely. Σ systemSummary.totalTR
+ *     could be less than the totalTR KPI card with no visual indication.
+ *
+ *     Fix: derive systemSummary from Object.entries(byAhu), which useProjectTotals
+ *     already builds via an exhaustive r.ahuId || 'unassigned' partition. Every
+ *     room lands in exactly one bucket regardless of whether its AHU still exists.
+ *     Σ systemSummary.totalTR === totalTR by construction. Dangling IDs surface as
+ *     "Deleted AHU (…)" rather than silently disappearing.
+ *
+ *   AUDIT-RS-02 — failedRooms banner added.
+ *
+ *     Failed rooms (_calculationFailed = true from rdsSelector catch block)
+ *     contribute zero to all totals. No indicator existed on this page — the
+ *     KPI cards and system table could be silently understated. A banner now
+ *     surfaces each failed room with its error message so the engineer knows
+ *     the totals are incomplete before reading them.
+ *
  * -- CHANGELOG v2.5 -----------------------------------------------------------
  *
  *   CHW plant psychrometric sufficiency banner added.
@@ -142,6 +166,8 @@ export default function ResultsPage() {
     regulatoryAcphRooms,
     insufficientAdpRooms,
     totalCoilLoadBTU,
+    byAhu,
+    failedRooms,
     hasData,
   } = useProjectTotals();
 
@@ -164,39 +190,32 @@ export default function ResultsPage() {
   // CHW plant insufficiency — split by severity for separate banner sections.
   // 'no_solution' is critical (supplemental dehumidification required).
   // 'insufficient' is a review item (lower CHW supply temp or accept elevated RH).
-  const noSolutionRooms     = insufficientAdpRooms.filter(r => r.adpSufficient === 'no_solution');
+  const noSolutionRooms      = insufficientAdpRooms.filter(r => r.adpSufficient === 'no_solution');
   const adpInsufficientRooms = insufficientAdpRooms.filter(r => r.adpSufficient === 'insufficient');
 
-  // ── System summary — pure expression, no mutation ──────────────────────
-  const ahuRows = ahus.map((ahu) => {
-    const assigned = rdsRows.filter((r) => r.ahuId === ahu.id);
-    const ahuTR    = assigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0);
-    const ahuCFM   = assigned.reduce((s, r) => s + (parseFloat(r.supplyAir)    || 0), 0);
+  // ── System summary — built from byAhu to guarantee no rooms are lost ──────
+  //
+  // Previous approach (ahus.map + !r.ahuId filter) silently dropped rooms whose
+  // ahuId pointed to a deleted AHU. byAhu in useProjectTotals partitions all
+  // rdsRows exhaustively via r.ahuId || 'unassigned' — every room lands in
+  // exactly one bucket. Σ systemSummary.totalTR === totalTR by construction.
+  // Dangling ahuId values surface as "Deleted AHU (…)" rather than vanishing.
+  const systemSummary = Object.entries(byAhu).map(([ahuId, data]) => {
+    const ahu = ahus.find(a => a.id === ahuId);
     return {
-      ...ahu,
-      roomCount: assigned.length,
-      totalTR:   ahuTR,
-      totalCFM:  ahuCFM,
-      loadPct:   totalTR > 0 ? (ahuTR / totalTR) * 100 : 0,
+      id:        ahuId,
+      name:      ahu
+                 ? ahu.name
+                 : ahuId === 'unassigned'
+                   ? 'Unassigned Zones'
+                   : `Deleted AHU (${ahuId.slice(0, 8)}…)`,
+      type:      ahu ? ahu.type : 'N/A',
+      roomCount: data.rooms.length,
+      totalTR:   data.tr,
+      totalCFM:  data.cfm,
+      loadPct:   totalTR > 0 ? (data.tr / totalTR) * 100 : 0,
     };
   });
-
-  const unassigned = rdsRows.filter((r) => !r.ahuId);
-  const unassignedRow = unassigned.length > 0
-    ? [{
-        id:        'unassigned',
-        name:      'Unassigned Zones',
-        type:      'N/A',
-        roomCount: unassigned.length,
-        totalTR:   unassigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0),
-        totalCFM:  unassigned.reduce((s, r) => s + (parseFloat(r.supplyAir)    || 0), 0),
-        loadPct:   totalTR > 0
-          ? (unassigned.reduce((s, r) => s + (parseFloat(r.coolingCapTR) || 0), 0) / totalTR) * 100
-          : 0,
-      }]
-    : [];
-
-  const systemSummary = [...ahuRows, ...unassignedRow];
 
   const handleExport = () => {
     // ⚠ This export is a RESULTS SNAPSHOT — not a project save file.
@@ -339,6 +358,39 @@ export default function ResultsPage() {
               </div>
             )}
 
+          </div>
+        )}
+
+        {/* ── Calculation failure banner ────────────────────────────────────────
+            FIRST banner — rendered above all load-based warnings because failed
+            rooms contribute zero to every total on this page. The engineer must
+            see this before reading any KPI card or system table number.
+            Rooms are listed with their error message for immediate triage. */}
+        {failedRooms.length > 0 && (
+          <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex items-start gap-3">
+            <div className="text-xl mt-0.5 shrink-0">⚠️</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-rose-900">
+                {failedRooms.length} room{failedRooms.length !== 1 ? 's' : ''} failed
+                to calculate — totals on this page are understated
+              </p>
+              <p className="text-xs text-rose-700 mt-1 leading-relaxed">
+                These rooms contribute zero to all load totals, including the TR KPI card
+                and the System Load Distribution table below. Fix the errors in the room
+                editor before finalising CHW plant capacity or equipment sizing.
+              </p>
+              <div className="mt-2 space-y-1">
+                {failedRooms.map((r) => (
+                  <div key={r.id}
+                    className="text-xs font-mono text-rose-800 bg-rose-100 rounded px-2 py-1">
+                    <span className="font-bold">{r.name}</span>
+                    {r._error && (
+                      <span className="text-rose-500 font-normal ml-2">— {r._error}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

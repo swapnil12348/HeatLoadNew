@@ -3,6 +3,19 @@
  * Responsibility: Fixed side-panel editor for a single room.
  *                 Renders all RDS_SECTIONS fields in a tabbed form layout.
  *
+ * ── CHANGELOG v2.4.1 ──────────────────────────────────────────────────────────
+ *
+ *   AUDIT-RDP-01 — Supply air temperature formula corrected in ADP advisory.
+ *
+ *     The body text for the "ADP Above Room Temperature" critical rule was
+ *     displaying a nonsensical supply air temperature. The bypass-factor equation:
+ *       SA = ADP × CF + RoomDB × (1 − CF)   where CF = contact factor (typ. 0.9)
+ *     The code incorrectly applied (1 − CF) to both terms:
+ *       SA = ADP × (1−CF) + RoomDB × (1−CF) = (1−CF) × (ADP + RoomDB)
+ *     With CF=0.9, ADP=75°F, RoomDB=70°F: displayed ≈14.5°F instead of 74.5°F.
+ *     This is a display-only fix — does not affect stored TR, CFM, or pipe sizes.
+ *     Critical-severity advisory body text now matches the physical reality.
+ *
  * ── CHANGELOG v2.4 ────────────────────────────────────────────────────────────
  *
  *   Insights tab added — fifth tab alongside Setup / Loads / Results / Psychro.
@@ -369,6 +382,8 @@ const RECOMMENDATION_RULES = [
       action: 'Go to Climate tab and enter correct winter design DB/RH for your site. For Delhi: ~45–55°F DB is typical. Use ASHRAE HOF 2021 Ch.14 Table 1 — 99.6% heating design condition for critical facilities.'
     };
   },
+
+  // ADP above room temperature — coil model invalid
   //
   // This is the most important coil configuration error this tool can detect.
   // The ADP-bypass model requires ADP < supply DB < room DB.
@@ -384,11 +399,14 @@ const RECOMMENDATION_RULES = [
     if (isNaN(adpF) || isNaN(designC)) return null;
     const roomDbF = designC * 9 / 5 + 32;
     if (adpF < roomDbF) return null;
+    const CF = parseFloat(r.coil_contactFactor) || 0.9;
     return {
       level: 'critical',
       icon:  '🚨',
       title: 'ADP Above Room Temperature — Coil Model Invalid',
-      body:  `Apparatus Dew Point is ${adpF}°F but the room design temperature is ${roomDbF.toFixed(1)}°F (${designC}°C). The ADP-bypass psychrometric model requires ADP < room DB. With ADP above room temperature, supply air (${((adpF * (1 - (parseFloat(r.coil_contactFactor) || 0.9)) + roomDbF * (1 - (parseFloat(r.coil_contactFactor) || 0.9)))).toFixed(0)}°F) is warmer than the room, making the coil state points physically meaningless. SHR = 1.000 is a fallback, not a valid result. Cooling capacity (TR) and pipe sizes are still valid.`,
+      // FIX AUDIT-RDP-01: SA = ADP×CF + RoomDB×(1−CF)
+      // Previous code applied (1−CF) to both terms, giving SA ≈ 15°F at defaults.
+      body:  `Apparatus Dew Point is ${adpF}°F but the room design temperature is ${roomDbF.toFixed(1)}°F (${designC}°C). The ADP-bypass psychrometric model requires ADP < room DB. With ADP above room temperature, supply air (${((adpF * CF + roomDbF * (1 - CF))).toFixed(0)}°F) is warmer than the room, making the coil state points physically meaningless. SHR = 1.000 is a fallback, not a valid result. Cooling capacity (TR) and pipe sizes are still valid.`,
       action: `Set ADP below ${(roomDbF - 2).toFixed(0)}°F in Project Info or via per-AHU override in AHU Config. For rooms below 15°C, use the ADP 'calculated' mode — it will back-calculate ADP from the actual load and supply air conditions.`
     };
   },

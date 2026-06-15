@@ -10,6 +10,17 @@
  *
  * All values are memoized — recomputes only when rdsSelector output changes.
  *
+ * -- CHANGELOG v2.2.1 ---------------------------------------------------------
+ *
+ *   FIX-H06 — failedRooms / failedRoomCount added.
+ *
+ *     Rooms where rdsSelector's catch block fires (_calculationFailed = true)
+ *     zero all numeric fields. No consumer was checking this flag — totalTR,
+ *     totalCFM, and every byAhu bucket were silently understated by the true
+ *     (unknown) load of each failed room. failedRooms (id, name, _error) and
+ *     failedRoomCount are now returned so ResultsPage and AHUConfig can surface
+ *     an explicit warning banner before the engineer reads the totals.
+ *
  * -- CHANGELOG v2.2 -----------------------------------------------------------
  *
  *   FIX-H05 — insufficientAdpRooms aggregation added.
@@ -109,6 +120,13 @@
  *                         adpSufficient === 'no_solution'  → supplemental dehumidification needed.
  *                         adpSufficient === 'insufficient' → lower CHW supply temp required.
  *
+ *   // Calculation-failed rooms
+ *   failedRooms:          Array<{ id, name, _error }>
+ *                         Rooms where _calculationFailed is true. They contribute zero
+ *                         to all totals — surface in UI to prevent silent understatement
+ *                         of CHW plant, pipe, and equipment sizing figures.
+ *   failedRoomCount:      number   convenience count of failedRooms.length
+ *
  *   // Pipe sizing
  *   projectPipes:         object   from calculateProjectPipeSizing()
  *
@@ -165,9 +183,11 @@ const EMPTY_TOTALS = {
     rooms:           [],
     nonCompliantIds: [],
   },
-  highHumidRooms:      [],
-  regulatoryAcphRooms: [],
+  highHumidRooms:       [],
+  regulatoryAcphRooms:  [],
   insufficientAdpRooms: [],
+  failedRooms:          [],
+  failedRoomCount:      0,
   projectPipes:        {},
   roomCount:           0,
   hasData:             false,
@@ -319,6 +339,27 @@ const useProjectTotals = () => {
         designRH:     r.designRH,     // % — room target RH (for context in banner)
       }));
 
+    // ── Calculation-failed rooms ───────────────────────────────────────────
+    //
+    // Failed rooms (rdsSelector catch block) set _calculationFailed = true and
+    // zero every numeric field. They still appear in rdsRows and still count
+    // toward roomCount / byAhu[x].rooms.length, but contribute zero to every
+    // reduce total above — totalTR, totalCFM, totalCoilLoadBTU, etc. are all
+    // silently understated by the true (unknown) load of each failed room.
+    //
+    // Surface failed rooms so ResultsPage and AHUConfig can show an explicit
+    // "N rooms failed — totals below are understated" banner. Without this, an
+    // engineer could read the KPI cards and systemSummary table as complete
+    // when they are not.
+    const failedRooms = rdsRows
+      .filter(r => r._calculationFailed === true)
+      .map(r => ({
+        id:     r.id,
+        name:   r.name,
+        _error: r._error,
+      }));
+    const failedRoomCount = failedRooms.length;
+
     // ── Project pipe sizing ────────────────────────────────────────────────
     const projectPipes = calculateProjectPipeSizing(rdsRows);
 
@@ -352,6 +393,10 @@ const useProjectTotals = () => {
 
       // CHW plant psychrometric insufficiency
       insufficientAdpRooms,
+
+      // Calculation-failed rooms
+      failedRooms,
+      failedRoomCount,
 
       // Pipe sizing
       projectPipes,
