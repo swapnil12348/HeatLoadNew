@@ -523,6 +523,7 @@ const peakCFMSeason = SEASONS_LIST.reduce(
     _err(`Room ${room.id} threw an exception:`, err);
     return {
       ...room,
+       ahuId:            room.assignedAhuIds?.[0] ?? null,
       volume:               0,
       floorArea:            0,
       _error:               err.message,
